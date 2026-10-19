@@ -1,0 +1,146 @@
+{
+ "config": {
+  "run_name": "dryrun-27b-memdebug",
+  "base_model": "C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299",
+  "train_file": "C:/AI/training/data/processed/ocr_first/train.jsonl",
+  "max_samples": 16,
+  "seq_len": 8192,
+  "batch_size": 1,
+  "grad_accum": 2,
+  "max_steps": 3,
+  "lr": 0.0001,
+  "optim": "adamw_8bit",
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.0,
+  "target_modules": [
+   "q_proj",
+   "k_proj",
+   "v_proj",
+   "o_proj",
+   "gate_proj",
+   "up_proj",
+   "down_proj"
+  ],
+  "expect_trainable_params": 79691776,
+  "completion_only": true,
+  "chat_template_kwargs": {
+   "enable_thinking": true
+  },
+  "schedule": "wsd",
+  "warmup_steps": 1,
+  "decay_fraction": 0.34,
+  "min_lr_ratio": 0.0,
+  "save_steps": 2,
+  "save_total_limit": 3,
+  "seed": 42,
+  "gdn_heads": "stock",
+  "short_conv": "shift",
+  "mem_debug": true,
+  "ce_target_gb": 2
+ },
+ "branch_from": null,
+ "global_step": 3,
+ "total_steps": 3,
+ "stopped_early": false,
+ "session_seconds": 189,
+ "tokens_seen": 36487,
+ "peak_reserved_gib": 25.3,
+ "metrics": {
+  "train_runtime": 185.2792,
+  "train_samples_per_second": 0.032,
+  "train_steps_per_second": 0.016,
+  "total_flos": 5727517867749216.0,
+  "train_loss": 0.1996619701385498,
+  "epoch": 0.375,
+  "num_input_tokens_seen": 36487
+ },
+ "data_sha256": "d7e2bb6d75d6d9fff0cca615d8af608d50d90480d1652426ca583cab487b5243",
+ "adapter": "C:\\AI\\training\\results\\resume-check-27b-memdebug\\dryrun-27b\\adapter",
+ "trainable_params": 79691776,
+ "rows": 16,
+ "rows_dropped_too_long": 0,
+ "tokens": 79055,
+ "rows_prompt_not_prefix": 0,
+ "mask_stats": {
+  "rows": 16,
+  "kept": 16,
+  "dropped_too_long": 0,
+  "prompt_not_prefix": 0,
+  "tokens_total": 79055,
+  "tokens_trained": 71254,
+  "rows_without_trace": 0,
+  "trained_fraction": 0.9013
+ },
+ "sample_row": {
+  "tokens_total": 7891,
+  "tokens_trained": 7639,
+  "tokens_masked": 252,
+  "first_trained_position": 252,
+  "trained_span_contiguous": true,
+  "masked_text_tail": "\n\n1000000009\n1\n\n\nOutput\n\n2\n\n\nInput\n\n98765432109876543210\n58\n\n\nOutput\n\n635270834<|im_end|>\n<|im_start|>assistant\n<think>\n",
+  "first_trained_tokens": [
+   "Okay",
+   ",",
+   " let",
+   "'s",
+   " tackle",
+   " this",
+   " problem",
+   "."
+  ],
+  "unmasked_text": "Okay, let's tackle this problem. Hmm. The task is to find the number of integers between 1 and K inclusive where the sum of the digits is a multiple of D. And since K can be up to 10^10000, we can't iterate through each number. We need a dynamic programming approach here. \n\nFirst, I remember that digit DP is a common technique for these kinds of problems. The idea is to process the digits of K one by one and keep track of certain states. The states usually involve the position in the digit, the sum modulo D, and a tight flag indicating whether the current prefix is exactly matching K up to that digit (so that future digits can't exceed the corresponding digit in K).\n\nSo let's break it down. For each digit position, we track two things: the current sum modulo D, and whether the number we're building is already less than K's prefix up to this position (so we can freely choose digits from 0 to 9 for the remaining positions) or still tight (so the next digits can't exceed K's digits). \n\nThe DP state can be something like dp[pos][mod][tight], where pos is the current digit position, mod is the sum modulo D, and tight is a boolean (0 or 1) indicating if we're still tight. The value stored is the count of numbers that meet the conditions up to that point.\n\nThe recurrence would involve, for each position, considering all possible digits that can be placed there. If we're in a tight state, the next digit can't exceed the corresponding digit in K. Otherwise, it can be 0-9. For each possible digit, we add to the next state's count based on the transitions.\n\nWait, but since K can be very large, we need to represent it as a string. So first, we'll process the digits of K as a string. Let's say K is a string s of length n.\n\nNow, the steps:\n\n1. Read K as a string, and D as an integer.\n2. Compute the number of numbers up to K (inclusive) where digit sum mod D is 0.\n3. Subtract the count for 0, since the problem starts from 1. But wait, the problem says \"between 1 and K inclusive\", so we need to include 1 to K. So our DP will compute the count for numbers <= K, then subtract 1 if K's digit sum is 0 mod D (since 0 is included but we need to exclude it). Wait no: the initial DP would count 0, which is not part of the answer. So the correct approach is to compute the total numbers (including 0) that have sum mod D 0, then subtract 1 (since 0 is not in the range 1..K) and add 1 if K's sum is 0 (but only if K is considered). Wait, maybe it's better to compute the numbers from 0 to K, then subtract 1 if 0 is included.\n\nWait, let's clarify. The problem requires numbers from 1 to K. So the total is (count of numbers from 0 to K with sum mod D 0) minus (1 if 0 is counted, which it is) plus (if K is 0, but since K >=1, that's not possible). So the answer is (dp_result - 1) % MOD.\n\nSo first, compute the DP for numbers <= K, including 0, then subtract 1 (since 0 is not part of the desired range). That makes sense.\n\nNow, the DP setup. Let's model the DP as follows:\n\n- The digits are processed from left to right.\n- For each position i (0-based), we track the current sum modulo D.\n- Also, track the tight constraint.\n\nThe initial state is at position 0, sum 0, tight=1 (since we haven't placed any digits yet, but the first digit can't exceed the first digit of K). Wait, maybe the initial state is position 0, sum 0, tight=1. Then, for each digit in K's string, we process each possible state.\n\nAt each step, for the current state (pos, mod, tight), we can choose a digit d. The next tight state depends on whether we are currently tight and whether the chosen d is equal to the current digit of K. If tight is 0, the next tight is also 0. If tight is 1, then if d < s[pos], next tight is 0. If d == s[pos], next tight is 1. Else, it's invalid (since we can't choose a digit larger than s[pos] when tight).\n\nThe sum mod is (current mod + d) % D.\n\nThe DP transitions would accumulate the counts for each possible digit choice.\n\nThe base case is dp[0][0][1] = 1. Wait, maybe the initial state is before the first digit. For example, if K is \"30\", then the digits are \"3\" and \"0\". So the length is 2. So pos ranges from 0 to 2 (after processing all digits). The actual numbers are 0, 1, ..., 30. So when processing the first digit (pos 0), which is 3, the digits can be 0 (but leading zeros are allowed in the DP, but the problem counts numbers, which are 1 to K. Wait, but the DP counts all numbers from 0 to K. So leading zeros in the DP represent the numbers with fewer digits. For example, 0 is allowed, but numbers like 05 are considered as 5.\n\nSo, in the DP, leading zeros are allowed, but when we sum the digits, they are included. Wait, no. For example, the number 5 is considered as a 1-digit number. In the DP, leading zeros would contribute 0 to the sum, but when the number is built, leading zeros are part of the digit string. Wait, but in reality, numbers don't have leading zeros. So perhaps the DP needs to track whether we have started writing non-zero digits. Otherwise, leading zeros would contribute 0 to the sum, which would be considered for sum mod D. But that's incorrect because numbers like 0, 00, etc., are considered as 0, which is not part of the problem's range (1..K). However, in our approach, after the DP counts all numbers from 0 to K, we subtract 1 (the 0). So the DP must account for numbers with leading zeros as 0. But when considering numbers like 05, the actual number is 5, but the sum of digits is 5, not 0+5. So the DP must not count leading zeros as part of the digit sum. Oh wait, that's a problem. Because in the standard digit DP approach, leading zeros are treated as part of the number, but the sum is computed correctly. For example, the number 05 is 5, but the digits are 0 and 5, sum is 5. So in the DP, leading zeros do contribute to the sum. Wait, but that's correct. Because the digit sum of 5 is 5, but if the DP treats it as two digits (0 and 5), then the sum is 5, which is correct. So leading zeros in the DP are allowed, and their digits contribute to the sum, but in reality, the number is 5, which has digits sum 5. So the DP is correctly modeling the sum. Because when you have a number like 05, it's just 5, but when building it as a two-digit number, the first digit is 0 and the second is 5. So the sum is 0+5=5, which is correct. So the DP approach is correct in including leading zeros in the sum, because the actual digits of the number (when written as a two-digit number) would include the leading zero, but in reality, numbers don't have leading zeros. Wait, but that's a problem. Because when the DP is building the digits, leading zeros are part of the digits, but the actual numbers they represent (like 05) is 5. So the sum is 5, but according to the DP's digit processing, it would be 0+5=5, which is correct. So the DP is correct. Because even though the number is written as 05, the sum is 5, which is the same as the sum of the digits. So the DP's approach of processing all digits, including leading zeros, and summing them is correct. So we don't need to track whether leading zeros are present. The sum is the sum of all digits, leading zeros included. But when the number is 0, the sum is 0, which is handled by subtracting 1 from the result.\n\nSo the standard digit DP approach should work here. Let's proceed.\n\nNow, the DP transitions:\n\nWe have to model the states as (pos, mod, tight). For each state, we can choose the next digit d.\n\nThe steps for each state (pos, mod, tight):\n\n- The maximum digit we can choose is s[pos] if tight is 1, otherwise 9.\n\nFor each possible digit d from 0 to max_digit:\n\n- If tight is 1 and d == s[pos], then next_tight is 1.\n\n- Else, if tight is 1 and d < s[pos], next_tight is 0.\n\n- Else (tight is 0), next_tight remains 0.\n\nThe new_mod is (mod + d) % D.\n\nWe accumulate the number of ways into the next state (pos+1, new_mod, next_tight).\n\nThe base case is dp[0][0][1] = 1. Wait, no. Because we start at the first digit. For example, K is a string of length n. So pos starts from 0 to n-1. So after processing all n digits, we have the total.\n\nAlternatively, maybe the initial state is pos=0, sum=0, tight=1. Then, for each digit in K (as a string), process each position. Then, after processing all digits, the sum modulo D is considered.\n\nWait, here's the setup:\n\nLet K be a string of length n. For example, \"30\" has n=2.\n\nFor each position from 0 to n-1:\n\nAt each step, we track the sum modulo D, and the tight constraint.\n\nInitially, before any digits are processed (pos=0), sum is 0, and tight is True (since we need to start building the number and the first digit can't exceed the first digit of K).\n\nWait, perhaps the initial state is pos=0, sum=0, tight=1.\n\nThen, for each possible digit d that can be placed at position 0 (if tight is 1, d can be up to s[0]; else 9), we calculate the next tight and sum, and proceed to the next position.\n\nBut for numbers with fewer digits than K's length, like numbers less than 10 when K is 30 (n=2), how are they handled? Because the DP allows leading zeros. For example, the number 5 is represented as \"05\" in two digits, but the sum is 0+5=5. But the actual sum of digits for 5 is 5, which is correct. So including leading zeros in the digit processing allows us to account for numbers with fewer digits by padding with leading zeros. So the DP automatically handles all numbers up to K, regardless of their digit length.\n\nThis seems correct.\n\nSo the steps are:\n\n1. Process each digit of K as a string.\n\n2. For each position, track sum mod D and tight constraint.\n\n3. For each possible digit d allowed at the current position (based on tight), update the sum and tight state.\n\nAt the end, after processing all digits, the sum mod D must be 0.\n\nSo the answer is the sum over all states where mod is 0, in the final position, plus all the possible states that ended earlier (like numbers with fewer digits). Wait, no. Because numbers with fewer digits are handled by allowing leading zeros. For example, for K being \"30\" (two digits), the numbers 0-9 are considered as two-digit numbers with a leading zero, e.g., 05. So the DP accounts for all numbers from 0 to 30. Then, subtract 1 to exclude 0, giving 1-30.\n\nSo the DP is correct.\n\nSo the plan is:\n\n- Compute the DP for the number K as a string, allowing leading zeros, which gives the count of numbers from 0 to K with sum mod D equal to 0.\n\n- Subtract 1 from this count (since 0 is included in the DP but not in the problem's answer) to get the count from 1 to K.\n\nBut wait, if the DP counts 0, then after subtracting 1, the answer is correct. But what if K is 0? Then, the problem's answer is 0. But according to the constraints, K is at least 1, so that's not a case here.\n\nSo the steps for code:\n\n- Read K as a string, D as integer.\n\n- If D is 0, but according to the constraints, D is >=1. So no need to handle that.\n\n- Compute the DP for the number K, which returns the count of numbers 0..K with sum mod D ==0.\n\n- Subtract 1, then mod 1e9+7.\n\nNow, the key part is implementing the DP.\n\nImplementing the DP with memoization, but since K can be up to 1e4 digits, and D up to 100, the state size is manageable.\n\nThe states are pos (up to 1e4), mod (D possibilities), tight (2 possibilities). So total states are 1e4 * 100 * 2 = 2e6, which is acceptable.\n\nSo the DP can be implemented with a memoization table. However, using a memoization approach recursively might stack overflow for large K. So better to implement it iteratively.\n\nAlternatively, use a 3-dimensional array for DP.\n\nLet's outline the steps for the DP.\n\nInitialize a 3D array (or a list of lists of dictionaries), but in Python, perhaps using a list of 2D arrays.\n\nBut for better space, perhaps use a current and next state approach, using two 2D arrays (tight and not tight) for each position.\n\nAlternatively, for each position, maintain a DP table for mod and tight.\n\nLet me think. For the iterative approach:\n\nWe can process each digit of K one by one, updating the DP table as we go.\n\nAt each step, for each possible mod and tight state, we process the current digit.\n\nInitialize dp[0][0][1] = 1. Then, for each position i in 0 to n-1:\n\n   for each possible mod in 0..D-1:\n\n       for tight in 0, 1:\n\n           if dp[i][mod][tight] == 0: continue\n\n           current_digit = int(s[i])\n\n           max_d = current_digit if tight else 9\n\n           for d in 0..max_d:\n\n               new_tight = tight and (d == max_d)\n\n               new_mod = (mod + d) % D\n\n               dp[i+1][new_mod][new_tight] += dp[i][mod][tight]\n\n               dp[i+1][new_mod][new_tight] %= MOD\n\nWait, but MOD is 1e9+7, which we apply at each step to prevent overflow.\n\nBut in Python, we can handle it with modulus operations.\n\nSo the code would be something like:\n\nn = len(K)\nMOD = 10**9 +7\ndp = [[[0]*2 for _ in range(D)] for __ in range(n+1)]\ndp[0][0][1] = 1\nfor i in range(n):\n    current_digit = int(K[i])\n    for mod in range(D):\n        for tight in 0,1:\n            cnt = dp[i][mod][tight]\n            if cnt ==0:\n                continue\n            max_d = current_digit if tight else 9\n            for d in range(0, max_d+1):\n                new_tight = 1 if (tight and d == max_d) else 0\n                new_mod = (mod + d) % D\n                dp[i+1][new_mod][new_tight] = (dp[i+1][new_mod][new_tight] + cnt) % MOD\n\nThen, the total is the sum of dp[n][0][0] + dp[n][0][1], which are the counts of numbers where the sum is 0 mod D, with tight (exactly equal to K) or not.\n\nWait, no. Because after processing all n digits, the tight state is whether the entire number is exactly equal to K. But in any case, after processing all digits, the mod is the sum mod D, and we need to count those where mod is 0.\n\nSo the total is (dp[n][0][0] + dp[n][0][1]) % MOD.\n\nThen, subtract 1 (to exclude 0) and output.\n\nBut wait, when K is 0, but according to the constraints, K is at least 1, so we don't have to handle that.\n\nBut in code, we need to compute the sum of the two tight states for mod 0 at the end.\n\nSo putting it all together:\n\nRead K as a string.\n\nn = len(K)\n\nD is given.\n\nCompute the DP as above.\n\nsum_mod_0 = (dp[n][0][0] + dp[n][0][1]) % MOD\n\nresult = (sum_mod_0 - 1) % MOD\n\nprint(result)\n\nBut wait, in the case where K is 30, for example, the DP counts 0 as part of the sum. So after subtracting 1, we get 6 for the first sample input.\n\nWait the first sample input is:\n\n30\n4\n\nOutput is 6.\n\nLet's see: the numbers between 1 and 30 with sum of digits divisible by 4.\n\nThese are:\n\n4 (4), 8 (8), 13 (1+3=4), 17 (1+7=8), 22 (2+2=4), 26 (2+6=8), 30 (3+0=3, no). Wait wait, 30's sum is 3+0=3, not 4. So the correct numbers are 4,8,13,17,22,26: total 6.\n\nSo the sample output is 6. The DP would compute numbers from 0 to 30 with sum mod 4=0. Let's see:\n\n0: sum 0 mod 4=0 \u2192 included in the DP.\n\nSo the DP's sum_mod_0 is 7 (0,4,8,13,17,22,26, 30? Wait 3+0=3 mod4 is 3. So maybe not 30. So why is the sum_mod_0 6+1 (for 0) =7, then subtract 1 gives 6. Which matches the sample.\n\nSo the code seems correct.\n\nAnother example: input 1000000009 and D=1. The output is 2.\n\nBecause D=1, any number's sum is 0 mod 1, so all numbers from 1 to K should be counted. But K is 1000000009, which is 1 followed by 9 zeros and a 9. So the count is 1000000009. But the output is 2. Wait wait, no. Wait, the output is 2. That's impossible. Wait, the sample input 1000000009, D=1. The sum of digits mod 1 is always 0, so all numbers from 1 to K should be counted, which would be K numbers. But the output is 2. Wait, this must be a mistake. Wait no, the sample input's output is 2. Wait, perhaps I'm missing something. Wait the second sample input is:\n\n1000000009\n\n1\n\nOutput is 2.\n\nWait, how? D is 1, so any sum mod 1 is 0. So the count should be K numbers. But K is 1e9 +9, which is 1000000009. But the output is 2. That's impossible.\n\nWait, perhaps I read the sample input incorrectly. Let me check. Oh, the sample input is:\n\n1000000009\n\n1\n\nAh, wait the output is 2. Hmm, that's strange. Wait, D is 1. So every number's digit sum mod 1 is 0. So the answer should be the count of numbers from 1 to K, which is K. But K is 1000000009. So 1000000009 mod 1e9+7 is 1000000009, but the sample output is 2. So there's a mistake here. Wait no. Wait, wait, the problem's sample input says:\n\nInput:\n\n1000000009\n\n1\n\nOutput:\n\n2\n\nBut that's impossible. Unless there's a mistake in the problem statement. Wait, maybe I'm missing something.\n\nWait, perhaps the code has a mistake. Let's see. The code would compute the number of numbers from 0 to K (inclusive) where sum mod 1 is 0. Since D=1, all numbers are valid. So the count is K+1 (since numbers from 0 to K). Then subtract 1 (to exclude 0) \u2192 K+1-1 = K. So the answer should be K mod MOD. But K is 1000000009, and MOD is 1e9+7. So 1000000009 mod 1e9+7 is 1000000009 - (1e9+7) = 1000000009 -1000000007= 2. So the output is 2. Oh right! Because 1e9+7 is the modulus. So 1000000009 mod (1e9+7) is 2. So the answer is 2, which matches the sample. Oh, right! So the code is correct.\n\nSo the code works.\n\nSo the code steps are:\n\n- Read K as a string, and D.\n\n- Compute the DP as described.\n\n- Sum the two tight states (0 and 1) for mod 0 at the end.\n\n- Subtract 1, mod 1e9+7.\n\nSo now, the code.\n\nNow, considering the size of K, which can be up to 1e4 digits, the DP is feasible.\n\nIn Python, to handle the digits, we can process each character in the string.\n\nBut in the code, the DP array needs to be of size (n+1) x D x 2.\n\nFor n=1e4, that's 1e4 * 100 *2 = 2e6 elements. But for each step, we need to iterate over all possible mod and tight, which is 100 * 2 = 200 per position. For 1e4 positions, that's 2e6 operations. Which is acceptable.\n\nNow, in Python, how to implement this.\n\nThe code would be:\n\nRead K as a string.\n\nD = int(input().split()[1])\n\nBut wait, the input is given in the following format: two lines? Or one line with K and D?\n\nWait, the input is given as:\n\nK\n\nD\n\nSo the code should read two lines: first line is K, second line is D.\n\nSo:\n\nk_str = input().strip()\n\nd = int(input().strip())\n\nBut in some cases, the input may have leading zeros? But according to the constraints, K is between 1 and 1e10000-1, so the input K is a positive integer, possibly with leading zeros? No, no, because K is a number between 1 and 1e10000-1. So the input K should be given as a string with no leading zeros.\n\nBut the code can process K as given, even if it has leading zeros, but since the problem statement says K is >=1, the input will not be all zeros.\n\nSo code:\n\nk_str = input().strip()\n\nd = int(input())\n\nMOD = 10**9 +7\n\nn = len(k_str)\n\nif d ==0:\n\n    # but according to constraints, D >=1, so this is impossible.\n\n    # but code may need to handle it, but the problem says 1<= D <=100.\n\n    pass\n\nelse:\n\n    # proceed.\n\nWe can proceed under the assumption that d >=1.\n\nThen, the DP:\n\nInitialize a 3D array. But in Python, using a list of lists for each position may be memory-intensive. Instead, since for each step i, we only need the previous step's data, we can optimize by using two 2D arrays: current and next.\n\nWait, for space optimization, since each position i depends only on i-1, we can use two layers: current and next. So for each position i, we can have a 2D array for the current state (mod and tight), and compute the next state.\n\nInitialize a 2D array for the current position.\n\ncurrent = [[0]*(2) for _ in range(d)]\n\ncurrent[0][1] = 1 # pos=0, mod=0, tight=1 \u2192 count 1.\n\nThen, for each digit in k_str:\n\nfor i in range(n):\n\n    digit = int(k_str[i])\n\n    next_dp = [[0]*2 for _ in range(d)]\n\n    for curr_mod in range(d):\n\n        for tight in 0,1:\n\n            cnt = current[curr_mod][tight]\n\n            if cnt ==0:\n\n                continue\n\n            max_d = digit if tight else 9\n\n            for d_val in range(0, max_d+1):\n\n                new_tight = 1 if (tight and (d_val == max_d)) else 0\n\n                new_mod = (curr_mod + d_val) % d\n\n                next_dp[new_mod][new_tight] = (next_dp[new_mod][new_tight] + cnt) % MOD\n\n    current = next_dp\n\nAfter processing all digits, sum current[0][0] + current[0][1], subtract 1, mod MOD.\n\nBut wait, the initial state is for position 0, which is the first digit. Wait, the code may have a mistake here.\n\nWait, in the code above, the initial state is current[0][1] =1, which represents mod 0 and tight=1. Then, for each digit in k_str (each character), we process and update the current DP.\n\nBut the code loops over each character in k_str, of length n. So after processing all n digits, the current array holds the state for mod and tight after the last digit.\n\nSo the sum is (current[0][0] + current[0][1]) % MOD.\n\nThen subtract 1, mod MOD again.\n\nSo the code:\n\ntotal = (current[0][0] + current[0][1]) % MOD\n\nans = (total - 1) % MOD\n\nprint(ans)\n\nSo putting it all together:\n\nk_str = input().strip()\n\nd = int(input())\n\nMOD = 10**9 +7\n\nn = len(k_str)\n\nif d ==0:\n\n    print(0)\n\n    exit()\n\n# Initialize DP\n\ncurrent = [[0]*2 for _ in range(d)]\n\ncurrent[0][1] = 1  # starting with mod 0, tight=1 (since first digit hasn't been processed yet?)\n\nWait, wait, no. Wait, the initial state is before processing any digits, so mod is 0, and tight is 1 (since no digits have been placed yet, but we are considering the first digit). So when processing the first digit, the code will loop through each possible digit value.\n\nWait, perhaps the initial state is correct as current[0][1] =1.\n\nLet's test with the first sample:\n\nSample 1:\n\nK is \"30\", D=4.\n\nn=2.\n\nInitial current is [[0, 0], [0, 0], [0, 0], [0, 0]] (since d=4, so indices 0-3).\n\ncurrent[0][1] =1.\n\nProcessing first digit '3' (i=0):\n\ndigit is 3.\n\nLoop through curr_mod 0 to 3.\n\nOnly curr_mod=0 has tight=1, cnt=1.\n\nmax_d is 3 (since tight is 1).\n\nLoop d_val from 0 to 3:\n\nfor each d_val in 0,1,2,3:\n\nnew_tight is 1 if d_val ==3 else 0 (only when d_val is 3, new_tight is 1).\n\nnew_mod is (0 + d_val) %4.\n\nSo for d_val=0: new_mod=0, new_tight=0. next_dp[0][0] +=1.\n\nd_val=1: new_mod=1, new_tight=0. next_dp[1][0] +=1.\n\nd_val=2: new_mod=2, new_tight=0. next_dp[2][0] +=1.\n\nd_val=3: new_mod=3, new_tight=1. next_dp[3][1] +=1.\n\nSo after processing first digit, next_dp is:\n\nmod 0: tight 0 \u2192 1 (from d_val 0)\n\nmod 1: tight 0 \u21921 (from d_val 1)\n\nmod 2: tight 0 \u21921 (from d_val 2)\n\nmod 3: tight 1 \u21921 (from d_val 3)\n\nOthers are 0.\n\ncurrent becomes next_dp.\n\nNow, processing second digit '0' (i=1):\n\ndigit is 0.\n\nFor each curr_mod in 0..3, tight 0 and 1:\n\nFor example:\n\nFor curr_mod=0, tight=0: cnt=1.\n\nmax_d is 9.\n\nLoop d_val 0-9:\n\nnew_tight is 0 (since tight is 0).\n\nnew_mod is (0 + d_val) mod4.\n\nSo for each d_val, the new_mod is d_val mod4.\n\nWe add to next_dp[new_mod][0] the cnt (1) multiplied by the number of times d_val's new_mod is 0.\n\nThe sum for new_mod=0 would be the number of d_val's where d_val mod4 is 0. For d_val 0-9, d_val mod4=0 is 0,4,8 \u2192 3 values. So next_dp[0][0] +=3*1.\n\nSimilarly, curr_mod=1, tight=0: cnt=1. new_mod is (1 + d_val) mod4.\n\nWe need (1+d_val) mod4=0 \u2192 d_val mod4=3. d_val can be 3,7 \u2192 2 values. So next_dp[0][0] += 2*1.\n\nSimilarly, curr_mod=2, tight=0: cnt=1. new_mod=0 \u2192 (2 +d_val) mod4=0 \u2192 d_val mod4=2. d_val 2,6 \u2192 2 values. next_dp[0][0] +=2*1.\n\ncurr_mod=3, tight=1: cnt=1. max_d is 0 (since tight=1, digit is 0. So d_val can only be 0.\n\nnew_tight is 1 (since tight=1 and d_val ==0).\n\nnew_mod is (3+0) mod4=3.\n\nSo next_dp[3][1] +=1.\n\nSo after processing the second digit:\n\nFor the current mod=0, tight=0:\n\ncontributions from:\n\n- curr_mod=0, tight=0: 3.\n\n- curr_mod=1, tight=0: 2.\n\n- curr_mod=2, tight=0: 2.\n\nTotal 3+2+2=7.\n\ncurrent[0][0] is 7.\n\ncurrent[3][1] is 1.\n\nSo the total sum_mod_0 is 7 (from mod 0, tight 0) + (mod 0, tight 1: but current[0][1] is 0). So sum is 7.\n\nThen, subtract 1: 7-1=6, which matches the sample.\n\nSo the code works.\n\nThus, the code is correct.\n</think>\n\n```python\nMOD = 10**9 + 7\n\nk_str = input().strip()\nd = int(input())\nn = len(k_str)\n\nif d == 0:\n    print(0)\n    exit()\n\ncurrent = [[0] * 2 for _ in range(d)]\ncurrent[0][1] = 1  # Initial state: sum 0, tight=True\n\nfor i in range(n):\n    digit = int(k_str[i])\n    next_dp = [[0] * 2 for _ in range(d)]\n    for curr_mod in range(d):\n        for tight in [0, 1]:\n            cnt = current[curr_mod][tight]\n            if cnt == 0:\n                continue\n            max_d = digit if tight else 9\n            for d_val in range(max_d + 1):\n                new_tight = 1 if (tight and (d_val == max_d)) else 0\n                new_mod = (curr_mod + d_val) % d\n                next_dp[new_mod][new_tight] = (next_dp[new_mod][new_tight] + cnt) % MOD\n    current = next_dp\n\ntotal = (current[0][0] + current[0][1]) % MOD\nans = (total - 1) % MOD  # Subtract 1 to exclude 0\nprint(ans)\n```<|im_end|>\n"
+ },
+ "collated_check": {
+  "collator": "DataCollatorForLanguageModeling",
+  "row_found": true,
+  "labels_match_helper": true,
+  "batch_tokens": 7891,
+  "batch_trained": 7639
+ },
+ "losses": [
+  [
+   1,
+   0.6151648759841919
+  ],
+  [
+   2,
+   0.6087740659713745
+  ],
+  [
+   3,
+   0.5989859104156494
+  ]
+ ],
+ "cache_releases_this_session": 2,
+ "any_nan_loss": false,
+ "windows_peak": {
+  "ram_used_gib": 23.705,
+  "process_rss_gib": 15.72,
+  "gpu_total_used_gib": 41.777,
+  "gpu_training_gib": 42.022,
+  "gpu_training_dedicated_gib": 27.985,
+  "gpu_training_shared_gib": 14.038,
+  "portal_metrics": true
+ },
+ "peak_allocated_gib": 23.966,
+ "gdn_heads": {
+  "mode": "stock",
+  "requested": "stock",
+  "patched": false,
+  "pairing": "stock: value head j -> key head j // 3 (transformers' repeat_interleave, no patch; matches llama.cpp)",
+  "key_heads": null,
+  "ratio": null,
+  "head_dim": null,
+  "calls": 0
+ },
+ "short_conv": {
+  "mode": "shift",
+  "modules": [
+   "transformers.models.qwen3_5.modeling_qwen3_5",
+   "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe",
+   "unsloth_compiled_module_qwen3_5"
+  ],
+  "calls": 192
+ }
+}

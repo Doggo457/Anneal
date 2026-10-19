@@ -1,0 +1,8 @@
+{"step": 1, "config": "nolora", "tok_per_s": 12.67, "batch_wall_s": null, "aggregate_tok_per_s": null, "t": 1792367501.5646284}
+{"step": 2, "config": "lora", "tok_per_s": 12.23, "batch_wall_s": null, "aggregate_tok_per_s": null, "t": 1792367637.8783069}
+{"step": 3, "config": "lora-mtp", "tok_per_s": 22.64, "batch_wall_s": null, "aggregate_tok_per_s": null, "t": 1792367716.3467221}
+{"step": 4, "config": "lora-mtp-md4", "tok_per_s": 24.25, "batch_wall_s": null, "aggregate_tok_per_s": null, "t": 1792367791.2460842}
+{"step": 5, "config": "seq", "tok_per_s": null, "batch_wall_s": 232.2, "aggregate_tok_per_s": 11.78, "t": 1792368031.99498}
+{"step": 6, "config": "seq-mtp", "tok_per_s": null, "batch_wall_s": 134.0, "aggregate_tok_per_s": 20.44, "t": 1792368174.0148492}
+{"step": 7, "config": "np4", "tok_per_s": null, "batch_wall_s": 110.4, "aggregate_tok_per_s": 24.72, "t": 1792368292.9718773}
+{"step": 8, "config": "np4-mtp", "tok_per_s": null, "batch_wall_s": 108.3, "aggregate_tok_per_s": 25.27, "t": 1792368410.3335276}

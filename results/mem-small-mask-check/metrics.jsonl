@@ -1,0 +1,9 @@
+{"event": "phase", "phase": "start", "allocated_gib": 0.062, "reserved_gib": 0.064, "peak_reserved_gib": 0.064, "mem_get_info_free_gib": 43.411, "mem_get_info_total_gib": 43.868, "t": 1792364196.2156386}
+{"event": "phase", "phase": "after_load", "allocated_gib": 0.974, "reserved_gib": 1.012, "peak_reserved_gib": 1.012, "mem_get_info_free_gib": 42.442, "mem_get_info_total_gib": 43.868, "t": 1792364207.0144892}
+{"event": "phase", "phase": "after_lora", "allocated_gib": 0.998, "reserved_gib": 1.035, "peak_reserved_gib": 1.035, "mem_get_info_free_gib": 42.442, "mem_get_info_total_gib": 43.868, "t": 1792364210.4836137}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792364214.0044026}
+{"step": 1, "seconds": 32.474, "peak_reserved_gib": 2.373, "peak_allocated_gib": 1.981, "tokens": 4082, "trained_tokens": 87, "tokens_per_second": 125.7, "trained_tokens_per_second": 2.7, "loss": 0.4242936074733734, "grad_norm": 2.6822667121887207, "learning_rate": 0.0001, "epoch": 0.3333333333333333, "t": 1792364246.484217}
+{"step": 2, "seconds": 2.585, "peak_reserved_gib": 2.596, "peak_allocated_gib": 1.982, "tokens": 3997, "trained_tokens": 87, "tokens_per_second": 1546.2, "trained_tokens_per_second": 33.7, "loss": 1.237825632095337, "grad_norm": 3.3252675533294678, "learning_rate": 6.666666666666667e-05, "epoch": 0.6666666666666666, "t": 1792364249.0753367}
+{"step": 3, "seconds": 2.638, "peak_reserved_gib": 3.537, "peak_allocated_gib": 1.995, "tokens": 4057, "trained_tokens": 66, "tokens_per_second": 1538.2, "trained_tokens_per_second": 25.0, "loss": 0.1327076554298401, "grad_norm": 1.1831904649734497, "learning_rate": 3.3333333333333335e-05, "epoch": 1.0, "t": 1792364251.715879}
+{"event": "train_end", "step": 3, "t": 1792364251.7178779}
+{"event": "phase", "phase": "after_training", "allocated_gib": 1.016, "reserved_gib": 1.07, "peak_reserved_gib": 3.537, "mem_get_info_free_gib": 41.896, "mem_get_info_total_gib": 43.868, "t": 1792364252.185068}

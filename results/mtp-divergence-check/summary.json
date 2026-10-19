@@ -1,0 +1,865 @@
+{
+ "divergences": [
+  {
+   "config": "mtp",
+   "prompt": "code-chat",
+   "position": 87,
+   "base_token": " hours",
+   "spec_token": " Hours",
+   "p_gap": -0.0068,
+   "top5": [
+    [
+     " Hours",
+     0.4748
+    ],
+    [
+     " hours",
+     0.468
+    ],
+    [
+     " `",
+     0.0321
+    ],
+    [
+     " H",
+     0.0125
+    ],
+    [
+     "\n",
+     0.0111
+    ]
+   ],
+   "p_base_token": 0.468030091857509,
+   "p_spec_token": 0.4748358925108216,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp",
+   "prompt": "explain-chat",
+   "position": 152,
+   "base_token": "The",
+   "spec_token": "Both",
+   "p_gap": 0.0016,
+   "top5": [
+    [
+     "The",
+     0.3291
+    ],
+    [
+     "Both",
+     0.3275
+    ],
+    [
+     "###",
+     0.3033
+    ],
+    [
+     "**",
+     0.0391
+    ],
+    [
+     "They",
+     0.0004
+    ]
+   ],
+   "p_base_token": 0.3291242240549435,
+   "p_spec_token": 0.3275248374709631,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp",
+   "prompt": "refactor-chat",
+   "position": 86,
+   "base_token": " `",
+   "spec_token": " callback",
+   "p_gap": 0.0148,
+   "top5": [
+    [
+     " `",
+     0.5074
+    ],
+    [
+     " callback",
+     0.4926
+    ],
+    [
+     " callbacks",
+     0.0
+    ],
+    [
+     " cb",
+     0.0
+    ],
+    [
+     "\u56de\u8c03",
+     0.0
+    ]
+   ],
+   "p_base_token": 0.5073848991344743,
+   "p_spec_token": 0.49260227663548206,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp",
+   "prompt": "bash-chat",
+   "position": 161,
+   "base_token": " clean",
+   "spec_token": " useful",
+   "p_gap": 0.0158,
+   "top5": [
+    [
+     " clean",
+     0.4386
+    ],
+    [
+     " useful",
+     0.4229
+    ],
+    [
+     " practical",
+     0.1155
+    ],
+    [
+     " robust",
+     0.0136
+    ],
+    [
+     " idi",
+     0.0039
+    ]
+   ],
+   "p_base_token": 0.438641731095543,
+   "p_spec_token": 0.422889736523545,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp",
+   "prompt": "prose-raw",
+   "position": 170,
+   "base_token": " often",
+   "spec_token": " lighter",
+   "p_gap": -0.0179,
+   "top5": [
+    [
+     " lighter",
+     0.2906
+    ],
+    [
+     " often",
+     0.2727
+    ],
+    [
+     " lightweight",
+     0.2348
+    ],
+    [
+     " also",
+     0.0958
+    ],
+    [
+     " more",
+     0.0746
+    ]
+   ],
+   "p_base_token": 0.2726561022005804,
+   "p_spec_token": 0.2905920987211427,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "code-chat",
+   "position": 87,
+   "base_token": " hours",
+   "spec_token": " Hours",
+   "p_gap": -0.0068,
+   "top5": [
+    [
+     " Hours",
+     0.4748
+    ],
+    [
+     " hours",
+     0.468
+    ],
+    [
+     " `",
+     0.0321
+    ],
+    [
+     " H",
+     0.0125
+    ],
+    [
+     "\n",
+     0.0111
+    ]
+   ],
+   "p_base_token": 0.468030091857509,
+   "p_spec_token": 0.4748358925108216,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "explain-chat",
+   "position": 192,
+   "base_token": " is",
+   "spec_token": " *",
+   "p_gap": 0.0208,
+   "top5": [
+    [
+     " is",
+     0.493
+    ],
+    [
+     " *",
+     0.4723
+    ],
+    [
+     " **",
+     0.034
+    ],
+    [
+     " will",
+     0.0006
+    ],
+    [
+     " might",
+     0.0
+    ]
+   ],
+   "p_base_token": 0.4930423065807261,
+   "p_spec_token": 0.4722902863517776,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "refactor-chat",
+   "position": 214,
+   "base_token": " r",
+   "spec_token": " await",
+   "p_gap": 0.0329,
+   "top5": [
+    [
+     " r",
+     0.5164
+    ],
+    [
+     " await",
+     0.4835
+    ],
+    [
+     " (",
+     0.0
+    ],
+    [
+     " JSON",
+     0.0
+    ],
+    [
+     " data",
+     0.0
+    ]
+   ],
+   "p_base_token": 0.5164287636861509,
+   "p_spec_token": 0.4835048523564014,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "bash-chat",
+   "position": 161,
+   "base_token": " clean",
+   "spec_token": " useful",
+   "p_gap": 0.0158,
+   "top5": [
+    [
+     " clean",
+     0.4386
+    ],
+    [
+     " useful",
+     0.4229
+    ],
+    [
+     " practical",
+     0.1155
+    ],
+    [
+     " robust",
+     0.0136
+    ],
+    [
+     " idi",
+     0.0039
+    ]
+   ],
+   "p_base_token": 0.438641731095543,
+   "p_spec_token": 0.422889736523545,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "code-raw",
+   "position": 126,
+   "base_token": " start",
+   "spec_token": " add",
+   "p_gap": -0.002,
+   "top5": [
+    [
+     " add",
+     0.3839
+    ],
+    [
+     " start",
+     0.3819
+    ],
+    [
+     " append",
+     0.2291
+    ],
+    [
+     " push",
+     0.0012
+    ],
+    [
+     " treat",
+     0.0011
+    ]
+   ],
+   "p_base_token": 0.3819338989440986,
+   "p_spec_token": 0.38393294226636265,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp-n1",
+   "prompt": "prose-raw",
+   "position": 170,
+   "base_token": " often",
+   "spec_token": " lighter",
+   "p_gap": -0.0179,
+   "top5": [
+    [
+     " lighter",
+     0.2906
+    ],
+    [
+     " often",
+     0.2727
+    ],
+    [
+     " lightweight",
+     0.2348
+    ],
+    [
+     " also",
+     0.0958
+    ],
+    [
+     " more",
+     0.0746
+    ]
+   ],
+   "p_base_token": 0.2726561022005804,
+   "p_spec_token": 0.2905920987211427,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp-n2",
+   "prompt": "code-chat",
+   "position": 120,
+   "base_token": " the",
+   "spec_token": " for",
+   "p_gap": 0.0115,
+   "top5": [
+    [
+     " the",
+     0.2197
+    ],
+    [
+     " for",
+     0.2082
+    ],
+    [
+     " commonly",
+     0.1623
+    ],
+    [
+     " typically",
+     0.1209
+    ],
+    [
+     " practically",
+     0.115
+    ]
+   ],
+   "p_base_token": 0.21974790274824726,
+   "p_spec_token": 0.20820636541743112,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n2",
+   "prompt": "explain-chat",
+   "position": 152,
+   "base_token": "The",
+   "spec_token": "Both",
+   "p_gap": 0.0016,
+   "top5": [
+    [
+     "The",
+     0.3291
+    ],
+    [
+     "Both",
+     0.3275
+    ],
+    [
+     "###",
+     0.3033
+    ],
+    [
+     "**",
+     0.0391
+    ],
+    [
+     "They",
+     0.0004
+    ]
+   ],
+   "p_base_token": 0.3291242240549435,
+   "p_spec_token": 0.3275248374709631,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n2",
+   "prompt": "refactor-chat",
+   "position": 238,
+   "base_token": "But",
+   "spec_token": "The",
+   "p_gap": 0.0,
+   "top5": [
+    [
+     "But",
+     0.4047
+    ],
+    [
+     "The",
+     0.4046
+    ],
+    [
+     "I",
+     0.1081
+    ],
+    [
+     "Actually",
+     0.0776
+    ],
+    [
+     "Or",
+     0.002
+    ]
+   ],
+   "p_base_token": 0.40467673255549197,
+   "p_spec_token": 0.404629651858057,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n2",
+   "prompt": "bash-chat",
+   "position": 161,
+   "base_token": " clean",
+   "spec_token": " useful",
+   "p_gap": 0.0158,
+   "top5": [
+    [
+     " clean",
+     0.4386
+    ],
+    [
+     " useful",
+     0.4229
+    ],
+    [
+     " practical",
+     0.1155
+    ],
+    [
+     " robust",
+     0.0136
+    ],
+    [
+     " idi",
+     0.0039
+    ]
+   ],
+   "p_base_token": 0.438641731095543,
+   "p_spec_token": 0.422889736523545,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n2",
+   "prompt": "prose-raw",
+   "position": 154,
+   "base_token": ",",
+   "spec_token": " and",
+   "p_gap": 0.0096,
+   "top5": [
+    [
+     ",",
+     0.3611
+    ],
+    [
+     " and",
+     0.3515
+    ],
+    [
+     " structures",
+     0.1728
+    ],
+    [
+     " within",
+     0.043
+    ],
+    [
+     " without",
+     0.0211
+    ]
+   ],
+   "p_base_token": 0.3610757678293284,
+   "p_spec_token": 0.35145633714963914,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n4",
+   "prompt": "code-chat",
+   "position": 87,
+   "base_token": " hours",
+   "spec_token": " Hours",
+   "p_gap": -0.0068,
+   "top5": [
+    [
+     " Hours",
+     0.4748
+    ],
+    [
+     " hours",
+     0.468
+    ],
+    [
+     " `",
+     0.0321
+    ],
+    [
+     " H",
+     0.0125
+    ],
+    [
+     "\n",
+     0.0111
+    ]
+   ],
+   "p_base_token": 0.468030091857509,
+   "p_spec_token": 0.4748358925108216,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "mtp-n4",
+   "prompt": "explain-chat",
+   "position": 152,
+   "base_token": "The",
+   "spec_token": "Both",
+   "p_gap": 0.0016,
+   "top5": [
+    [
+     "The",
+     0.3291
+    ],
+    [
+     "Both",
+     0.3275
+    ],
+    [
+     "###",
+     0.3033
+    ],
+    [
+     "**",
+     0.0391
+    ],
+    [
+     "They",
+     0.0004
+    ]
+   ],
+   "p_base_token": 0.3291242240549435,
+   "p_spec_token": 0.3275248374709631,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n4",
+   "prompt": "bash-chat",
+   "position": 161,
+   "base_token": " clean",
+   "spec_token": " useful",
+   "p_gap": 0.0158,
+   "top5": [
+    [
+     " clean",
+     0.4386
+    ],
+    [
+     " useful",
+     0.4229
+    ],
+    [
+     " practical",
+     0.1155
+    ],
+    [
+     " robust",
+     0.0136
+    ],
+    [
+     " idi",
+     0.0039
+    ]
+   ],
+   "p_base_token": 0.438641731095543,
+   "p_spec_token": 0.422889736523545,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "mtp-n4",
+   "prompt": "prose-raw",
+   "position": 154,
+   "base_token": ",",
+   "spec_token": " and",
+   "p_gap": 0.0096,
+   "top5": [
+    [
+     ",",
+     0.3611
+    ],
+    [
+     " and",
+     0.3515
+    ],
+    [
+     " structures",
+     0.1728
+    ],
+    [
+     " within",
+     0.043
+    ],
+    [
+     " without",
+     0.0211
+    ]
+   ],
+   "p_base_token": 0.3610757678293284,
+   "p_spec_token": 0.35145633714963914,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "builtin",
+   "prompt": "code-chat",
+   "position": 87,
+   "base_token": " hours",
+   "spec_token": " Hours",
+   "p_gap": -0.0068,
+   "top5": [
+    [
+     " Hours",
+     0.4748
+    ],
+    [
+     " hours",
+     0.468
+    ],
+    [
+     " `",
+     0.0321
+    ],
+    [
+     " H",
+     0.0125
+    ],
+    [
+     "\n",
+     0.0111
+    ]
+   ],
+   "p_base_token": 0.468030091857509,
+   "p_spec_token": 0.4748358925108216,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "builtin",
+   "prompt": "explain-chat",
+   "position": 152,
+   "base_token": "The",
+   "spec_token": "Both",
+   "p_gap": 0.0016,
+   "top5": [
+    [
+     "The",
+     0.3291
+    ],
+    [
+     "Both",
+     0.3275
+    ],
+    [
+     "###",
+     0.3033
+    ],
+    [
+     "**",
+     0.0391
+    ],
+    [
+     "They",
+     0.0004
+    ]
+   ],
+   "p_base_token": 0.3291242240549435,
+   "p_spec_token": 0.3275248374709631,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "builtin",
+   "prompt": "refactor-chat",
+   "position": 214,
+   "base_token": " r",
+   "spec_token": " await",
+   "p_gap": 0.0329,
+   "top5": [
+    [
+     " r",
+     0.5164
+    ],
+    [
+     " await",
+     0.4835
+    ],
+    [
+     " (",
+     0.0
+    ],
+    [
+     " JSON",
+     0.0
+    ],
+    [
+     " data",
+     0.0
+    ]
+   ],
+   "p_base_token": 0.5164287636861509,
+   "p_spec_token": 0.4835048523564014,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "builtin",
+   "prompt": "bash-chat",
+   "position": 161,
+   "base_token": " clean",
+   "spec_token": " useful",
+   "p_gap": 0.0158,
+   "top5": [
+    [
+     " clean",
+     0.4386
+    ],
+    [
+     " useful",
+     0.4229
+    ],
+    [
+     " practical",
+     0.1155
+    ],
+    [
+     " robust",
+     0.0136
+    ],
+    [
+     " idi",
+     0.0039
+    ]
+   ],
+   "p_base_token": 0.438641731095543,
+   "p_spec_token": 0.422889736523545,
+   "spec_token_rank": 1
+  },
+  {
+   "config": "builtin",
+   "prompt": "code-raw",
+   "position": 83,
+   "base_token": " maximum",
+   "spec_token": " far",
+   "p_gap": -0.0071,
+   "top5": [
+    [
+     " far",
+     0.2126
+    ],
+    [
+     " maximum",
+     0.2055
+    ],
+    [
+     " fur",
+     0.1658
+    ],
+    [
+     " farther",
+     0.1359
+    ],
+    [
+     " later",
+     0.1335
+    ]
+   ],
+   "p_base_token": 0.20550646723506633,
+   "p_spec_token": 0.2126070180557061,
+   "spec_token_rank": 0
+  },
+  {
+   "config": "builtin",
+   "prompt": "prose-raw",
+   "position": 7,
+   "base_token": " running",
+   "spec_token": " with",
+   "p_gap": 0.0068,
+   "top5": [
+    [
+     " running",
+     0.238
+    ],
+    [
+     " with",
+     0.2312
+    ],
+    [
+     " that",
+     0.1337
+    ],
+    [
+     " execution",
+     0.1141
+    ],
+    [
+     ",",
+     0.1095
+    ]
+   ],
+   "p_base_token": 0.2379806694810638,
+   "p_spec_token": 0.2311851099332438,
+   "spec_token_rank": 1
+  }
+ ],
+ "n": 26,
+ "max_p_gap": 0.0329,
+ "spec_token_was_rank_1_or_0": 26
+}

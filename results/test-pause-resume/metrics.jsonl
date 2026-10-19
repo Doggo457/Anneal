@@ -1,0 +1,14 @@
+{"event": "train_begin", "max_steps": 8, "step": 0, "t": 1792310992.4494946}
+{"step": 1, "seconds": 252.17, "peak_reserved_gib": 2.432, "peak_allocated_gib": 1.912, "tokens_per_second": 15.2, "loss": 0.910423755645752, "grad_norm": 1.6106504201889038, "learning_rate": 0.0, "epoch": 0.2, "t": 1792311244.626223}
+{"step": 2, "seconds": 4.451, "peak_reserved_gib": 2.49, "peak_allocated_gib": 1.948, "tokens_per_second": 859.8, "loss": 1.1256983280181885, "grad_norm": 1.7873932123184204, "learning_rate": 0.0001, "epoch": 0.4, "t": 1792311249.082063}
+{"step": 3, "seconds": 4.374, "peak_reserved_gib": 2.49, "peak_allocated_gib": 1.948, "tokens_per_second": 875.0, "loss": 0.8906199932098389, "grad_norm": 1.036769151687622, "learning_rate": 0.0002, "epoch": 0.6, "t": 1792311253.4598582}
+{"step": 4, "seconds": 4.39, "peak_reserved_gib": 2.49, "peak_allocated_gib": 1.948, "tokens_per_second": 871.7, "loss": 0.7799690365791321, "grad_norm": 0.42790278792381287, "learning_rate": 0.0001666666666666667, "epoch": 0.8, "t": 1792311257.8659468}
+{"event": "pause_requested", "step": 5, "t": 1792311262.4298124}
+{"step": 5, "seconds": 4.559, "peak_reserved_gib": 2.49, "peak_allocated_gib": 1.96, "tokens_per_second": 839.5, "loss": 0.8770444393157959, "grad_norm": 0.47008466720581055, "learning_rate": 0.00013333333333333334, "epoch": 1.0, "t": 1792311262.4308114}
+{"event": "checkpoint", "step": 5, "path": "C:\\AI\\training\\results\\test-pause-resume\\checkpoint-5", "t": 1792311263.090631}
+{"event": "paused", "step": 5, "t": 1792311263.09263}
+{"event": "train_begin", "max_steps": 8, "step": 5, "t": 1792311338.9398098}
+{"step": 6, "seconds": 250.293, "peak_reserved_gib": 2.461, "peak_allocated_gib": 1.933, "tokens_per_second": 15.3, "loss": 0.78290855884552, "grad_norm": 0.4859146177768707, "learning_rate": 0.0001, "epoch": 1.2, "t": 1792311589.2654107}
+{"step": 7, "seconds": 4.423, "peak_reserved_gib": 2.461, "peak_allocated_gib": 1.948, "tokens_per_second": 865.4, "loss": 0.9570856094360352, "grad_norm": 0.6200692653656006, "learning_rate": 6.666666666666667e-05, "epoch": 1.4, "t": 1792311593.694011}
+{"step": 8, "seconds": 4.393, "peak_reserved_gib": 2.461, "peak_allocated_gib": 1.948, "tokens_per_second": 871.3, "loss": 0.7273834943771362, "grad_norm": 0.39333677291870117, "learning_rate": 3.3333333333333335e-05, "epoch": 1.6, "t": 1792311598.0917466}
+{"event": "train_end", "step": 8, "t": 1792311598.0937462}

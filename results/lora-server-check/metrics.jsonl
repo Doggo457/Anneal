@@ -1,0 +1,9 @@
+{"step": 1, "variant": "nolora", "max_ok_prompt_tokens": 128, "t": 1792366475.0042968}
+{"step": 2, "variant": "f16", "max_ok_prompt_tokens": 8, "t": 1792366488.9045644}
+{"step": 3, "variant": "f32", "max_ok_prompt_tokens": 8, "t": 1792366502.949894}
+{"step": 4, "variant": "f16-ub1", "max_ok_prompt_tokens": 0, "t": 1792366511.8532155}
+{"step": 5, "variant": "f16-ub8", "max_ok_prompt_tokens": 128, "t": 1792366525.256363}
+{"step": 6, "variant": "f16-fa-off", "max_ok_prompt_tokens": 0, "t": 1792366534.0745866}
+{"step": 7, "variant": "f16-nofuse", "max_ok_prompt_tokens": 8, "t": 1792366546.4960825}
+{"step": 8, "variant": "f16-nocoopmat", "max_ok_prompt_tokens": 128, "t": 1792366557.367468}
+{"step": 9, "variant": "f16-verbose", "max_ok_prompt_tokens": 8, "t": 1792366569.7105587}

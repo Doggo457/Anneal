@@ -1,0 +1,214 @@
+{
+ "datasets": {
+  "humaneval": {
+   "tasks": 164,
+   "canonical": {
+    "base": 0.9939024390243902,
+    "plus": 0.9939024390243902,
+    "seconds": 26.5,
+    "exceptions": [
+     "HumanEval/32"
+    ]
+   },
+   "null": {
+    "base": 0.0,
+    "plus": 0.0,
+    "seconds": 12.4,
+    "exceptions": []
+   }
+  },
+  "mbpp": {
+   "tasks": 378,
+   "canonical": {
+    "base": 1.0,
+    "plus": 1.0,
+    "seconds": 66.7,
+    "exceptions": []
+   },
+   "null": {
+    "base": 0.0,
+    "plus": 0.0,
+    "seconds": 35.0,
+    "exceptions": []
+   }
+  }
+ },
+ "edge_cases": [
+  {
+   "case": "float within atol (truncate_number + 1e-9)",
+   "task": "HumanEval/2",
+   "expected": [
+    "pass",
+    "pass"
+   ],
+   "got": [
+    "pass",
+    "pass"
+   ],
+   "ok": true
+  },
+  {
+   "case": "float outside atol (truncate_number + 1e-3)",
+   "task": "HumanEval/2",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "find_zero special oracle: different root-finder (Newton)",
+   "task": "HumanEval/32",
+   "expected": [
+    "pass",
+    "pass"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": false
+  },
+  {
+   "case": "find_zero special oracle: returns 0.0",
+   "task": "HumanEval/32",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "MBPP set-equality oracle: same elements, other order (similar_elements)",
+   "task": "Mbpp/2",
+   "expected": [
+    "pass",
+    "pass"
+   ],
+   "got": [
+    "pass",
+    "pass"
+   ],
+   "ok": true
+  },
+  {
+   "case": "MBPP set-equality oracle: wrong elements",
+   "task": "Mbpp/2",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "infinite Python loop (time_limit raises TimeoutException -> fail, as in EvalPlus)",
+   "task": "HumanEval/0",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "timeout: one long C-level call the timer can't interrupt",
+   "task": "HumanEval/0",
+   "expected": [
+    "timeout",
+    "timeout"
+   ],
+   "got": [
+    "timeout",
+    "timeout"
+   ],
+   "ok": true
+  },
+  {
+   "case": "exception",
+   "task": "HumanEval/0",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "uses os.getcwd (disabled by reliability_guard)",
+   "task": "HumanEval/0",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "correct, written differently",
+   "task": "HumanEval/0",
+   "expected": [
+    "pass",
+    "pass"
+   ],
+   "got": [
+    "pass",
+    "pass"
+   ],
+   "ok": true
+  },
+  {
+   "case": "prints and calls sys.exit at import",
+   "task": "HumanEval/0",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  },
+  {
+   "case": "tries to read a file outside the sandbox",
+   "task": "HumanEval/0",
+   "expected": [
+    "fail",
+    "fail"
+   ],
+   "got": [
+    "fail",
+    "fail"
+   ],
+   "ok": true
+  }
+ ],
+ "check_stats": {
+  "checks": 2194,
+  "harness_retries": 0,
+  "timeouts": 2,
+  "startup_s_max": 5.061
+ },
+ "result": "FAIL"
+}

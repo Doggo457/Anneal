@@ -1,0 +1,182 @@
+{
+ "server": {
+  "command": "GGML_VK_DISABLE_COOPMAT=1 C:\\AI\\training\\llama.cpp\\b11435-vulkan\\llama-server.exe -m \"C:\\Users\\ai sever\\.ollama\\models\\blobs\\sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d\" --host 127.0.0.1 --port 18091 --no-webui -to 21600 -c 262144 -np 4 -ctk q8_0 -ctv q8_0 -fa on -ngl 999 --ctx-checkpoints 0 --cache-ram 0 --reasoning-format deepseek",
+  "load_s": 13.7
+ },
+ "template_gguf": [
+  {
+   "prompt": "HumanEval/0",
+   "enable_thinking": true,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 762,
+   "tokens": 198,
+   "diff": null,
+   "server_tail": "0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "prompt": "HumanEval/0",
+   "enable_thinking": false,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 536,
+   "tokens": 158,
+   "diff": null,
+   "server_tail": "], 0.3)\n    True\n    \"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "prompt": "HumanEval/32",
+   "enable_thinking": true,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 1173,
+   "tokens": 340,
+   "diff": null,
+   "server_tail": " + 11x - 6x^2 + x^3\n    1.0\n    \"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "prompt": "HumanEval/32",
+   "enable_thinking": false,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 947,
+   "tokens": 300,
+   "diff": null,
+   "server_tail": "^2 + x^3\n    1.0\n    \"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "prompt": "Mbpp/2",
+   "enable_thinking": true,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 565,
+   "tokens": 132,
+   "diff": null,
+   "server_tail": ",(5, 7, 4, 10))) == set((4, 5))\n\"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "prompt": "Mbpp/2",
+   "enable_thinking": false,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 339,
+   "tokens": 92,
+   "diff": null,
+   "server_tail": "10))) == set((4, 5))\n\"\"\"\n```<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "prompt": "OCI-style",
+   "enable_thinking": true,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 575,
+   "tokens": 149,
+   "diff": null,
+   "server_tail": "2\n```\n**Sample Output:**\n```\n[1, 2]\n```<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "prompt": "OCI-style",
+   "enable_thinking": false,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 349,
+   "tokens": 109,
+   "diff": null,
+   "server_tail": "ple Output:**\n```\n[1, 2]\n```<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  },
+  {
+   "prompt": "unicode",
+   "enable_thinking": true,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 384,
+   "tokens": 75,
+   "diff": null,
+   "server_tail": " avec des \u00e9mojis \ud83d\ude42 et des tabulations\t.<|im_end|>\n<|im_start|>assistant\n<think>\n"
+  },
+  {
+   "prompt": "unicode",
+   "enable_thinking": false,
+   "chars_equal": true,
+   "token_ids_equal": true,
+   "chars": 158,
+   "tokens": 35,
+   "diff": null,
+   "server_tail": "mojis \ud83d\ude42 et des tabulations\t.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+  }
+ ],
+ "separation": {
+  "finish_reason": "stop",
+  "completion_tokens": 51,
+  "reasoning_tokens": 45,
+  "content_tokens": 3,
+  "seconds": 4.6,
+  "reasoning_head": "We need answer user's simple arithmetic. Need final only number. Compute 17*23 = 17*20 +17*3=340+51=391.\n",
+  "reasoning_tail": "We need answer user's simple arithmetic. Need final only number. Compute 17*23 = 17*20 +17*3=340+51=391.\n",
+  "content_head": "391",
+  "content_has_think_tag": false
+ },
+ "budget_request_64": {
+  "finish_reason": "stop",
+  "completion_tokens": 242,
+  "reasoning_tokens": 64,
+  "content_tokens": 175,
+  "seconds": 20.6,
+  "reasoning_head": "We need answer user asks: provide self-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length",
+  "reasoning_tail": "lf-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length <2 false, threshold maybe negative\n",
+  "content_head": "```python\nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\"\n    Check if in given list of numbers, are any two numbers closer to each other\n    than the given threshold.\n\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n    for i in range(len(numbers)):",
+  "content_has_think_tag": false
+ },
+ "budget_request_64_raw": {
+  "finish_reason": "stop",
+  "completion_tokens": 242,
+  "reasoning_tokens": 0,
+  "content_tokens": 243,
+  "seconds": 20.7,
+  "reasoning_head": "",
+  "reasoning_tail": "",
+  "content_head": "<think>\nWe need answer user asks: provide self-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length <2 false, threshold maybe negative\n</think>\n\n```python\nfrom typing import List\n\n\ndef has_cl",
+  "content_has_think_tag": true
+ },
+ "budget_request_none": {
+  "finish_reason": "length",
+  "completion_tokens": 768,
+  "reasoning_tokens": 626,
+  "content_tokens": 140,
+  "seconds": 63.3,
+  "reasoning_head": "We need answer user asks: provide self-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length",
+  "reasoning_tail": "ot <=. Examples: threshold 0.5 with [1,2,3] distances 1 false. threshold 0.3 with 2.8 and 3 distance 0.2 true. If distance exactly threshold? \"closer than\" implies <. Use <.\n\nPotential issue: floating point. Use abs. If numbers contain NaN? Not required. Sorting with NaN weird. Ignore.\n\nNeed final.\n",
+  "content_head": "```python\nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n    if len(numbers) < 2:\n        return Fa",
+  "content_has_think_tag": false
+ },
+ "budget_flag_64": {
+  "finish_reason": "stop",
+  "completion_tokens": 242,
+  "reasoning_tokens": 64,
+  "content_tokens": 175,
+  "seconds": 20.4,
+  "reasoning_head": "We need answer user asks: provide self-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length",
+  "reasoning_tail": "lf-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length <2 false, threshold maybe negative\n",
+  "content_head": "```python\nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\"\n    Check if in given list of numbers, are any two numbers closer to each other\n    than the given threshold.\n\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n    for i in range(len(numbers)):",
+  "content_has_think_tag": false
+ },
+ "budget_flag_64_override_off": {
+  "finish_reason": "stop",
+  "completion_tokens": 242,
+  "reasoning_tokens": 64,
+  "content_tokens": 175,
+  "seconds": 20.6,
+  "reasoning_head": "We need answer user asks: provide self-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length",
+  "reasoning_tail": "lf-contained Python script that solves problem in markdown code block. Need include function has_close_elements. Need think about requirements. Simple: check any two numbers closer than threshold. Need probably compare abs(a-b) < threshold. Edge cases: list length <2 false, threshold maybe negative\n",
+  "content_head": "```python\nfrom typing import List\n\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\"\n    Check if in given list of numbers, are any two numbers closer to each other\n    than the given threshold.\n\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n    for i in range(len(numbers)):",
+  "content_has_think_tag": false
+ },
+ "verdict": {
+  "template_matches_gguf_template": true,
+  "chat_template_file_needed": false,
+  "template_matches_with_hf_file": null,
+  "separated": true,
+  "budget_enforced_per_request": true,
+  "budget_enforced_by_flag": true
+ }
+}

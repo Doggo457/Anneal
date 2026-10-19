@@ -1,0 +1,16 @@
+{"event": "plan", "rows": 27, "tokens": 58197, "total_steps": 6, "warmup": 2, "decay": 3, "resume": null, "t": 1792372565.9142597}
+{"event": "train_begin", "max_steps": 6, "step": 0, "t": 1792372567.4273553}
+{"step": 1, "seconds": 34.31, "peak_reserved_gib": 2.324, "peak_allocated_gib": 1.912, "tokens": 6721, "trained_tokens": 5727, "tokens_per_second": 195.9, "trained_tokens_per_second": 166.9, "loss": 0.8910638093948364, "grad_norm": 1.2326328754425049, "learning_rate": 0.0, "epoch": 0.07407407407407407, "t": 1792372601.7452216}
+{"step": 2, "seconds": 2.989, "peak_reserved_gib": 2.324, "peak_allocated_gib": 1.912, "tokens": 4912, "trained_tokens": 4095, "tokens_per_second": 1643.5, "trained_tokens_per_second": 1370.2, "loss": 0.8965281248092651, "grad_norm": 1.2376735210418701, "learning_rate": 5e-05, "epoch": 0.14814814814814814, "t": 1792372604.7389202}
+{"event": "pause_requested", "step": 3, "t": 1792372605.5290926}
+{"step": 3, "seconds": 0.786, "peak_reserved_gib": 3.037, "peak_allocated_gib": 1.912, "tokens": 1397, "trained_tokens": 1046, "tokens_per_second": 1778.1, "trained_tokens_per_second": 1331.4, "loss": 1.0798883438110352, "grad_norm": 2.4339370727539062, "learning_rate": 0.0001, "epoch": 0.2222222222222222, "t": 1792372605.5300918}
+{"event": "checkpoint", "step": 3, "path": "C:\\AI\\training\\results\\resume-check\\tiny-resumed\\checkpoints\\checkpoint-3", "t": 1792372606.1016183}
+{"event": "paused", "step": 3, "t": 1792372606.1036172}
+{"event": "plan", "rows": 27, "tokens": 58197, "total_steps": 6, "warmup": 2, "decay": 3, "resume": "C:\\AI\\training\\results\\resume-check\\tiny-resumed\\checkpoints\\checkpoint-3", "t": 1792372640.640793}
+{"event": "train_begin", "max_steps": 6, "step": 3, "t": 1792372642.4213502}
+{"step": 4, "seconds": 33.607, "peak_reserved_gib": 1.873, "peak_allocated_gib": 1.757, "tokens": 3128, "trained_tokens": 2682, "tokens_per_second": 93.1, "trained_tokens_per_second": 79.8, "loss": 0.8191567063331604, "grad_norm": 1.2451598644256592, "learning_rate": 0.0001, "epoch": 0.2962962962962963, "t": 1792372676.052945}
+{"step": 5, "seconds": 2.771, "peak_reserved_gib": 1.873, "peak_allocated_gib": 1.757, "tokens": 4590, "trained_tokens": 4257, "tokens_per_second": 1656.6, "trained_tokens_per_second": 1536.4, "loss": 0.8032656908035278, "grad_norm": 0.9122734069824219, "learning_rate": 7.500000000000001e-05, "epoch": 0.37037037037037035, "t": 1792372678.8380525}
+{"step": 6, "seconds": 1.766, "peak_reserved_gib": 1.873, "peak_allocated_gib": 1.757, "tokens": 3119, "trained_tokens": 2502, "tokens_per_second": 1766.4, "trained_tokens_per_second": 1417.0, "loss": 0.8639665842056274, "grad_norm": 1.278443455696106, "learning_rate": 2.500000000000001e-05, "epoch": 0.4444444444444444, "t": 1792372680.6098368}
+{"event": "checkpoint", "step": 6, "path": "C:\\AI\\training\\results\\resume-check\\tiny-resumed\\checkpoints\\checkpoint-6", "t": 1792372681.2215302}
+{"event": "train_end", "step": 6, "t": 1792372681.2235308}
+{"event": "adapter_saved", "path": "C:\\AI\\training\\results\\resume-check\\tiny-resumed\\adapter", "t": 1792372682.0376549}

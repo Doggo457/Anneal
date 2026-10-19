@@ -1,0 +1,75 @@
+{
+ "27b": {
+  "ok": true,
+  "trainable_params": 79691776,
+  "collated_check": {
+   "collator": "DataCollatorForLanguageModeling",
+   "row_found": true,
+   "labels_match_helper": true,
+   "batch_tokens": 8188,
+   "batch_trained": 7384
+  },
+  "rows": 6,
+  "rows_dropped_too_long": 0,
+  "mask_stats": {
+   "rows": 6,
+   "kept": 6,
+   "dropped_too_long": 0,
+   "prompt_not_prefix": 0,
+   "tokens_total": 48969,
+   "tokens_trained": 45976,
+   "rows_without_trace": 0,
+   "trained_fraction": 0.9389
+  },
+  "sample_first_trained_tokens": [
+   "Okay",
+   ",",
+   " let",
+   "'s",
+   " tackle",
+   " this",
+   " problem",
+   "."
+  ],
+  "steps": {
+   "1": {
+    "loss": 0.5486299991607666,
+    "learning_rate": 0.0,
+    "seconds": 214.507,
+    "tokens": 16347,
+    "trained_tokens": 15293,
+    "tokens_per_second": 76.2,
+    "peak_reserved_gib": 25.166
+   },
+   "2": {
+    "loss": 0.6185111999511719,
+    "learning_rate": 0.0001,
+    "seconds": 165.691,
+    "tokens": 16307,
+    "trained_tokens": 15351,
+    "tokens_per_second": 98.4,
+    "peak_reserved_gib": 25.625
+   },
+   "3": {
+    "loss": 0.5782881379127502,
+    "learning_rate": 0.0001,
+    "seconds": 214.273,
+    "tokens": 16315,
+    "trained_tokens": 15332,
+    "tokens_per_second": 76.1,
+    "peak_reserved_gib": 25.629
+   }
+  },
+  "peak_reserved_gib": 25.6,
+  "windows_peak": {
+   "ram_used_gib": 18.235,
+   "process_rss_gib": 10.046,
+   "gpu_total_used_gib": 36.119,
+   "gpu_training_gib": 36.364,
+   "gpu_training_dedicated_gib": 28.076,
+   "gpu_training_shared_gib": 8.288,
+   "portal_metrics": true
+  }
+ },
+ "result": "PASS"
+}

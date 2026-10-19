@@ -1,0 +1,195 @@
+{
+ "tokens_scored": 2047,
+ "text_tokens": 8309,
+ "n_probs": 1000,
+ "llama": {
+  "mean_loss": 0.9019,
+  "ppl": 2.464,
+  "missing_actual": 0,
+  "loss_by_quarter": [
+   1.5525,
+   0.8043,
+   0.6352,
+   0.6188
+  ],
+  "loss_second_half": 0.6269,
+  "tokenizer_same_ids": true,
+  "forced_tokens_match": true,
+  "score_seconds": 203.3,
+  "lora": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+  "vk_coopmat_disabled": true,
+  "prefix_cross_check": 0.0,
+  "eval_text_ppl": null
+ },
+ "hf": {
+  "stock": {
+   "mean_loss": 0.9312757849693298,
+   "top1_agreement": 0.937469482421875,
+   "mean_kl": 0.15608803927898407,
+   "median_kl": 0.0018515308620408177,
+   "p95_kl": 0.3168269693851471,
+   "llama_topk_mass_mean": 0.9984229207038879,
+   "load_seconds": 35.0,
+   "forward_seconds": 13.1,
+   "ppl": 2.538,
+   "loss_by_quarter": [
+    1.5458,
+    0.8509,
+    0.7029,
+    0.6288
+   ],
+   "loss_second_half": 0.6656,
+   "causal_check": {
+    "first_tokens": 1024,
+    "max_abs_logprob_diff": 2.8719592094421387,
+    "mean_loss_inside_full": 1.1972023248672485,
+    "mean_loss_alone": 1.19001042842865
+   },
+   "mean_abs_loss_diff_vs_llama": 0.2217,
+   "loss_corr_vs_llama": 0.9356,
+   "gdn_patch_calls": 0,
+   "gdn_heads": {
+    "mode": "stock",
+    "patched": false,
+    "pairing": "stock: value head j -> key head j // 3 (transformers' repeat_interleave, no patch; matches llama.cpp)"
+   }
+  }
+ },
+ "greedy": [
+  {
+   "prompt": "code",
+   "prompt_text": "def merge_intervals(intervals):\n    \"\"\"Merge overlapping [start, end] intervals and return them sorted.\"\"\"\n",
+   "llama": "    if not intervals:\n        return []\n\n    # Sort intervals by their start time\n    intervals.sort(key=lambda x: x[0])\n\n    merged = [intervals[0]]\n    for current in intervals[1:]:\n        last = merged[-1]\n        # If the current",
+   "llama_tok_per_s": 12.315867998917767,
+   "stock": "    if not intervals:\n        return []\n\n    # Sort by start time; if starts are equal, sort by end time.\n    intervals.sort(key=lambda x: (x[0], x[1]))\n\n    merged = [intervals[0]]\n    for start, end in intervals[1",
+   "stock_first_divergence_from_llama": 13
+  },
+  {
+   "prompt": "prose",
+   "prompt_text": "The main difference between a process and a thread is",
+   "llama": " that a process is an independent program with its own memory space, while a thread is a lightweight execution unit within a process that shares the same memory space.\n\nIn the context of operating systems, a process is an instance of a program in execution. It has its own memory space, including code, data, and stack",
+   "llama_tok_per_s": 12.19172356137662,
+   "stock": " that a process is an independent program with its own memory space, while a thread is a lightweight execution unit within a process that shares the same memory space.\n\nIn the context of operating systems, a process is an instance of a program in execution. It has its own memory space, including code, data, and stack",
+   "stock_first_divergence_from_llama": null
+  },
+  {
+   "prompt": "chat",
+   "prompt_text": "<|im_start|>user\nWrite a bash one-liner that counts the lines in every .py file under the current directory.<|im_end|>\n<|im_start|>assistant\n",
+   "llama": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nOptions:\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 finds all .py files and runs wc -l on them. This gives",
+   "llama_tok_per_s": 12.196996596069935,
+   "stock": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nLet me think about the options:\n\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 This finds all .py files recursively and runs `",
+   "stock_first_divergence_from_llama": 27
+  },
+  {
+   "prompt": "chat-template",
+   "prompt_text": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nWrite a Python function that returns the n-th Fibonacci number iteratively.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+   "llama": "We need answer user: \"Write a Python function that returns the n-th Fibonacci number iteratively.\" Simple. Need final with code. Could include explanation. Need decide indexing: n-th Fibonacci number ambiguous. Usually F(0)=0, F(1)=1. We can state assumption. Provide iterative function. Maybe",
+   "llama_tok_per_s": 12.142457625713948,
+   "stock": "We need answer user: \"Write a Python function that returns the n-th Fibonacci number iteratively.\" Simple. Need final with code. Could include explanation. Need decide indexing: n-th Fibonacci number ambiguous. Usually F(0)=0, F(1)=1. We can state assumption. Iterative. Handle negative",
+   "stock_first_divergence_from_llama": 59
+  }
+ ],
+ "assistant_trained": {
+  "tokens": 779,
+  "llama": 0.7284,
+  "stock": 0.7558,
+  "stock_kl": 0.0381,
+  "stock_top1_agreement": 0.9602
+ },
+ "loss_by_role": {
+  "assistant_answer": {
+   "tokens": 711,
+   "llama": 0.7474,
+   "stock": 0.7787,
+   "stock_kl": 0.0254,
+   "llama_base": 0.8099
+  },
+  "assistant_think": {
+   "tokens": 51,
+   "llama": 0.9581,
+   "stock": 1.1088,
+   "stock_kl": 0.3511,
+   "llama_base": 1.2987
+  },
+  "between": {
+   "tokens": 52,
+   "llama": 0.0,
+   "stock": 0.0,
+   "stock_kl": 0.0,
+   "llama_base": 0.0
+  },
+  "header": {
+   "tokens": 53,
+   "llama": 1.2601,
+   "stock": 1.0621,
+   "stock_kl": 0.2635,
+   "llama_base": 4.9669
+  },
+  "special": {
+   "tokens": 121,
+   "llama": 0.1689,
+   "stock": 0.2395,
+   "stock_kl": 0.0302,
+   "llama_base": 0.049
+  },
+  "system": {
+   "tokens": 684,
+   "llama": 0.4604,
+   "stock": 0.421,
+   "stock_kl": 0.3516,
+   "llama_base": 15.1981
+  },
+  "user": {
+   "tokens": 375,
+   "llama": 2.3035,
+   "stock": 2.4609,
+   "stock_kl": 0.0678,
+   "llama_base": 6.3037
+  }
+ },
+ "llama_adapter_effect": {
+  "lora": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+  "mean_loss_base": 6.6784,
+  "mean_loss_lora": 0.9019,
+  "top1_same_as_base": 0.5603,
+  "mean_abs_logprob_change": 5.8766,
+  "positions_changed_over_0.01": 1463,
+  "positions": 2047,
+  "assistant_trained_loss_base": 0.8255,
+  "assistant_trained_loss_lora": 0.7284,
+  "greedy": [
+   {
+    "prompt": "code",
+    "base": "    if not intervals:\n        return []\n\n    # Sort intervals by their start time\n    intervals.sort(key=lambda x: x[0])\n\n    merged = [intervals[0]]\n    for current in intervals[1:]:\n        last = merged[-1]\n        # If the current",
+    "lora": "    if not intervals:\n        return []\n\n    # Sort intervals by their start time\n    intervals.sort(key=lambda x: x[0])\n\n    merged = [intervals[0]]\n    for current in intervals[1:]:\n        last = merged[-1]\n        # If the current",
+    "first_divergence": null,
+    "base_tok_per_s": 12.740092606317589,
+    "lora_tok_per_s": 12.315867998917767
+   },
+   {
+    "prompt": "prose",
+    "base": " that a process is an independent program running in its own memory space, while a thread is a lightweight execution unit within a process that shares the process's memory and resources.\n\nIn the context of operating systems, a process is an instance of a program in execution. Each process has its own memory space, including its own",
+    "lora": " that a process is an independent program with its own memory space, while a thread is a lightweight execution unit within a process that shares the same memory space.\n\nIn the context of operating systems, a process is an instance of a program in execution. It has its own memory space, including code, data, and stack",
+    "first_divergence": 7,
+    "base_tok_per_s": 12.635376527200856,
+    "lora_tok_per_s": 12.19172356137662
+   },
+   {
+    "prompt": "chat",
+    "base": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nOptions:\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 finds all .py files and runs wc -l on them. This gives",
+    "lora": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nOptions:\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 finds all .py files and runs wc -l on them. This gives",
+    "first_divergence": null,
+    "base_tok_per_s": 12.624979785002605,
+    "lora_tok_per_s": 12.196996596069935
+   },
+   {
+    "prompt": "chat-template",
+    "base": "We need answer user: \"Write a Python function that returns the n-th Fibonacci number iteratively.\" Need provide code likely with explanation. Need final. Keep concise. Need consider indexing: n-th Fibonacci number ambiguous: often F(0)=0, F(1)=1. We can state assumption. Iterative function",
+    "lora": "We need answer user: \"Write a Python function that returns the n-th Fibonacci number iteratively.\" Simple. Need final with code. Could include explanation. Need decide indexing: n-th Fibonacci number ambiguous. Usually F(0)=0, F(1)=1. We can state assumption. Provide iterative function. Maybe",
+    "first_divergence": 20,
+    "base_tok_per_s": 12.579879740343294,
+    "lora_tok_per_s": 12.142457625713948
+   }
+  ]
+ }
+}

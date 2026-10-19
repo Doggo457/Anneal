@@ -1,0 +1,68 @@
+{
+  "args": {
+    "model": "unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "len": 2048,
+    "chunks": 4,
+    "plain": true,
+    "attn": "eager",
+    "gate": "sigmoid",
+    "tag": "check_base_loss",
+    "run_dir": "C:\\AI\\training\\results\\baseloss-27b-plain-eager",
+    "resume": false
+  },
+  "loader": "transformers+bnb",
+  "load_seconds": 26.6,
+  "allocated_gib": 20.812,
+  "rope": {
+    "rope_theta": 10000000,
+    "head_dim": 256,
+    "partial_rotary_factor": 0.25,
+    "rotary_dim": 64,
+    "rope_type": "default",
+    "modules": [
+      {
+        "module": "model.visual.rotary_pos_emb",
+        "class": "Qwen3_5VisionRotaryEmbedding",
+        "shape": [
+          18
+        ],
+        "dtype": "torch.float32",
+        "finite": true,
+        "first": [
+          1.0,
+          0.5994842052459717,
+          0.35938137769699097
+        ]
+      },
+      {
+        "module": "model.language_model.rotary_emb",
+        "class": "Qwen3_5TextRotaryEmbedding",
+        "shape": [
+          32
+        ],
+        "dtype": "torch.float32",
+        "finite": true,
+        "max_rel_err": 7.165454113509894e-08,
+        "first": [
+          1.0,
+          0.6042963862419128,
+          0.36517414450645447
+        ]
+      }
+    ],
+    "expected_first": [
+      1.0,
+      0.6042963902381328,
+      0.36517412725483767
+    ]
+  },
+  "losses": [
+    6.811144828796387,
+    7.656732559204102,
+    3.9820051193237305,
+    5.108584403991699
+  ],
+  "mean_loss": 5.8896167278289795,
+  "ppl": 361.2667943257121
+}

@@ -1,0 +1,146 @@
+{
+ "config": {
+  "run_name": "dryrun-27b-long",
+  "base_model": "C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299",
+  "train_file": "C:/AI/training/data/scratch/longrows_test/train.jsonl",
+  "max_samples": 6,
+  "seq_len": 8192,
+  "batch_size": 1,
+  "grad_accum": 2,
+  "max_steps": 3,
+  "lr": 0.0001,
+  "optim": "adamw_8bit",
+  "lora_r": 16,
+  "lora_alpha": 32,
+  "lora_dropout": 0.0,
+  "target_modules": [
+   "q_proj",
+   "k_proj",
+   "v_proj",
+   "o_proj",
+   "gate_proj",
+   "up_proj",
+   "down_proj"
+  ],
+  "expect_trainable_params": 79691776,
+  "completion_only": true,
+  "chat_template_kwargs": {
+   "enable_thinking": true
+  },
+  "schedule": "wsd",
+  "warmup_steps": 1,
+  "decay_fraction": 0.34,
+  "min_lr_ratio": 0.0,
+  "save_steps": 2,
+  "save_total_limit": 3,
+  "seed": 42,
+  "gdn_heads": "stock",
+  "short_conv": "shift",
+  "mem_debug": true,
+  "ce_target_gb": 2
+ },
+ "branch_from": null,
+ "global_step": 3,
+ "total_steps": 3,
+ "stopped_early": false,
+ "session_seconds": 218,
+ "tokens_seen": 48969,
+ "peak_reserved_gib": 25.6,
+ "metrics": {
+  "train_runtime": 215.1203,
+  "train_samples_per_second": 0.028,
+  "train_steps_per_second": 0.014,
+  "total_flos": 7686869911634592.0,
+  "train_loss": 0.1927627126375834,
+  "epoch": 1.0,
+  "num_input_tokens_seen": 48969
+ },
+ "data_sha256": "36a4af07008c1db30df275fe08397578d3c083d8cd7665efb3044f00deba0b7e",
+ "adapter": "C:\\AI\\training\\results\\resume-check-27b-long\\dryrun-27b\\adapter",
+ "trainable_params": 79691776,
+ "rows": 6,
+ "rows_dropped_too_long": 0,
+ "tokens": 48969,
+ "rows_prompt_not_prefix": 0,
+ "mask_stats": {
+  "rows": 6,
+  "kept": 6,
+  "dropped_too_long": 0,
+  "prompt_not_prefix": 0,
+  "tokens_total": 48969,
+  "tokens_trained": 45976,
+  "rows_without_trace": 0,
+  "trained_fraction": 0.9389
+ },
+ "sample_row": {
+  "tokens_total": 8188,
+  "tokens_trained": 7384,
+  "tokens_masked": 804,
+  "first_trained_position": 804,
+  "trained_span_contiguous": true,
+  "masked_text_tail": "t\n\n3\n1 1 1\n0 1 1\n1 0 0\n12\n3\n2 3\n3\n2 2\n2 2\n1 3\n3\n3\n1 2\n2 1\n1 1\n3\n\n\nOutput\n\n01001<|im_end|>\n<|im_start|>assistant\n<think>\n",
+  "first_trained_tokens": [
+   "Okay",
+   ",",
+   " let",
+   "'s",
+   " tackle",
+   " this",
+   " problem",
+   "."
+  ],
+  "unmasked_text": "Okay, let's tackle this problem. Hmm. So the problem is about calculating the unusual square of a matrix in GF(2), and handling a bunch of queries that flip rows or columns. Oh right, and we need to output the result for each type 3 query efficiently.\n\nFirst, let me understand what the unusual square is. The i-th term in the sum is the dot product of the i-th row and i-th column. Then all those terms are summed modulo 2. Wait, right, because it's GF(2), everything is mod 2.\n\nSo for each row i, we compute the dot product of row i and column i. Then add all those together mod 2.\n\nBut how do we compute this efficiently, especially with a lot of queries? Because if n is 1000 and q is 1e6, we can't compute the sum from scratch for each query. So we need a way to track the sum and update it quickly when rows or columns are flipped.\n\nWait, let's think about the initial sum. Let's denote S as the current unusual square. Each time a row or column is flipped, how does S change?\n\nLet's break it down. The sum S is the sum over i of (row_i \u00b7 column_i), mod 2. Let's look at each term (row_i \u00b7 column_i).\n\nNow, flipping a row k: every element in row k is toggled. So row_k's elements a_ki become 1 - a_ki. How does this affect each term in the sum S?\n\nThe term for i = k: the row is row_k (now flipped) and column k (unchanged). So the dot product is sum_{j} ( (1 - a_kj) * a_jk ), right? Because column k's elements are a_jk for each j. Wait, no. The column i is the i-th column. So for the i-th term in the sum, when we are at row i and column i. So row i is the i-th row, and column i is the column vector made from the i-th element of each row. Wait, no: the column i is the i-th column of the matrix. So for the dot product of row i and column i, the elements are a_i1 * a_1i, a_i2 * a_2i, ..., a_in * a_ni. Wait, no. Wait, row i is [a_i1, a_i2, ..., a_in]. Column i is [a_1i, a_2i, ..., a_ni]. So their dot product is sum_{j=1 to n} a_ij * a_ji. Because for each position j in the row, multiply by the j-th element of the column.\n\nWait, that's the key. So each term in the sum S is the sum over j of a_ij * a_ji. Then S is the sum over i and j of a_ij * a_ji, but only for j varying for each i. Wait, no, for each i, it's sum j from 1 to n of a_ij * a_ji. Then sum all those for i from 1 to n, mod 2.\n\nBut wait, the sum over all i and j of a_ij * a_ji, but note that when i != j, the terms a_ij * a_ji and a_ji * a_ij are the same. So for i != j, each pair is counted twice, but since we're working mod 2, adding them twice is the same as adding 0. So the entire sum S is equal to the number of elements a_ij where i = j (the diagonal elements) and a_ij * a_ji (but when i = j, a_ij is the diagonal element, so a_ij * a_ji is a_ii^2, which is a_ii since it's 0 or 1). So sum for i from 1 to n of a_ii. Then plus the sum of a_ij * a_ji for i < j multiplied by 2, but mod 2 that's 0. So S is equal to the sum of the diagonal elements mod 2.\n\nWait, that's a crucial insight. Because when you compute all the terms a_ij * a_ji for all i and j, any pair (i,j) where i \u2260 j will have their product a_ij * a_ji and a_ji * a_ij. But since multiplication is commutative, these are the same, so adding them gives 2*a_ij*a_ji. Which mod 2 is 0. So all those terms cancel out. The only terms left are when i = j, which is a_ii * a_ii = a_ii. So the sum S is equal to the sum of a_ii for all i, mod 2. So S is just the parity of the number of 1s on the main diagonal.\n\nWait, that's a huge simplification. So regardless of the matrix, the unusual square is equal to the sum of the diagonal elements mod 2. Because all the cross terms (i\u2260j) contribute 0 mod 2. So S is the parity of the main diagonal.\n\nSo the problem reduces to keeping track of the sum of the diagonal elements mod 2, and handling queries that can flip rows or columns, which may affect the diagonal.\n\nSo for example, if a query flips a row i: flipping row i will toggle all elements in row i. So for each element a_ik in row i, it's flipped. Now, the diagonal element a_ii is in row i and column i. So flipping row i will toggle a_ii. Similarly, flipping column i will toggle a_ii. So each flip of row i or column i will toggle a_ii. But also, other elements in the diagonal may be affected if other rows or columns are flipped. Wait, no. For example, flipping row k (k != i) will not affect a_ii. But flipping column j (j != i) will affect a_ij if i is the j-th column. Wait, no. Column j is all elements a_1j, a_2j, ..., a_nj. So flipping column j will flip all a_ij for i from 1 to n. So a_ij becomes 1 - a_ij. So if j is i, then a_ii is flipped. If j is not i, then a_ij is in row i, column j. So flipping column j would affect a_ij, but if j is not equal to i, then a_ij is not part of the diagonal. Wait, the diagonal elements are a_ii for each i. So flipping a column j (whether j is i or not) will flip a_ij for each row i. So, for example, flipping column j would flip a_1j (if i=1 and j=?), but the diagonal element a_11 is part of column 1, not column j unless j=1.\n\nSo, when a row i is flipped, it toggles a_ii (since the row i's column i element is a_ii). But also, flipping row i will toggle all elements in row i, which includes a_ij for all j, but for the diagonal, only a_ii is affected. Similarly, flipping column j will affect a_jj (the diagonal element) if j is the column being flipped. Wait, no. Flipping column j will toggle a_ij for all i. So for the diagonal elements, when you flip column i, you are toggling a_ii. Because for column i, the element a_ii is part of that column. So flipping column i will toggle a_ii. Similarly, flipping row i toggles a_ii.\n\nBut wait, when you flip row i, you toggle all elements in row i, which includes a_ii. So after flipping row i, a_ii becomes 1 - a_ii. Similarly, flipping column i toggles a_ii. So each flip on row i or column i toggles a_ii once. But since toggling twice returns to the original value, the net effect is that the sum S (the sum of all a_ii mod 2) will change by 1 if the flip is on row i or column i, and the number of such flips is odd. Wait, but each time you flip row i or column i, you toggle a_ii. So for each such flip, the sum S (which is sum a_ii mod 2) changes by 1 if and only if the flip was on a row or column that is the same as the index (like row i or column i). Because only then a_ii is being toggled.\n\nWait, but the flip on row i will affect a_ii. Similarly, a flip on column i will affect a_ii. So each time you perform a row i or column i flip, the sum S (which is sum a_ii mod 2) will increase by 1 if a_ii was 0 and now becomes 1, or decrease by 1 (mod 2) if it was 1 and becomes 0. But mod 2, adding 1 is the same as subtracting 1. So each such flip on row i or column i toggles the sum S.\n\nSo, the key insight is that S is the sum of the diagonal elements mod 2, and each flip of row i or column i toggles S. Because a_ii is part of the diagonal, and flipping row i or column i toggles a_ii once (so flipping either row or column once changes a_ii's value, which affects the sum by 1 mod 2). But if we flip row i and then column i, a_ii is toggled twice, which cancels out, so the sum S remains the same as original.\n\nSo the sum S can be maintained by tracking the number of times each row i or column j has been flipped. But since each flip toggles S only if it's a flip on the row i or column i.\n\nWait, no. Let's think again. When you flip row i: a_ii is toggled. So S changes by 1 mod 2. Similarly, flipping column i toggles a_ii again. So each flip of row i or column i will invert S (add 1 mod 2). However, if you flip the same row i twice, the two toggles cancel each other. So the sum S is equal to the initial sum (sum of a_ii mod 2) plus the number of times any row i or column i has been flipped (mod 2). Because each such flip (row i or column i) adds 1 mod 2 to S. So S = initial_sum + (number_of_flips) mod 2.\n\nBut wait, the initial_sum is the sum of a_ii mod 2. Then, each flip on row i or column i adds 1 mod 2 to the sum. Because each such flip toggles a_ii once, which changes the sum by 1. So the total sum is (initial_sum + flip_count) mod 2, where flip_count is the number of flips (row i or column i) that have been applied.\n\nSo the solution is:\n\n- Compute the initial sum S as the sum of a_ii mod 2.\n\n- For each query, if it's a flip on row i or column i, increment flip_count by 1 (mod 2). Because flipping row i or column i toggles S.\n\n- For a query of type 3, output S mod 2 (which is initial_sum + flip_count mod 2).\n\nWait, but how? Because each flip on row i or column i toggles S. So if the initial S is s, then after k flips on any rows or columns (where each flip is on a row i or column i), the current S is s + k mod 2.\n\nYes. Because each such flip contributes exactly +1 mod 2 to the sum. Because each flip is a row i or column i, which toggles a_ii once. So for each such flip, exactly one element in the diagonal is toggled, which changes the sum by 1. So the total sum is the initial sum plus the number of such flips mod 2.\n\nBut wait, what if a flip is on row i and then again on row i? Then the two flips cancel each other's effect on a_ii. So the sum would be s + 2 mod 2 = s. So the flip_count is the number of flips on row or column i's, but each such flip is counted once, regardless of which i. Because flipping row i once adds 1 to the flip_count, flipping it again adds another 1 (so total 2, which mod 2 is 0). So the flip_count is the number of flips on rows and columns that are their own index (like row 3 and column 3), and each such flip adds 1 to the count. Then the current sum is initial_sum + flip_count mod 2.\n\nSo the approach is:\n\n1. Compute the initial sum of the diagonal elements.\n\n2. For each query:\n\n   a. If it's a type 1 or 2 (flip row or column), check if the index is i. Then, if so, increment flip_count (mod 2) because each such flip toggles the sum S.\n\n   b. If it's type 3, output (initial_sum + flip_count) mod 2.\n\nWait, but for a type 1 i query, which flips row i. However, flipping row i toggles a_ii. Similarly, flipping column i toggles a_ii. So each such operation (whether flipping row i or column i) toggles a_ii once, thus contributing 1 to the sum.\n\nSo for example, if we have initial sum S. Then, flip row 3: flip_count becomes 1. So the current sum is S +1. Flip column 3: flip_count becomes 0 (since 1 +1=2 mod 2). So sum is S.\n\nThus, the total flip_count is the number of flips (mod 2) on any row i or column i.\n\nSo the steps are:\n\nCompute the initial sum S as the sum of a_ii mod 2.\n\nThen, for each query:\n\n- If it's type 1 i or type 2 i, check if the index is i. Because only flips on row i or column i affect a_ii.\n\nWait, no. Wait, if the query is type 1 i (flip row i), then the a_ii is in row i and column i. So flipping row i will toggle a_ii. So for a query type 1 i, the flip affects the sum S.\n\nSimilarly, a query type 2 i (flip column i) will toggle a_ii, so it affects the sum S.\n\nBut for a query type 1 j where j != i (for some other j), flipping row j will toggle a_jj. So any flip on row j (for any j) or column j (for any j) will affect the sum S.\n\nSo, in other words, for any flip on a row i, it affects a_ii (toggles it), which changes the sum S. Similarly, a flip on column j toggles a_jj, which changes the sum S. So each flip (whether it's row or column) on an index i (so for example, flip row 5 or column 5) will toggle a_ii, thus adding 1 to the sum S mod 2.\n\nTherefore, for each query of type 1 i or 2 i, we need to check if the i is the same as the row or column index. Because flipping row i affects a_ii, which is part of the sum. Similarly for column i.\n\nWait, but for example, flipping row 5, then the sum S is affected because a_55 is toggled. So each such flip (type 1 i or type 2 i) adds 1 to the flip_count. Then the sum is initial_sum + flip_count mod 2.\n\nSo the algorithm is:\n\nCompute initial_sum as sum of a_ii mod 2.\n\nInitialize flip_count = 0.\n\nFor each query:\n\n   if the query is type 1 i or type 2 i:\n\n      flip_count += 1\n\n      flip_count %= 2\n\n   elif query is type 3:\n\n      output (initial_sum + flip_count) % 2\n\nWait, that's it? Because every time you flip a row or column (any index), but only if the index is i, that is, the row or column is being flipped. Because flipping row i toggles a_ii, which is part of the sum. Similarly, flipping column j toggles a_jj. So each such flip (row i or column j, for any i and j) will toggle the sum by 1. So the total number of such flips mod 2 is added to the initial sum to get the current sum.\n\nBut wait, wait. Suppose the query is type 1 i (flip row i). Then, all elements in row i are flipped, including a_ii. So the sum changes by 1 (since a_ii was 0 or 1). Similarly, if the query is type 2 i (flip column i), then a_ii is flipped. So each such query contributes 1 to the flip_count. So the flip_count is the number of times any row or column has been flipped, and the current sum is initial_sum + flip_count mod 2.\n\nSo regardless of which row or column is flipped, each flip contributes 1 to the flip_count. But that's only if the flip is on a row or column of the same index. Wait, no. For example, if the query is type 1 3 (flip row 3), then a_33 is flipped. So flip_count increases by 1. If the query is type 2 5 (flip column 5), then a_55 is flipped. So flip_count increases by 1. So every flip on a row i or column i (any i) affects the sum. Because each such flip toggles a_ii. So for each such flip, the flip_count increases by 1 mod 2.\n\nBut wait, no. Because if you have a row i and column j, where i != j. For example, if you flip row 2, then a_22 is toggled. If you flip column 3, then a_33 is toggled. So each of these flips affects a different element in the diagonal, thus each contributes 1 to the flip_count. So every flip on any row or column (regardless of which) adds 1 to the flip_count. Because for each such flip, exactly one diagonal element is toggled, which changes the sum by 1.\n\nAh, now I see. So the problem is that for any row i, flipping it toggles a_ii. For any column i, flipping it toggles a_ii. Therefore, any flip on a row or column (regardless of which one) will toggle exactly one element in the diagonal, thus changing the sum S by 1. So the flip_count is simply the number of flips (type 1 or 2) that have been applied. Because each such flip toggles the sum S. Because each such flip affects exactly one element of the diagonal.\n\nSo the solution is even simpler than I thought. Because regardless of which row or column is flipped, each flip toggles the sum S. Because each flip is either a row i (toggle a_ii) or a column j (toggle a_jj), and each such flip adds 1 to the sum mod 2.\n\nSo the initial sum is sum of a_ii mod 2.\n\nEach time a row or column is flipped (any index), the flip_count increases by 1 (mod 2).\n\nThe answer to each type 3 query is (initial_sum + flip_count) mod 2.\n\nWait, that's a revelation. So regardless of which row or column is flipped, each flip contributes 1 to the flip_count. Because each flip (type 1 or 2) changes exactly one diagonal element, hence the sum S is the initial sum plus the number of flips (mod 2).\n\nSo for example, if the initial sum is 0. Then, if you flip row 2, sum becomes 0 +1 mod 2 =1. Then flip column 3, sum becomes 1 +1 mod 2 =0. Then flip row 5, sum becomes 0 +1 mod 2=1. So each flip adds 1 mod 2.\n\nSo the solution is to compute the initial sum of the diagonal, count the number of flip (row or column) operations, and for each type 3 query, output (initial_sum + number_of_flips) mod 2.\n\nBut wait, that's only true if each flip (row i or column j) affects exactly one element of the diagonal. Let's test this.\n\nSuppose n=3, and the matrix is:\n\n1 1 1\n\n0 1 1\n\n1 0 0\n\nThe diagonal elements are 1 (a_11), 1 (a_22), 0 (a_33). Sum is 1+1+0=2 mod 2 is 0.\n\nIn the example given, after the first query (type 3), output is 0.\n\nThen, the next query is 2 3 (flip column 3). The column 3 is [1,1,0]. Flipping it would make the column [0,0,1]. The diagonal elements are a_11=1, a_22=1, a_33=1 (since a_33 was 0, flipped to 1). So sum is 1+1+1=3 mod 2=1. So according to the formula, the initial sum is 0, flip_count is 1, so 0+1=1.\n\nWhich matches.\n\nSo yes, the formula works. So the approach is:\n\n1. Compute the initial sum of the diagonal.\n\n2. For all queries, for each type 1 or 2, increment flip_count (mod 2).\n\n3. For type 3 queries, output (initial_sum + flip_count) mod 2.\n\nSo the code can be written as follows.\n\nRead n.\n\nRead the matrix, compute the initial_sum as sum of a[i][i] for all i, mod 2.\n\nRead q.\n\nInitialize flip_count = 0.\n\nFor each query:\n\n   if it's type 3, append (initial_sum + flip_count) % 2 to the output.\n\n   else:\n\n      flip_count += 1\n\n      flip_count %= 2\n\nSo the code is straightforward.\n\nBut wait, the problem says that in the input, the queries are given as 1 i (flip row i), 2 i (flip column i), or 3.\n\nBut according to our conclusion, flipping any row or column (regardless of the index) will add 1 to flip_count. So even if the row is 1 and column is 2, each flip adds 1. Because flipping row i toggles a_ii, flipping column j toggles a_jj.\n\nSo regardless of the index, each type 1 or 2 query contributes 1 to flip_count.\n\nSo the code can ignore the index in type 1 and 2 queries, since every such query toggles exactly one diagonal element. So the index in the query doesn't matter for the sum S. Because each flip (row or column) toggles exactly one element in the diagonal (the one where the row and column index is the same as the flipped row or column).\n\nTherefore, the code can process all type 1 and 2 queries by incrementing the flip_count, and for type 3, output (initial_sum + flip_count) mod 2.\n\nThis is a brilliant insight. So even though the problem says \"flip the entire row i\" or \"flip the entire column j\", each such flip affects exactly one element of the diagonal (a_ii for row i, a_jj for column j), thus toggling the sum S. So the total number of such flips (mod 2) is the flip_count.\n\nTherefore, the code is very simple. The initial sum is computed once, then for each query, if it's type 1 or 2, flip_count is incremented mod 2. For type 3, output (sum + flip_count) mod 2.\n\nSo let's test this against the sample input.\n\nSample input:\n\n3\n\n1 1 1\n\n0 1 1\n\n1 0 0\n\nThe initial diagonal is 1 (a_11), 1 (a_22), 0 (a_33). Sum is 1+1+0=2 mod 2=0.\n\nThen the queries:\n\n12 queries:\n\nFirst query is 3: output 0.\n\nSecond query is 2 3: flip column 3. So flip_count becomes 1.\n\nThird query is 3: output 0+1=1 mod 2=1. But sample output is 0 for the first two outputs. Wait wait, the sample output is '01001'. Let me check the sample input and output again.\n\nWait, the sample input is:\n\nAfter the matrix, there are 12 queries:\n\nThe first query is 3: output 0.\n\nThen 2 3 (flip column3), 3.\n\nThen 2 2, 2 2, 1 3, 3, 3, 1 2, 2 1, 1 1, 3.\n\nSo let's track the flip_count:\n\nAfter the first query (type 3), output 0.\n\nSecond query is 2 3: flip_count becomes 1.\n\nThird query is 3: output 0+1=1 \u2192 '1'.\n\nBut in the sample output, the first two outputs are '0' and then after the first flip, the output is '0'. Wait, the sample output is given as '01001'.\n\nWait sample input:\n\nAfter the initial setup, the queries are:\n\n3 \u2192 output 0.\n\nThen 2 3 \u2192 flip column 3. flip_count becomes 1.\n\nThen 3 \u2192 output 0+1=1. So the output would be '01'.\n\nBut the sample output starts with '0', then after some steps, the next output is '0' again.\n\nHmm. Wait maybe I made a mistake.\n\nWait the sample output is given as \"01001\".\n\nLooking at the input:\n\nThe 12 queries are:\n\n3 \u2192 output 0.\n\n2 3 \u2192 flip_count =1.\n\n3 \u2192 output 0+1=1.\n\nThen:\n\n2 2 \u2192 flip_count =0.\n\n2 2 \u2192 flip_count=1.\n\n1 3 \u2192 flip_count=0.\n\n3 \u2192 output 0 +0=0.\n\n3 \u2192 output 0.\n\nThen 1 2 \u2192 flip_count=1.\n\n2 1 \u2192 flip_count=0.\n\n1 1 \u2192 flip_count=1.\n\n3 \u2192 output 0+1=1.\n\nSo the outputs are 0,1,0,0,1. So the output string is '01001'.\n\nSo according to the code, the first query is 3 \u2192 0. Then after 2 3, flip_count is 1. Then query 3 \u2192 0+1=1. So the output after second query is '0' followed by '1', which would make the first two outputs '01'.\n\nBut the sample output is '01001', which has 5 characters, implying five type 3 queries.\n\nLooking back at the input:\n\nLet me count the type 3 queries:\n\nThe input after the matrix is:\n\n12\n\n3 \u2192 type3 (1st)\n\n2 3 \u2192 type2\n\n3 \u2192 type3 (2nd)\n\n2 2 \u2192 type2\n\n2 2 \u2192 type2\n\n1 3 \u2192 type1\n\n3 \u2192 type3 (3rd)\n\n3 \u2192 type3 (4th)\n\n1 2 \u2192 type1\n\n2 1 \u2192 type2\n\n1 1 \u2192 type1\n\n3 \u2192 type3 (5th)\n\nSo there are 5 type3 queries. The outputs are 0,1,0,0,1 \u2192 which is '01001'.\n\nBut according to our code:\n\nThe initial sum is 0.\n\nflip_count starts at 0.\n\nProcessing each query:\n\n1. 3 \u2192 output (0 + 0) %2 \u2192 0.\n\n2. 2 3 \u2192 flip_count becomes 1.\n\n3. 3 \u2192 (0+1) \u21921.\n\n4. 2 2 \u2192 flip_count becomes 0.\n\n5. 2 2 \u2192 flip_count becomes1.\n\n6. 1 3 \u2192 flip_count becomes 0.\n\n7. 3 \u2192 (0+0) \u21920.\n\n8. 3 \u2192 (0+0) \u21920.\n\n9. 1 2 \u2192 flip_count becomes1.\n\n10. 2 1 \u2192 flip_count becomes0.\n\n11. 1 1 \u2192 flip_count becomes1.\n\n12. 3 \u2192 (0 +1) \u21921.\n\nSo the outputs are: 0, 1, 0, 0, 1. Which matches the sample.\n\nSo the code is correct.\n\nTherefore, the code can be written as follows:\n\nRead n.\n\nCompute initial_sum as sum of a_ii for i in 0..n-1, mod 2.\n\nRead q.\n\nInitialize flip_count =0.\n\nRead each query, and for each:\n\n   if it's type 3, append (initial_sum + flip_count) %2 to the result.\n\n   else (type 1 or 2), flip_count +=1, flip_count %=2.\n\nFinally, output the result as a string.\n\nSo the code in Python would be:\n\nRead n.\n\nThen read n lines, each with n integers.\n\nCompute initial_sum as sum of a[i][i] for each row i.\n\nThen read q.\n\nThen process q queries:\n\n   for each query, split into tokens.\n\n   if the first token is 3: add to the output.\n\n   else: increment flip_count.\n\nNow, in Python, to read input efficiently, especially with q up to 1e6, we need to read the input quickly.\n\nSo using sys.stdin to read all input at once.\n\nBut for the code, the steps are manageable.\n\nThe code would look like:\n\nimport sys\n\nn = int(sys.stdin.readline())\n\ninitial_sum = 0\n\nfor i in range(n):\n\n    row = list(map(int, sys.stdin.readline().split()))\n\n    initial_sum += row[i]\n\ninitial_sum %= 2\n\nq = int(sys.stdin.readline())\n\nflip_count = 0\n\noutput = []\n\nfor _ in range(q):\n\n    query = sys.stdin.readline().split()\n\n    if query[0] == '3':\n\n        output.append(str( (initial_sum + flip_count) % 2 ))\n\n    else:\n\n        flip_count = (flip_count +1) %2\n\nprint(''.join(output))\n\nBut wait, in the sample input, after the third query (type 3), which is the second type3, the output is 1. But according to the sample output, the first two characters are '0' and '1', but the sample output's first two outputs are '0' and '0'? Wait no, the sample output is '01001'.\n\nWait the sample input's queries:\n\nThe first query is type3 \u2192 output 0.\n\nSecond query is 2 3 \u2192 flip_count becomes 1.\n\nThird query is type3 \u2192 output 1.\n\nSo the first two outputs would be '0' and '1', but the sample output's first two characters are '0' and '0'? No, the sample output is '01001', which is 5 characters.\n\nLet me re-examine the sample input's query sequence.\n\nSample input's queries after the matrix:\n\n12\n\n3 \u2192 output 0.\n\n2 3 \u2192 flip_count 1.\n\n3 \u2192 output 1.\n\n2 2 \u2192 flip_count 0.\n\n2 2 \u2192 flip_count 1.\n\n1 3 \u2192 flip_count 0.\n\n3 \u2192 output 0+0=0.\n\n3 \u2192 output 0.\n\n1 2 \u2192 flip_count 1.\n\n2 1 \u2192 flip_count 0.\n\n1 1 \u2192 flip_count 1.\n\n3 \u2192 output 0+1=1.\n\nSo the outputs are 0,1,0,0,1 \u2192 '01001'.\n\nSo the code produces the correct outputs.\n\nThus, the code is correct.\n\nSo the code reads the matrix, computes the initial sum of the diagonal elements mod 2. Then for each query, tracks the number of flips (type 1 or 2) mod 2. For each type 3 query, appends the sum of initial_sum and flip_count mod 2 to the output.\n\nThus, this is the correct approach.\n</think>\n\n```python\nimport sys\n\nn = int(sys.stdin.readline())\ninitial_sum = 0\nfor i in range(n):\n    row = list(map(int, sys.stdin.readline().split()))\n    initial_sum += row[i]\ninitial_sum %= 2\n\nq = int(sys.stdin.readline())\nflip_count = 0\noutput = []\n\nfor _ in range(q):\n    parts = sys.stdin.readline().split()\n    if parts[0] == '3':\n        output.append(str((initial_sum + flip_count) % 2))\n    else:\n        flip_count = (flip_count + 1) % 2\n\nprint(''.join(output))\n```<|im_end|>\n"
+ },
+ "collated_check": {
+  "collator": "DataCollatorForLanguageModeling",
+  "row_found": true,
+  "labels_match_helper": true,
+  "batch_tokens": 8188,
+  "batch_trained": 7384
+ },
+ "losses": [
+  [
+   1,
+   0.5486299991607666
+  ],
+  [
+   2,
+   0.6185111999511719
+  ],
+  [
+   3,
+   0.5782881379127502
+  ]
+ ],
+ "cache_releases_this_session": 2,
+ "any_nan_loss": false,
+ "windows_peak": {
+  "ram_used_gib": 18.235,
+  "process_rss_gib": 10.046,
+  "gpu_total_used_gib": 36.119,
+  "gpu_training_gib": 36.364,
+  "gpu_training_dedicated_gib": 28.076,
+  "gpu_training_shared_gib": 8.288,
+  "portal_metrics": true
+ },
+ "peak_allocated_gib": 24.579,
+ "gdn_heads": {
+  "mode": "stock",
+  "requested": "stock",
+  "patched": false,
+  "pairing": "stock: value head j -> key head j // 3 (transformers' repeat_interleave, no patch; matches llama.cpp)",
+  "key_heads": null,
+  "ratio": null,
+  "head_dim": null,
+  "calls": 0
+ },
+ "short_conv": {
+  "mode": "shift",
+  "modules": [
+   "transformers.models.qwen3_5.modeling_qwen3_5",
+   "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe",
+   "unsloth_compiled_module_qwen3_5"
+  ],
+  "calls": 192
+ }
+}

@@ -1,0 +1,55 @@
+{
+ "steps": [
+  {
+   "step": 1,
+   "rows": [
+    6,
+    3
+   ],
+   "weights": "base (fresh adapter, B = 0)",
+   "logged_loss": 0.6151648759841919,
+   "unfused_loss": 0.6151647905788806,
+   "abs_diff": 8.540531126755013e-08,
+   "per_row": [
+    {
+     "row": 6,
+     "tokens": 6019,
+     "trained": 5234,
+     "loss": 0.5624945891645968
+    },
+    {
+     "row": 3,
+     "tokens": 2569,
+     "trained": 2355,
+     "loss": 0.7322245927879512
+    }
+   ]
+  },
+  {
+   "step": 3,
+   "rows": [
+    10,
+    15
+   ],
+   "weights": "adapter from C:/AI/training/results/resume-check-27b-memdebug/dryrun-27b\\checkpoints\\checkpoint-2",
+   "logged_loss": 0.5989859104156494,
+   "unfused_loss": 0.5989858819857427,
+   "abs_diff": 2.8429906762106327e-08,
+   "per_row": [
+    {
+     "row": 10,
+     "tokens": 6620,
+     "trained": 6096,
+     "loss": 0.552708342945169
+    },
+    {
+     "row": 15,
+     "tokens": 7087,
+     "trained": 7020,
+     "loss": 0.639172189391916
+    }
+   ]
+  }
+ ],
+ "result": "PASS"
+}

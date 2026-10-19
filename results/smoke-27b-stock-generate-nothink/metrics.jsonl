@@ -1,0 +1,2 @@
+{"step": 1, "prompt": "palindrome", "loops": false, "distinct_4gram_share": 0.984, "t": 1792366100.9653704}
+{"step": 2, "prompt": "sql", "loops": false, "distinct_4gram_share": 0.967, "t": 1792366122.2830367}

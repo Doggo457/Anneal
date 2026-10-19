@@ -1,0 +1,318 @@
+{
+ "container_sid": "S-1-15-2-138348897-3284411920-451308414-994790979-2321626205-9386469-1996511325",
+ "python": "C:\\AI\\training\\sandbox\\python\\python.exe",
+ "paths": {
+  "training_probe": "C:\\AI\\training\\sandbox_probe_secret.txt",
+  "profile": "C:\\Users\\ai sever",
+  "profile_probe": "C:\\Users\\ai sever\\anneal_sandbox_probe.txt",
+  "user_temp": "C:\\Users\\ai sever\\AppData\\Local\\Temp",
+  "memory": "C:\\Users\\ai sever\\…\\MEMORY.md"
+ },
+ "sequential": [
+  {
+   "name": "print_1_plus_1",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "stdout b'2\\r\\n' rc 0",
+   "pass": true,
+   "wall_s": 0.0347
+  },
+  {
+   "name": "memory_8gib",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "stdout 'MemoryError\\r\\n1GiB ok'; job peak 8.022 GiB; RAM available before/after 23.4/23.4 GiB; 0.1528 s",
+   "pass": true,
+   "wall_s": 0.1528
+  },
+  {
+   "name": "memory_5gib",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "MemoryError; job peak 5.02 GiB",
+   "pass": true,
+   "wall_s": 0.033
+  },
+  {
+   "name": "memory_3gib_allowed",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "3GiB ok",
+   "pass": true,
+   "wall_s": 0.3875
+  },
+  {
+   "name": "infinite_loop_timeout",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "timed_out True after 3.011 s, rc 124, sandbox python.exe left: []",
+   "pass": true,
+   "wall_s": 3.011
+  },
+  {
+   "name": "infinite_print_timeout",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "timed_out True after 3.0158 s, stdout kept 16,777,216 bytes (truncated True), sandbox python.exe left: []",
+   "pass": true,
+   "wall_s": 3.0158
+  },
+  {
+   "name": "environment_minimal",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "{\"LOCALAPPDATA\": \"C:\\\\Users\\\\ai sever\\\\AppData\\\\Local\\\\Packages\\\\anneal.codesandbox\\\\AC\", \"PATH\": \"C:\\\\AI\\\\training\\\\sandbox\\\\python;C:\\\\windows\\\\System32\", \"PYTHONDONTWRITEBYTECODE\": \"1\", \"PYTHONIOENCODING\": \"utf-8\", \"PYTHONNOUSERSITE\": \"1\", \"SYSTEMROOT\": \"C:\\\\windows\", \"TEMP\": \"C:\\\\Users\\\\ai sever\\\\AppData\\\\Local\\\\Packages\\\\anneal.codesandbox\\\\AC\\\\Temp\", \"TMP\": \"C:\\\\Users\\\\ai sever\\\\AppData\\\\Local\\\\Packages\\\\anneal.codesandbox\\\\AC\\\\Temp\"}",
+   "pass": true,
+   "wall_s": 0.0449
+  },
+  {
+   "name": "stdin_roundtrip",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "b'cba\\r\\n'",
+   "pass": true,
+   "wall_s": 0.033
+  },
+  {
+   "name": "read_training_file",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\AI\\\\training\\\\sandbox_probe_secret.txt'",
+   "pass": true,
+   "wall_s": 0.043,
+   "what": "read C:\\AI\\training\\sandbox_probe_secret.txt"
+  },
+  {
+   "name": "read_user_profile_file",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\Users\\\\ai sever\\\\anneal_sandbox_probe.txt'",
+   "pass": true,
+   "wall_s": 0.043,
+   "what": "read C:\\Users\\ai sever\\anneal_sandbox_probe.txt"
+  },
+  {
+   "name": "list_user_profile",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 5] Access is denied: 'C:\\\\Users\\\\ai sever'",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "list C:\\Users\\ai sever"
+  },
+  {
+   "name": "read_portal_file",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\AI\\\\portal\\\\server.py'",
+   "pass": true,
+   "wall_s": 0.045,
+   "what": "read C:\\AI\\portal\\server.py"
+  },
+  {
+   "name": "list_portal",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 5] Access is denied: 'C:\\\\AI\\\\portal'",
+   "pass": true,
+   "wall_s": 0.043,
+   "what": "list C:\\AI\\portal"
+  },
+  {
+   "name": "read_memory_notes",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\Users\\\\ai sever\\\\…\\\\MEMORY.md'",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "read C:\\Users\\ai sever\\…\\MEMORY.md"
+  },
+  {
+   "name": "write_training",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\AI\\\\training\\\\sandbox_write_probe.txt'",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "create C:\\AI\\training\\sandbox_write_probe.txt"
+  },
+  {
+   "name": "write_interpreter_tree",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\AI\\\\training\\\\sandbox\\\\python\\\\write_probe.txt'",
+   "pass": true,
+   "wall_s": 0.045,
+   "what": "create a file in the sandbox interpreter folder"
+  },
+  {
+   "name": "write_users_public",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\Users\\\\Public\\\\anneal_write_probe.txt'",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "create C:\\Users\\Public\\anneal_write_probe.txt"
+  },
+  {
+   "name": "write_user_temp",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\Users\\\\ai sever\\\\AppData\\\\Local\\\\Temp\\\\anneal_write_probe.txt'",
+   "pass": true,
+   "wall_s": 0.045,
+   "what": "create a file in C:\\Users\\ai sever\\AppData\\Local\\Temp"
+  },
+  {
+   "name": "write_container_folder",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [Errno 13] Permission denied: 'C:\\\\Users\\\\ai sever\\\\AppData\\\\Local\\\\Packages\\\\anneal.codesandbox\\\\AC\\\\probe.txt'",
+   "pass": true,
+   "wall_s": 0.043,
+   "what": "create a file in the container's own %LOCALAPPDATA% (AC) folder"
+  },
+  {
+   "name": "write_hkcu",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 5] Access is denied",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "create HKCU\\Software\\AnnealSandboxProbe and set a value"
+  },
+  {
+   "name": "write_hkcu_environment",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 5] Access is denied",
+   "pass": true,
+   "wall_s": 0.045,
+   "what": "set a value in HKCU\\Environment"
+  },
+  {
+   "name": "tcp_loopback_8080",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "TimeoutError: timed out",
+   "pass": true,
+   "wall_s": 5.059,
+   "what": "TCP connect 127.0.0.1:8080 (the portal)"
+  },
+  {
+   "name": "tcp_internet_443",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions",
+   "pass": true,
+   "wall_s": 0.051,
+   "what": "TCP connect 1.1.1.1:443"
+  },
+  {
+   "name": "dns_lookup",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "gaierror: [Errno 11001] getaddrinfo failed",
+   "pass": true,
+   "wall_s": 0.055,
+   "what": "getaddrinfo('python.org')"
+  },
+  {
+   "name": "dns_lookup_localhost",
+   "expect": "info",
+   "succeeded": true,
+   "detail": "[(<AddressFamily.AF_INET6: 23>, 0, 0, '', ('::1', 80, 0, 0))]",
+   "pass": true,
+   "wall_s": 0.052,
+   "what": "getaddrinfo('localhost') (resolved locally, no network)"
+  },
+  {
+   "name": "udp_send",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "TimeoutError: timed out",
+   "pass": true,
+   "wall_s": 3.054,
+   "what": "UDP datagram to 1.1.1.1:53"
+  },
+  {
+   "name": "spawn_cmd",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "OSError: [WinError 1816] Not enough quota is available to process this command",
+   "pass": true,
+   "wall_s": 0.051,
+   "what": "subprocess.run(['cmd.exe', '/c', 'echo hi'])"
+  },
+  {
+   "name": "spawn_python",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "OSError: [WinError 1816] Not enough quota is available to process this command",
+   "pass": true,
+   "wall_s": 0.051,
+   "what": "subprocess.run([sys.executable, '-c', 'print(1)'])"
+  },
+  {
+   "name": "os_system",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "AssertionError: -1",
+   "pass": true,
+   "wall_s": 0.046,
+   "what": "os.system('echo hi') returns 0"
+  },
+  {
+   "name": "kill_parent",
+   "expect": "deny",
+   "succeeded": false,
+   "detail": "PermissionError: [WinError 5] Access is denied",
+   "pass": true,
+   "wall_s": 0.044,
+   "what": "os.kill(<test process pid>, SIGTERM)"
+  },
+  {
+   "name": "read_windows_hosts",
+   "expect": "info",
+   "succeeded": true,
+   "detail": "803",
+   "pass": true,
+   "wall_s": 0.043,
+   "what": "read C:\\Windows\\System32\\drivers\\etc\\hosts (ALL APPLICATION PACKAGES)"
+  },
+  {
+   "name": "scratch_read_write",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "(['given.txt', 'tmp30hh86hy', 'w.txt'], True)",
+   "pass": true,
+   "wall_s": 0.067,
+   "what": "write, read back and list a file in the scratch folder (cwd)"
+  },
+  {
+   "name": "import_numpy_evalplus",
+   "expect": "allow",
+   "succeeded": true,
+   "detail": "'2.4.4'",
+   "pass": true,
+   "wall_s": 0.133,
+   "what": "import numpy and evalplus.eval in the sandbox interpreter"
+  }
+ ],
+ "sequential_seconds": 16.0,
+ "parallel_seconds": 19.3,
+ "parallel": {
+  "copies": 8,
+  "checks": 264,
+  "failures": [],
+  "sandbox_python_left": []
+ },
+ "overhead": {
+  "sequential_ms_mean": 30.8,
+  "sequential_ms_median": 30.6,
+  "sequential_ms_p95": 33.1,
+  "parallel8_ms_per_run": 5.8,
+  "import_numpy_evalplus_ms_mean": 129.9
+ },
+ "result": "PASS"
+}

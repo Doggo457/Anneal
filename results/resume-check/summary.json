@@ -1,0 +1,65 @@
+{
+ "tiny": {
+  "ok": true,
+  "checkpoints_after_pause": [
+   "README.md",
+   "checkpoint-3"
+  ],
+  "steps": [
+   {
+    "step": 1,
+    "loss_straight": 0.8910638093948364,
+    "loss_resumed": 0.8910638093948364,
+    "lr_straight": 0.0,
+    "lr_resumed": 0.0,
+    "rel_diff": 0.0
+   },
+   {
+    "step": 2,
+    "loss_straight": 0.8965281248092651,
+    "loss_resumed": 0.8965281248092651,
+    "lr_straight": 5e-05,
+    "lr_resumed": 5e-05,
+    "rel_diff": 0.0
+   },
+   {
+    "step": 3,
+    "loss_straight": 1.0798883438110352,
+    "loss_resumed": 1.0798883438110352,
+    "lr_straight": 0.0001,
+    "lr_resumed": 0.0001,
+    "rel_diff": 0.0
+   },
+   {
+    "step": 4,
+    "loss_straight": 0.8191567063331604,
+    "loss_resumed": 0.8191567063331604,
+    "lr_straight": 0.0001,
+    "lr_resumed": 0.0001,
+    "rel_diff": 0.0
+   },
+   {
+    "step": 5,
+    "loss_straight": 0.8032656908035278,
+    "loss_resumed": 0.8032656908035278,
+    "lr_straight": 7.500000000000001e-05,
+    "lr_resumed": 7.500000000000001e-05,
+    "rel_diff": 0.0
+   },
+   {
+    "step": 6,
+    "loss_straight": 0.8639665842056274,
+    "loss_resumed": 0.8639665842056274,
+    "lr_straight": 2.500000000000001e-05,
+    "lr_resumed": 2.500000000000001e-05,
+    "rel_diff": 0.0
+   }
+  ],
+  "states": [
+   "finished",
+   "paused",
+   "finished"
+  ]
+ },
+ "result": "ERROR [Errno 2] No such file or directory: 'C:\\\\AI\\\\training\\\\results\\\\resume-check\\\\dryrun-27b\\\\summary.json'"
+}

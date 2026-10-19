@@ -1,0 +1,8 @@
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": null, "t": 1792372736.0468326}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792372737.689936}
+{"step": 1, "seconds": 228.79, "peak_reserved_gib": 24.613, "peak_allocated_gib": 23.572, "tokens": 8588, "trained_tokens": 7589, "tokens_per_second": 37.5, "trained_tokens_per_second": 33.2, "loss": 0.6151648163795471, "grad_norm": 0.21890141069889069, "learning_rate": 0.0, "epoch": 0.125, "t": 1792372966.4913206}
+{"event": "failed", "error": "RuntimeError: Unsloth: No or negligible GPU memory available for fused cross entropy.", "t": 1792372972.5128374}
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": null, "t": 1792373026.7320483}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792373028.3790398}
+{"step": 1, "seconds": 130.561, "peak_reserved_gib": 24.725, "peak_allocated_gib": 23.571, "tokens": 8588, "trained_tokens": 7589, "tokens_per_second": 65.8, "trained_tokens_per_second": 58.1, "loss": 0.6151648163795471, "grad_norm": 0.21890141069889069, "learning_rate": 0.0, "epoch": 0.125, "t": 1792373158.9494257}
+{"event": "failed", "error": "RuntimeError: Unsloth: No or negligible GPU memory available for fused cross entropy.", "t": 1792373164.628041}

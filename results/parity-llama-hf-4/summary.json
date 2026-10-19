@@ -1,0 +1,112 @@
+{
+ "tokens_scored": 1023,
+ "text_tokens": 1111,
+ "n_probs": 1000,
+ "llama": {
+  "mean_loss": 0.5189,
+  "ppl": 1.68,
+  "missing_actual": 0,
+  "loss_by_quarter": [
+   1.1565,
+   0.0786,
+   0.4508,
+   0.3958
+  ],
+  "loss_second_half": 0.4217,
+  "tokenizer_same_ids": true,
+  "forced_tokens_match": true,
+  "score_seconds": 95.7,
+  "prefix_cross_check": 0.011935949325561523,
+  "eval_text_ppl": {
+   "running_ppl_per_chunk": [
+    14.0737,
+    17.5164,
+    8.3482,
+    5.5607
+   ],
+   "final_ppl": 5.5607,
+   "final_loss": 1.7157239996184173,
+   "seconds": 35.9,
+   "exit_code": 0
+  }
+ },
+ "hf": {
+  "tile": {
+   "mean_loss": 3.0400285720825195,
+   "top1_agreement": 0.45552298426628113,
+   "mean_kl": 2.3993611335754395,
+   "median_kl": 1.5800275802612305,
+   "p95_kl": 7.477769374847412,
+   "llama_topk_mass_mean": 0.9987075924873352,
+   "load_seconds": 33.3,
+   "forward_seconds": 24.5,
+   "ppl": 20.906,
+   "loss_by_quarter": [
+    4.4542,
+    1.4868,
+    3.4526,
+    2.781
+   ],
+   "loss_second_half": 3.1122,
+   "causal_check": null,
+   "mean_abs_loss_diff_vs_llama": 2.5525,
+   "loss_corr_vs_llama": 0.5114,
+   "gdn_patch_calls": 18528
+  },
+  "interleave": {
+   "mean_loss": 0.5151910185813904,
+   "top1_agreement": 0.9501466155052185,
+   "mean_kl": 0.019821399822831154,
+   "median_kl": 0.0007924247765913606,
+   "p95_kl": 0.09848254919052124,
+   "llama_topk_mass_mean": 0.9987075924873352,
+   "load_seconds": 33.2,
+   "forward_seconds": 11.2,
+   "ppl": 1.674,
+   "loss_by_quarter": [
+    1.17,
+    0.098,
+    0.4213,
+    0.3776
+   ],
+   "loss_second_half": 0.3979,
+   "causal_check": null,
+   "mean_abs_loss_diff_vs_llama": 0.0793,
+   "loss_corr_vs_llama": 0.981,
+   "gdn_patch_calls": 0
+  }
+ },
+ "greedy": [
+  {
+   "prompt": "code",
+   "prompt_text": "def merge_intervals(intervals):\n    \"\"\"Merge overlapping [start, end] intervals and return them sorted.\"\"\"\n",
+   "llama": "    if not intervals:\n        return []\n\n    # Sort intervals by their start time\n    intervals.sort(key=lambda x: x[0])\n\n    merged = [intervals[0]]\n    for current in intervals[1:]:\n        last = merged[-1]\n        # If the current",
+   "llama_tok_per_s": 12.817815705852698,
+   "tile": "    if not intervals:\n        return\n    intervals:\n        return\n    if not intervals:\n        return\n    if not intervals:\n        return\n    if not intervals:\n        return\n    if not intervals:\n        return\n    if not intervals:\n        return\n    if not",
+   "tile_first_divergence_from_llama": 8,
+   "interleave": "    if not intervals:\n        return []\n\n    # Sort by start time; if starts are equal, sort by end time.\n    intervals.sort(key=lambda x: (x[0], x[1]))\n\n    merged = [intervals[0]]\n    for start, end in intervals[1",
+   "interleave_first_divergence_from_llama": 13
+  },
+  {
+   "prompt": "prose",
+   "prompt_text": "The main difference between a process and a thread is",
+   "llama": " that a process is an independent program running in its own memory space, while a thread is a lightweight execution unit within a process that shares the process's memory and resources.\n\nIn the context of operating systems, a process is an instance of a program in execution. Each process has its own memory space, including its own",
+   "llama_tok_per_s": 12.81606084333342,
+   "tile": " a process and a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a thread is a",
+   "tile_first_divergence_from_llama": 0,
+   "interleave": " that a process is an independent program with its own memory space, while a thread is a lightweight execution unit within a process that shares the same memory space.\nA process is an instance of a program in execution, and it has its own memory space, file descriptors, and other resources. Each process runs in its own",
+   "interleave_first_divergence_from_llama": 7
+  },
+  {
+   "prompt": "chat",
+   "prompt_text": "<|im_start|>user\nWrite a bash one-liner that counts the lines in every .py file under the current directory.<|im_end|>\n<|im_start|>assistant\n",
+   "llama": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nOptions:\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 finds all .py files and runs wc -l on them. This gives",
+   "llama_tok_per_s": 12.80102733324122,
+   "tile": "<think>\nThe user wants a bash one-liner that counts the lines in every .py file under the current directory.\n\nThe user is asking for a bash one-liner that counts the lines in every .py file under the current directory.\n\nLet me think about what a \"bash one-liner\" \u2014 this",
+   "tile_first_divergence_from_llama": 12,
+   "interleave": "<think>\nThe user wants a bash one-liner that counts lines in every .py file under the current directory (recursively).\n\nLet me think about the options:\n\n1. `find . -name \"*.py\" -exec wc -l {} +` \u2014 This finds all .py files recursively and runs `",
+   "interleave_first_divergence_from_llama": 27
+  }
+ ],
+ "verdict": "llama.cpp is closer to transformers with --gdn-heads interleave (mean KL 0.0198 vs 2.3994, 121.0x)"
+}

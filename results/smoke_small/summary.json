@@ -1,0 +1,91 @@
+{
+  "versions": {
+    "python": "3.12.10",
+    "torch": "2.11.0+rocm7.14.0",
+    "torch.version.hip": "7.14.60850",
+    "triton-windows": "3.7.1.post27",
+    "unsloth": "2026.10.6",
+    "unsloth_zoo": "2026.10.6",
+    "transformers": "5.17.0",
+    "trl": "1.15.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2",
+    "accelerate": "1.15.0",
+    "datasets": "4.8.5",
+    "fla (vendored in unsloth_zoo)": "0.5.1"
+  },
+  "device": "AMD Radeon(TM) 8060S Graphics",
+  "arch": "gfx1151",
+  "mem_get_info_before_gib": {
+    "free": 43.41,
+    "total": 43.87
+  },
+  "bitsandbytes_native_lib": "C:\\AI\\training\\.venv\\Lib\\site-packages\\bitsandbytes\\libbitsandbytes_rocm714.dll",
+  "load_seconds": 11.7,
+  "fla": {
+    "is_flash_linear_attention_available": true,
+    "fla_unavailable_reason": null,
+    "qwen3_5 kernels resolve to": {
+      "torch_chunk_gated_delta_rule": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "torch_recurrent_gated_delta_rule": "transformers.models.qwen3_5.modeling_qwen3_5.torch_recurrent_gated_delta_rule",
+      "causal_conv1d_fn": "transformers.models.qwen3_5.modeling_qwen3_5.causal_conv1d_fn",
+      "causal_conv1d_update": "transformers.models.qwen3_5.modeling_qwen3_5.causal_conv1d_update"
+    }
+  },
+  "dataset": {
+    "name": "sahil2801/CodeAlpaca-20k",
+    "rows": 200,
+    "chats": 5,
+    "tokens_mean": 3827,
+    "tokens_max": 3878
+  },
+  "train": {
+    "steps": 30,
+    "first_loss": 0.910423755645752,
+    "last_loss": 0.7306133508682251,
+    "any_nan_loss": false,
+    "losses": [
+      0.910423755645752,
+      1.1256983280181885,
+      0.9188469648361206,
+      0.7933825254440308,
+      0.8796636462211609,
+      0.7913480997085571,
+      0.9561540484428406,
+      0.7118703722953796,
+      0.8066889047622681,
+      0.7388641834259033,
+      0.7255004644393921,
+      0.6978942155838013,
+      0.8618710041046143,
+      0.6379152536392212,
+      0.7392120361328125,
+      0.6137332320213318,
+      0.8113541603088379,
+      0.6397672295570374,
+      0.7022696137428284,
+      0.6384378671646118,
+      0.7701522707939148,
+      0.6226783990859985,
+      0.6058984398841858,
+      0.6658042669296265,
+      0.5566434860229492,
+      0.5533452033996582,
+      0.5870732069015503,
+      0.6478314399719238,
+      0.5923888683319092,
+      0.7306133508682251
+    ],
+    "first_step_seconds": 457.63,
+    "seconds_per_step_after_step_2": 5.835,
+    "tokens_per_second_after_step_2": 655.9,
+    "wall_seconds": 629.6,
+    "train_runtime_reported": 626.5323,
+    "peak_max_memory_reserved_gib": 3.53,
+    "peak_max_memory_allocated_gib": 1.96
+  },
+  "mem_get_info_after_gib": {
+    "free": 41.27,
+    "total": 43.87
+  }
+}

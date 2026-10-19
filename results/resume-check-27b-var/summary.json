@@ -1,0 +1,129 @@
+{
+ "dryrun-27b-var.yaml": {
+  "ok": true,
+  "warm_up": {
+   "row": 0,
+   "tokens": 7891,
+   "trained_tokens": 7639,
+   "loss": 0.63275,
+   "seconds": 126.8,
+   "hip_free_gib": 5.877,
+   "torch_reserved_gib": 21.42
+  },
+  "trainable_params": 79691776,
+  "collated_check": {
+   "collator": "DataCollatorForLanguageModeling",
+   "row_found": true,
+   "labels_match_helper": true,
+   "batch_tokens": 7891,
+   "batch_trained": 7639
+  },
+  "rows": 16,
+  "rows_dropped_too_long": 0,
+  "mask_stats": {
+   "rows": 16,
+   "kept": 16,
+   "dropped_too_long": 0,
+   "prompt_not_prefix": 0,
+   "tokens_total": 79055,
+   "tokens_trained": 71254,
+   "rows_without_trace": 0,
+   "trained_fraction": 0.9013
+  },
+  "sample_first_trained_tokens": [
+   "Okay",
+   ",",
+   " let",
+   "'s",
+   " tackle",
+   " this",
+   " problem",
+   "."
+  ],
+  "steps": {
+   "1": {
+    "loss": 0.6151648759841919,
+    "learning_rate": 0.0,
+    "seconds": 86.061,
+    "tokens": 8588,
+    "trained_tokens": 7589,
+    "tokens_per_second": 99.8,
+    "peak_reserved_gib": 25.066
+   },
+   "2": {
+    "loss": 0.6087740659713745,
+    "learning_rate": 0.0001,
+    "seconds": 145.328,
+    "tokens": 14192,
+    "trained_tokens": 12556,
+    "tokens_per_second": 97.7,
+    "peak_reserved_gib": 25.262
+   },
+   "3": {
+    "loss": 0.5989859104156494,
+    "learning_rate": 0.0001,
+    "seconds": 139.488,
+    "tokens": 13707,
+    "trained_tokens": 13116,
+    "tokens_per_second": 98.3,
+    "peak_reserved_gib": 25.324
+   },
+   "4": {
+    "loss": 0.5690906047821045,
+    "learning_rate": 0.0001,
+    "seconds": 52.439,
+    "tokens": 5349,
+    "trained_tokens": 4818,
+    "tokens_per_second": 102.0,
+    "peak_reserved_gib": 25.324
+   },
+   "5": {
+    "loss": 0.5106105208396912,
+    "learning_rate": 0.0001,
+    "seconds": 75.537,
+    "tokens": 7387,
+    "trained_tokens": 6542,
+    "tokens_per_second": 97.8,
+    "peak_reserved_gib": 25.324
+   },
+   "6": {
+    "loss": 0.5378358364105225,
+    "learning_rate": 0.0001,
+    "seconds": 139.248,
+    "tokens": 13626,
+    "trained_tokens": 12476,
+    "tokens_per_second": 97.9,
+    "peak_reserved_gib": 25.33
+   },
+   "7": {
+    "loss": 0.5451058149337769,
+    "learning_rate": 0.0001,
+    "seconds": 76.788,
+    "tokens": 7686,
+    "trained_tokens": 7171,
+    "tokens_per_second": 100.1,
+    "peak_reserved_gib": 25.33
+   },
+   "8": {
+    "loss": 0.6104323863983154,
+    "learning_rate": 5e-05,
+    "seconds": 84.071,
+    "tokens": 8520,
+    "trained_tokens": 6986,
+    "tokens_per_second": 101.3,
+    "peak_reserved_gib": 25.33
+   }
+  },
+  "peak_reserved_gib": 25.3,
+  "windows_peak": {
+   "ram_used_gib": 18.067,
+   "process_rss_gib": 10.041,
+   "gpu_total_used_gib": 37.964,
+   "gpu_training_gib": 38.209,
+   "gpu_training_dedicated_gib": 29.952,
+   "gpu_training_shared_gib": 8.256,
+   "portal_metrics": true
+  }
+ },
+ "result": "PASS"
+}

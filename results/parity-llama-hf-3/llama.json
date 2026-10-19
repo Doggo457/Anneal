@@ -1,0 +1,14 @@
+{
+ "gguf": "C:\\Users\\ai sever\\.ollama\\models\\blobs\\sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d",
+ "server": "C:\\AI\\training\\llama.cpp\\b11435-vulkan\\llama-server.exe",
+ "load_seconds": 6.6,
+ "n_ctx": 4096,
+ "llama_tokenizer_same_ids": true,
+ "score_seconds": 95.5,
+ "forced_tokens_match": true,
+ "score_timings": {
+  "prompt_n": 1,
+  "predicted_n": 1023,
+  "predicted_per_second": 11.342715853270008
+ },
+ "forced_logprob_vs_top_list_max_abs_diff": 

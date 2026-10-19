@@ -1,0 +1,1334 @@
+{
+  "args": {
+    "model": "unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "len": 2048,
+    "chunks": 4,
+    "plain": false,
+    "attn": "sdpa",
+    "gdn_heads": "stock",
+    "gate": "sigmoid",
+    "loss": "assistant",
+    "tag": "check_base_loss",
+    "run_dir": "C:\\AI\\training\\results\\baseloss-27b-stock-assistant",
+    "resume": false
+  },
+  "loader": "unsloth",
+  "load_seconds": 35.2,
+  "allocated_gib": 20.879,
+  "rope": {
+    "rope_theta": 10000000,
+    "head_dim": 256,
+    "partial_rotary_factor": 0.25,
+    "rotary_dim": 64,
+    "rope_type": "default",
+    "modules": [
+      {
+        "module": "model.visual.rotary_pos_emb",
+        "class": "Qwen3_5VisionRotaryEmbedding",
+        "shape": [
+          18
+        ],
+        "dtype": "torch.float32",
+        "finite": true,
+        "first": [
+          1.0,
+          0.5994842052459717,
+          0.35938137769699097
+        ]
+      },
+      {
+        "module": "model.language_model.rotary_emb",
+        "class": "Qwen3_5TextRotaryEmbedding",
+        "shape": [
+          32
+        ],
+        "dtype": "torch.float32",
+        "finite": true,
+        "max_rel_err": 7.165454113509894e-08,
+        "first": [
+          1.0,
+          0.6042963862419128,
+          0.36517414450645447
+        ]
+      }
+    ],
+    "expected_first": [
+      1.0,
+      0.6042963902381328,
+      0.36517412725483767
+    ]
+  },
+  "loss": "assistant (each row alone, labels -100 before the final assistant turn; anneal/data.py)",
+  "rows": [
+    {
+      "dataset_row": 10000,
+      "tokens": 132,
+      "trained": 54,
+      "nll_sum": 90.02239990234375,
+      "loss": 1.6670814752578735,
+      "answer_tokens": 50,
+      "answer_nll_sum": 73.73716735839844,
+      "loss_by_position": {
+        "think_close_3": [
+          16.25,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0352,
+        "final_newline": 0.0
+      },
+      "ppl": 5.296686705993317,
+      "answer_loss": 1.4747433471679687
+    },
+    {
+      "dataset_row": 10001,
+      "tokens": 89,
+      "trained": 19,
+      "nll_sum": 35.28746032714844,
+      "loss": 1.8572347164154053,
+      "answer_tokens": 15,
+      "answer_nll_sum": 20.031719207763672,
+      "loss_by_position": {
+        "think_close_3": [
+          15.25,
+          0.0008,
+          0.0001
+        ],
+        "im_end": 0.0049,
+        "final_newline": -0.0
+      },
+      "ppl": 6.405997855453738,
+      "answer_loss": 1.3354479471842449
+    },
+    {
+      "dataset_row": 10002,
+      "tokens": 89,
+      "trained": 19,
+      "nll_sum": 28.50605583190918,
+      "loss": 1.5003187656402588,
+      "answer_tokens": 15,
+      "answer_nll_sum": 12.505156517028809,
+      "loss_by_position": {
+        "think_close_3": [
+          16.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0009,
+        "final_newline": -0.0
+      },
+      "ppl": 4.483117906543857,
+      "answer_loss": 0.833677101135254
+    },
+    {
+      "dataset_row": 10003,
+      "tokens": 82,
+      "trained": 9,
+      "nll_sum": 29.24066925048828,
+      "loss": 3.2489633560180664,
+      "answer_tokens": 5,
+      "answer_nll_sum": 5.862697601318359,
+      "loss_by_position": {
+        "think_close_3": [
+          17.5,
+          0.0,
+          0.0001
+        ],
+        "im_end": 5.878,
+        "final_newline": 0.0
+      },
+      "ppl": 25.763618369284778,
+      "answer_loss": 1.172539520263672
+    },
+    {
+      "dataset_row": 10004,
+      "tokens": 85,
+      "trained": 16,
+      "nll_sum": 33.65449523925781,
+      "loss": 2.1034059524536133,
+      "answer_tokens": 12,
+      "answer_nll_sum": 17.27541160583496,
+      "loss_by_position": {
+        "think_close_3": [
+          16.375,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0041,
+        "final_newline": -0.0
+      },
+      "ppl": 8.194030918715619,
+      "answer_loss": 1.43961763381958
+    },
+    {
+      "dataset_row": 10005,
+      "tokens": 89,
+      "trained": 19,
+      "nll_sum": 42.60131072998047,
+      "loss": 2.2421741485595703,
+      "answer_tokens": 15,
+      "answer_nll_sum": 25.718399047851562,
+      "loss_by_position": {
+        "think_close_3": [
+          16.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0079,
+        "final_newline": 0.0
+      },
+      "ppl": 9.413776002000917,
+      "answer_loss": 1.7145599365234374
+    },
+    {
+      "dataset_row": 10006,
+      "tokens": 194,
+      "trained": 128,
+      "nll_sum": 149.51031494140625,
+      "loss": 1.1680493354797363,
+      "answer_tokens": 124,
+      "answer_nll_sum": 138.25985717773438,
+      "loss_by_position": {
+        "think_close_3": [
+          11.0,
+          0.0002,
+          0.0
+        ],
+        "im_end": 0.2502,
+        "final_newline": 0.0
+      },
+      "ppl": 3.215713737809384,
+      "answer_loss": 1.1149988482075353
+    },
+    {
+      "dataset_row": 10007,
+      "tokens": 86,
+      "trained": 27,
+      "nll_sum": 45.54343032836914,
+      "loss": 1.6867936849594116,
+      "answer_tokens": 23,
+      "answer_nll_sum": 27.75611686706543,
+      "loss_by_position": {
+        "think_close_3": [
+          16.25,
+          0.0,
+          0.0
+        ],
+        "im_end": 1.5373,
+        "final_newline": 0.0
+      },
+      "ppl": 5.402131970251695,
+      "answer_loss": 1.20678768987241
+    },
+    {
+      "dataset_row": 10008,
+      "tokens": 158,
+      "trained": 94,
+      "nll_sum": 90.76676940917969,
+      "loss": 0.9656038880348206,
+      "answer_tokens": 90,
+      "answer_nll_sum": 72.26356506347656,
+      "loss_by_position": {
+        "think_close_3": [
+          18.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0032,
+        "final_newline": -0.0
+      },
+      "ppl": 2.626373213035398,
+      "answer_loss": 0.8029285007052951
+    },
+    {
+      "dataset_row": 10009,
+      "tokens": 105,
+      "trained": 45,
+      "nll_sum": 48.95691680908203,
+      "loss": 1.087931513786316,
+      "answer_tokens": 41,
+      "answer_nll_sum": 32.421993255615234,
+      "loss_by_position": {
+        "think_close_3": [
+          14.625,
+          0.0,
+          0.0
+        ],
+        "im_end": 1.9099,
+        "final_newline": 0.0
+      },
+      "ppl": 2.9681281861802113,
+      "answer_loss": 0.7907803233076887
+    },
+    {
+      "dataset_row": 10010,
+      "tokens": 118,
+      "trained": 45,
+      "nll_sum": 69.17705535888672,
+      "loss": 1.5372679233551025,
+      "answer_tokens": 41,
+      "answer_nll_sum": 52.41147232055664,
+      "loss_by_position": {
+        "think_close_3": [
+          16.75,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0156,
+        "final_newline": 0.0
+      },
+      "ppl": 4.651863645824649,
+      "answer_loss": 1.2783285931843082
+    },
+    {
+      "dataset_row": 10011,
+      "tokens": 90,
+      "trained": 14,
+      "nll_sum": 31.980098724365234,
+      "loss": 2.2842929363250732,
+      "answer_tokens": 10,
+      "answer_nll_sum": 12.115813255310059,
+      "loss_by_position": {
+        "think_close_3": [
+          19.125,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.7393,
+        "final_newline": 0.0
+      },
+      "ppl": 9.818741293750431,
+      "answer_loss": 1.211581325531006
+    },
+    {
+      "dataset_row": 10012,
+      "tokens": 101,
+      "trained": 7,
+      "nll_sum": 25.52985191345215,
+      "loss": 3.6471219062805176,
+      "answer_tokens": 3,
+      "answer_nll_sum": 7.38363790512085,
+      "loss_by_position": {
+        "think_close_3": [
+          18.0,
+          0.0001,
+          0.0
+        ],
+        "im_end": 0.1461,
+        "final_newline": 0.0
+      },
+      "ppl": 38.36409155252712,
+      "answer_loss": 2.461212635040283
+    },
+    {
+      "dataset_row": 10013,
+      "tokens": 125,
+      "trained": 43,
+      "nll_sum": 48.93494415283203,
+      "loss": 1.1380219459533691,
+      "answer_tokens": 39,
+      "answer_nll_sum": 28.873931884765625,
+      "loss_by_position": {
+        "think_close_3": [
+          16.625,
+          0.0,
+          0.0
+        ],
+        "im_end": 3.436,
+        "final_newline": 0.0
+      },
+      "ppl": 3.1205895613871,
+      "answer_loss": 0.7403572278145032
+    },
+    {
+      "dataset_row": 10014,
+      "tokens": 107,
+      "trained": 34,
+      "nll_sum": 49.16407775878906,
+      "loss": 1.4460022449493408,
+      "answer_tokens": 30,
+      "answer_nll_sum": 30.207172393798828,
+      "loss_by_position": {
+        "think_close_3": [
+          18.375,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.5819,
+        "final_newline": -0.0
+      },
+      "ppl": 4.246105648877856,
+      "answer_loss": 1.006905746459961
+    },
+    {
+      "dataset_row": 10015,
+      "tokens": 80,
+      "trained": 16,
+      "nll_sum": 22.5101375579834,
+      "loss": 1.4068835973739624,
+      "answer_tokens": 12,
+      "answer_nll_sum": 6.1295905113220215,
+      "loss_by_position": {
+        "think_close_3": [
+          16.375,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.0055,
+        "final_newline": -0.0
+      },
+      "ppl": 4.083210627136684,
+      "answer_loss": 0.5107992092768351
+    },
+    {
+      "dataset_row": 10016,
+      "tokens": 262,
+      "trained": 190,
+      "nll_sum": 181.04135131835938,
+      "loss": 0.952849268913269,
+      "answer_tokens": 186,
+      "answer_nll_sum": 164.07859802246094,
+      "loss_by_position": {
+        "think_close_3": [
+          15.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 1.9627,
+        "final_newline": 0.0
+      },
+      "ppl": 2.593087547268924,
+      "answer_loss": 0.8821430001207577
+    },
+    {
+      "dataset_row": 10017,
+      "tokens": 93,
+      "trained": 28,
+      "nll_sum": 39.79236602783203,
+      "loss": 1.4211560487747192,
+      "answer_tokens": 24,
+      "answer_nll_sum": 20.783639907836914,
+      "loss_by_position": {
+        "think_close_3": [
+          19.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0087,
+        "final_newline": 0.0
+      },
+      "ppl": 4.141905918857589,
+      "answer_loss": 0.8659849961598715
+    },
+    {
+      "dataset_row": 10018,
+      "tokens": 150,
+      "trained": 56,
+      "nll_sum": 64.11668395996094,
+      "loss": 1.1449408531188965,
+      "answer_tokens": 52,
+      "answer_nll_sum": 45.34850311279297,
+      "loss_by_position": {
+        "think_close_3": [
+          18.75,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0182,
+        "final_newline": -0.0
+      },
+      "ppl": 3.142255496730436,
+      "answer_loss": 0.8720865983229417
+    },
+    {
+      "dataset_row": 10019,
+      "tokens": 107,
+      "trained": 33,
+      "nll_sum": 45.64743423461914,
+      "loss": 1.3832556009292603,
+      "answer_tokens": 29,
+      "answer_nll_sum": 28.497386932373047,
+      "loss_by_position": {
+        "think_close_3": [
+          17.125,
+          0.0,
+          0.0002
+        ],
+        "im_end": 0.025,
+        "final_newline": 0.0
+      },
+      "ppl": 3.987863408671937,
+      "answer_loss": 0.9826685149094154
+    },
+    {
+      "dataset_row": 10020,
+      "tokens": 143,
+      "trained": 79,
+      "nll_sum": 71.99686431884766,
+      "loss": 0.9113527536392212,
+      "answer_tokens": 75,
+      "answer_nll_sum": 54.78706359863281,
+      "loss_by_position": {
+        "think_close_3": [
+          17.125,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0848,
+        "final_newline": 0.0
+      },
+      "ppl": 2.487685483841753,
+      "answer_loss": 0.7304941813151041
+    },
+    {
+      "dataset_row": 10021,
+      "tokens": 106,
+      "trained": 47,
+      "nll_sum": 48.70749282836914,
+      "loss": 1.0363296270370483,
+      "answer_tokens": 43,
+      "answer_nll_sum": 34.426475524902344,
+      "loss_by_position": {
+        "think_close_3": [
+          14.25,
+          0.0,
+          0.0004
+        ],
+        "im_end": 0.031,
+        "final_newline": -0.0
+      },
+      "ppl": 2.8188517665148702,
+      "answer_loss": 0.8006157098814498
+    },
+    {
+      "dataset_row": 10022,
+      "tokens": 135,
+      "trained": 71,
+      "nll_sum": 46.58808898925781,
+      "loss": 0.6561702489852905,
+      "answer_tokens": 67,
+      "answer_nll_sum": 30.194862365722656,
+      "loss_by_position": {
+        "think_close_3": [
+          15.125,
+          0.0001,
+          0.0002
+        ],
+        "im_end": 1.2682,
+        "final_newline": -0.0
+      },
+      "ppl": 1.9273967321929037,
+      "answer_loss": 0.4506695875480993
+    },
+    {
+      "dataset_row": 10023,
+      "tokens": 134,
+      "trained": 72,
+      "nll_sum": 71.71733856201172,
+      "loss": 0.9960741400718689,
+      "answer_tokens": 68,
+      "answer_nll_sum": 56.39177322387695,
+      "loss_by_position": {
+        "think_close_3": [
+          15.25,
+          0.0002,
+          0.0002
+        ],
+        "im_end": 0.0753,
+        "final_newline": 0.0
+      },
+      "ppl": 2.7076311549608234,
+      "answer_loss": 0.8292907827040729
+    },
+    {
+      "dataset_row": 10024,
+      "tokens": 274,
+      "trained": 214,
+      "nll_sum": 151.1493682861328,
+      "loss": 0.7063054442405701,
+      "answer_tokens": 210,
+      "answer_nll_sum": 133.5030517578125,
+      "loss_by_position": {
+        "think_close_3": [
+          17.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.1463,
+        "final_newline": 0.0
+      },
+      "ppl": 2.0264904291758787,
+      "answer_loss": 0.6357288178943452
+    },
+    {
+      "dataset_row": 10025,
+      "tokens": 134,
+      "trained": 75,
+      "nll_sum": 125.23291015625,
+      "loss": 1.6697721481323242,
+      "answer_tokens": 71,
+      "answer_nll_sum": 108.34732818603516,
+      "loss_by_position": {
+        "think_close_3": [
+          15.75,
+          0.0,
+          0.0015
+        ],
+        "im_end": 1.1355,
+        "final_newline": 0.0001
+      },
+      "ppl": 5.310957547711209,
+      "answer_loss": 1.5260187068455655
+    },
+    {
+      "dataset_row": 10026,
+      "tokens": 174,
+      "trained": 23,
+      "nll_sum": 52.853275299072266,
+      "loss": 2.297968626022339,
+      "answer_tokens": 19,
+      "answer_nll_sum": 34.967613220214844,
+      "loss_by_position": {
+        "think_close_3": [
+          17.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0106,
+        "final_newline": 0.0
+      },
+      "ppl": 9.953941725333392,
+      "answer_loss": 1.8404006958007812
+    },
+    {
+      "dataset_row": 10027,
+      "tokens": 95,
+      "trained": 32,
+      "nll_sum": 44.07650375366211,
+      "loss": 1.377390742301941,
+      "answer_tokens": 28,
+      "answer_nll_sum": 29.323570251464844,
+      "loss_by_position": {
+        "think_close_3": [
+          14.75,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.0029,
+        "final_newline": -0.0
+      },
+      "ppl": 3.964543604076996,
+      "answer_loss": 1.0472703661237444
+    },
+    {
+      "dataset_row": 10028,
+      "tokens": 126,
+      "trained": 49,
+      "nll_sum": 56.53761672973633,
+      "loss": 1.1538288593292236,
+      "answer_tokens": 45,
+      "answer_nll_sum": 38.51213836669922,
+      "loss_by_position": {
+        "think_close_3": [
+          17.875,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.1505,
+        "final_newline": 0.0
+      },
+      "ppl": 3.170308365462242,
+      "answer_loss": 0.8558252970377604
+    },
+    {
+      "dataset_row": 10029,
+      "tokens": 155,
+      "trained": 93,
+      "nll_sum": 112.91238403320312,
+      "loss": 1.2141116857528687,
+      "answer_tokens": 89,
+      "answer_nll_sum": 98.52680969238281,
+      "loss_by_position": {
+        "think_close_3": [
+          14.375,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0106,
+        "final_newline": 0.0
+      },
+      "ppl": 3.3673015134468223,
+      "answer_loss": 1.107042805532391
+    },
+    {
+      "dataset_row": 10030,
+      "tokens": 134,
+      "trained": 57,
+      "nll_sum": 67.49114990234375,
+      "loss": 1.1840553283691406,
+      "answer_tokens": 53,
+      "answer_nll_sum": 48.956260681152344,
+      "loss_by_position": {
+        "think_close_3": [
+          18.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0349,
+        "final_newline": 0.0
+      },
+      "ppl": 3.2675985553406512,
+      "answer_loss": 0.9237030317198556
+    },
+    {
+      "dataset_row": 10031,
+      "tokens": 260,
+      "trained": 120,
+      "nll_sum": 106.33683776855469,
+      "loss": 0.8861403465270996,
+      "answer_tokens": 116,
+      "answer_nll_sum": 89.3220443725586,
+      "loss_by_position": {
+        "think_close_3": [
+          17.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0148,
+        "final_newline": -0.0
+      },
+      "ppl": 2.4257490093331877,
+      "answer_loss": 0.7700176239013672
+    },
+    {
+      "dataset_row": 10032,
+      "tokens": 233,
+      "trained": 156,
+      "nll_sum": 97.40377044677734,
+      "loss": 0.6243831515312195,
+      "answer_tokens": 152,
+      "answer_nll_sum": 80.89873504638672,
+      "loss_by_position": {
+        "think_close_3": [
+          16.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.005,
+        "final_newline": -0.0
+      },
+      "ppl": 1.8670938881366959,
+      "answer_loss": 0.5322285200420179
+    },
+    {
+      "dataset_row": 10033,
+      "tokens": 134,
+      "trained": 60,
+      "nll_sum": 77.06178283691406,
+      "loss": 1.2843631505966187,
+      "answer_tokens": 56,
+      "answer_nll_sum": 58.171058654785156,
+      "loss_by_position": {
+        "think_close_3": [
+          18.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0157,
+        "final_newline": 0.0
+      },
+      "ppl": 3.612366690943278,
+      "answer_loss": 1.038768904549735
+    },
+    {
+      "dataset_row": 10034,
+      "tokens": 160,
+      "trained": 89,
+      "nll_sum": 109.86418151855469,
+      "loss": 1.2344290018081665,
+      "answer_tokens": 85,
+      "answer_nll_sum": 94.98162078857422,
+      "loss_by_position": {
+        "think_close_3": [
+          14.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0076,
+        "final_newline": 0.0
+      },
+      "ppl": 3.4364157732029277,
+      "answer_loss": 1.1174308328067555
+    },
+    {
+      "dataset_row": 10035,
+      "tokens": 80,
+      "trained": 6,
+      "nll_sum": 30.066993713378906,
+      "loss": 5.011165618896484,
+      "answer_tokens": 2,
+      "answer_nll_sum": 9.751651763916016,
+      "loss_by_position": {
+        "think_close_3": [
+          19.375,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.9403,
+        "final_newline": 0.0
+      },
+      "ppl": 150.0795698170931,
+      "answer_loss": 4.875825881958008
+    },
+    {
+      "dataset_row": 10036,
+      "tokens": 147,
+      "trained": 78,
+      "nll_sum": 76.22322082519531,
+      "loss": 0.9772207736968994,
+      "answer_tokens": 74,
+      "answer_nll_sum": 59.82771682739258,
+      "loss_by_position": {
+        "think_close_3": [
+          16.375,
+          0.0001,
+          0.0
+        ],
+        "im_end": 0.0204,
+        "final_newline": -0.0
+      },
+      "ppl": 2.6570613957937064,
+      "answer_loss": 0.8084826598296294
+    },
+    {
+      "dataset_row": 10037,
+      "tokens": 143,
+      "trained": 39,
+      "nll_sum": 45.844566345214844,
+      "loss": 1.1755017042160034,
+      "answer_tokens": 35,
+      "answer_nll_sum": 27.267757415771484,
+      "loss_by_position": {
+        "think_close_3": [
+          18.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0768,
+        "final_newline": 0.0
+      },
+      "ppl": 3.2397679414048857,
+      "answer_loss": 0.7790787833077567
+    },
+    {
+      "dataset_row": 10038,
+      "tokens": 84,
+      "trained": 15,
+      "nll_sum": 25.25265121459961,
+      "loss": 1.683510184288025,
+      "answer_tokens": 11,
+      "answer_nll_sum": 7.62512731552124,
+      "loss_by_position": {
+        "think_close_3": [
+          17.625,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.0025,
+        "final_newline": -0.0
+      },
+      "ppl": 5.384423155663196,
+      "answer_loss": 0.6931933923201128
+    },
+    {
+      "dataset_row": 10039,
+      "tokens": 222,
+      "trained": 145,
+      "nll_sum": 31.160879135131836,
+      "loss": 0.2149026095867157,
+      "answer_tokens": 141,
+      "answer_nll_sum": 15.09788990020752,
+      "loss_by_position": {
+        "think_close_3": [
+          16.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.063,
+        "final_newline": 0.0
+      },
+      "ppl": 1.2397411521832884,
+      "answer_loss": 0.10707723333480511
+    },
+    {
+      "dataset_row": 10040,
+      "tokens": 157,
+      "trained": 72,
+      "nll_sum": 54.739200592041016,
+      "loss": 0.7602666616439819,
+      "answer_tokens": 68,
+      "answer_nll_sum": 37.25056076049805,
+      "loss_by_position": {
+        "think_close_3": [
+          16.625,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.8636,
+        "final_newline": 0.0
+      },
+      "ppl": 2.138846492780557,
+      "answer_loss": 0.5478023641249713
+    },
+    {
+      "dataset_row": 10041,
+      "tokens": 121,
+      "trained": 24,
+      "nll_sum": 39.97682189941406,
+      "loss": 1.665700912475586,
+      "answer_tokens": 20,
+      "answer_nll_sum": 22.59583282470703,
+      "loss_by_position": {
+        "think_close_3": [
+          17.375,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.006,
+        "final_newline": 0.0
+      },
+      "ppl": 5.289379342755072,
+      "answer_loss": 1.1297916412353515
+    },
+    {
+      "dataset_row": 10042,
+      "tokens": 141,
+      "trained": 33,
+      "nll_sum": 21.432796478271484,
+      "loss": 0.6494786739349365,
+      "answer_tokens": 29,
+      "answer_nll_sum": 4.932491302490234,
+      "loss_by_position": {
+        "think_close_3": [
+          16.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0003,
+        "final_newline": -0.0
+      },
+      "ppl": 1.9145424679094822,
+      "answer_loss": 0.17008590698242188
+    },
+    {
+      "dataset_row": 10043,
+      "tokens": 187,
+      "trained": 96,
+      "nll_sum": 99.31578063964844,
+      "loss": 1.0345394611358643,
+      "answer_tokens": 92,
+      "answer_nll_sum": 78.49911499023438,
+      "loss_by_position": {
+        "think_close_3": [
+          20.5,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.3166,
+        "final_newline": -0.0
+      },
+      "ppl": 2.8138100682865144,
+      "answer_loss": 0.8532512498938519
+    },
+    {
+      "dataset_row": 10044,
+      "tokens": 196,
+      "trained": 92,
+      "nll_sum": 98.76878356933594,
+      "loss": 1.0735737085342407,
+      "answer_tokens": 88,
+      "answer_nll_sum": 80.03929901123047,
+      "loss_by_position": {
+        "think_close_3": [
+          18.125,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.6045,
+        "final_newline": -0.0
+      },
+      "ppl": 2.9258168555015764,
+      "answer_loss": 0.9095374887639825
+    },
+    {
+      "dataset_row": 10045,
+      "tokens": 179,
+      "trained": 99,
+      "nll_sum": 93.00209045410156,
+      "loss": 0.9394150376319885,
+      "answer_tokens": 95,
+      "answer_nll_sum": 72.7923355102539,
+      "loss_by_position": {
+        "think_close_3": [
+          19.125,
+          0.0,
+          0.0
+        ],
+        "im_end": 1.0848,
+        "final_newline": 0.0
+      },
+      "ppl": 2.5584843634398156,
+      "answer_loss": 0.7662351106342516
+    },
+    {
+      "dataset_row": 10046,
+      "tokens": 191,
+      "trained": 90,
+      "nll_sum": 104.8906478881836,
+      "loss": 1.1654516458511353,
+      "answer_tokens": 86,
+      "answer_nll_sum": 86.33132934570312,
+      "loss_by_position": {
+        "think_close_3": [
+          18.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.5593,
+        "final_newline": -0.0
+      },
+      "ppl": 3.2073711519997508,
+      "answer_loss": 1.0038526668105014
+    },
+    {
+      "dataset_row": 10047,
+      "tokens": 91,
+      "trained": 18,
+      "nll_sum": 25.388275146484375,
+      "loss": 1.4104597568511963,
+      "answer_tokens": 14,
+      "answer_nll_sum": 9.38785457611084,
+      "loss_by_position": {
+        "think_close_3": [
+          16.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0004,
+        "final_newline": -0.0
+      },
+      "ppl": 4.097838980590819,
+      "answer_loss": 0.6705610411507743
+    },
+    {
+      "dataset_row": 10048,
+      "tokens": 120,
+      "trained": 49,
+      "nll_sum": 61.80032730102539,
+      "loss": 1.2612311840057373,
+      "answer_tokens": 45,
+      "answer_nll_sum": 45.92112731933594,
+      "loss_by_position": {
+        "think_close_3": [
+          15.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0042,
+        "final_newline": -0.0
+      },
+      "ppl": 3.529764602952719,
+      "answer_loss": 1.020469495985243
+    },
+    {
+      "dataset_row": 10049,
+      "tokens": 101,
+      "trained": 21,
+      "nll_sum": 26.40357780456543,
+      "loss": 1.2573132514953613,
+      "answer_tokens": 17,
+      "answer_nll_sum": 10.014824867248535,
+      "loss_by_position": {
+        "think_close_3": [
+          16.375,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.0137,
+        "final_newline": -0.0
+      },
+      "ppl": 3.5159622794026064,
+      "answer_loss": 0.5891073451322668
+    },
+    {
+      "dataset_row": 10050,
+      "tokens": 87,
+      "trained": 21,
+      "nll_sum": 28.45805549621582,
+      "loss": 1.3551455736160278,
+      "answer_tokens": 17,
+      "answer_nll_sum": 12.09160327911377,
+      "loss_by_position": {
+        "think_close_3": [
+          16.25,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.1165,
+        "final_newline": -0.0
+      },
+      "ppl": 3.8773253518236395,
+      "answer_loss": 0.7112707811243394
+    },
+    {
+      "dataset_row": 10051,
+      "tokens": 132,
+      "trained": 69,
+      "nll_sum": 48.095035552978516,
+      "loss": 0.6970295310020447,
+      "answer_tokens": 65,
+      "answer_nll_sum": 32.336181640625,
+      "loss_by_position": {
+        "think_close_3": [
+          15.75,
+          0.0048,
+          0.0
+        ],
+        "im_end": 0.004,
+        "final_newline": -0.0
+      },
+      "ppl": 2.007779793053864,
+      "answer_loss": 0.4974797175480769
+    },
+    {
+      "dataset_row": 10052,
+      "tokens": 101,
+      "trained": 28,
+      "nll_sum": 36.330204010009766,
+      "loss": 1.2975072860717773,
+      "answer_tokens": 24,
+      "answer_nll_sum": 18.073888778686523,
+      "loss_by_position": {
+        "think_close_3": [
+          18.25,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0063,
+        "final_newline": 0.0
+      },
+      "ppl": 3.6601615510554164,
+      "answer_loss": 0.7530786991119385
+    },
+    {
+      "dataset_row": 10053,
+      "tokens": 131,
+      "trained": 60,
+      "nll_sum": 55.80668640136719,
+      "loss": 0.9301114678382874,
+      "answer_tokens": 56,
+      "answer_nll_sum": 40.337852478027344,
+      "loss_by_position": {
+        "think_close_3": [
+          15.375,
+          0.0879,
+          0.0
+        ],
+        "im_end": 0.0059,
+        "final_newline": -0.0
+      },
+      "ppl": 2.5347917096233266,
+      "answer_loss": 0.7203187942504883
+    },
+    {
+      "dataset_row": 10054,
+      "tokens": 97,
+      "trained": 29,
+      "nll_sum": 43.90211486816406,
+      "loss": 1.5138660669326782,
+      "answer_tokens": 25,
+      "answer_nll_sum": 26.891189575195312,
+      "loss_by_position": {
+        "think_close_3": [
+          17.0,
+          0.0,
+          0.0001
+        ],
+        "im_end": 0.0109,
+        "final_newline": 0.0
+      },
+      "ppl": 4.544265311519934,
+      "answer_loss": 1.0756475830078125
+    },
+    {
+      "dataset_row": 10055,
+      "tokens": 112,
+      "trained": 46,
+      "nll_sum": 57.8942756652832,
+      "loss": 1.2585712671279907,
+      "answer_tokens": 42,
+      "answer_nll_sum": 43.11069107055664,
+      "loss_by_position": {
+        "think_close_3": [
+          14.75,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0336,
+        "final_newline": 0.0
+      },
+      "ppl": 3.5203881982676846,
+      "answer_loss": 1.0264450254894437
+    },
+    {
+      "dataset_row": 10056,
+      "tokens": 129,
+      "trained": 66,
+      "nll_sum": 53.59646987915039,
+      "loss": 0.8120677471160889,
+      "answer_tokens": 62,
+      "answer_nll_sum": 35.50897979736328,
+      "loss_by_position": {
+        "think_close_3": [
+          18.0,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0875,
+        "final_newline": 0.0
+      },
+      "ppl": 2.2525609008002103,
+      "answer_loss": 0.5727254806026336
+    },
+    {
+      "dataset_row": 10057,
+      "tokens": 167,
+      "trained": 91,
+      "nll_sum": 43.98915481567383,
+      "loss": 0.48339730501174927,
+      "answer_tokens": 87,
+      "answer_nll_sum": 26.477079391479492,
+      "loss_by_position": {
+        "think_close_3": [
+          17.375,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.1371,
+        "final_newline": -0.0
+      },
+      "ppl": 1.6215740365368982,
+      "answer_loss": 0.30433424587907465
+    },
+    {
+      "dataset_row": 10058,
+      "tokens": 181,
+      "trained": 112,
+      "nll_sum": 82.37197875976562,
+      "loss": 0.7354641556739807,
+      "answer_tokens": 108,
+      "answer_nll_sum": 66.46966552734375,
+      "loss_by_position": {
+        "think_close_3": [
+          15.875,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0273,
+        "final_newline": 0.0
+      },
+      "ppl": 2.0864502054882257,
+      "answer_loss": 0.6154598659939237
+    },
+    {
+      "dataset_row": 10059,
+      "tokens": 76,
+      "trained": 13,
+      "nll_sum": 27.037893295288086,
+      "loss": 2.0798380374908447,
+      "answer_tokens": 9,
+      "answer_nll_sum": 11.84324836730957,
+      "loss_by_position": {
+        "think_close_3": [
+          15.125,
+          0.0004,
+          0.0004
+        ],
+        "im_end": 0.0693,
+        "final_newline": -0.0
+      },
+      "ppl": 8.003172595406902,
+      "answer_loss": 1.315916485256619
+    },
+    {
+      "dataset_row": 10060,
+      "tokens": 197,
+      "trained": 109,
+      "nll_sum": 82.79592895507812,
+      "loss": 0.7595956325531006,
+      "answer_tokens": 105,
+      "answer_nll_sum": 65.03439331054688,
+      "loss_by_position": {
+        "think_close_3": [
+          17.75,
+          0.0,
+          0.0
+        ],
+        "im_end": 0.0115,
+        "final_newline": -0.0
+      },
+      "ppl": 2.1374117459952235,
+      "answer_loss": 0.6193751743861607
+    }
+  ],
+  "rows_scored": 61,
+  "trained_tokens": 3654,
+  "mean_loss": 1.0417235358269017,
+  "ppl": 2.8340974758548523,
+  "mean_row_loss": 1.3659729454361025,
+  "mean_row_ppl": 7.132817758578749,
+  "answer_only": {
+    "tokens": 3410,
+    "mean_loss": 0.808938980242374,
+    "ppl": 2.2455241767476326
+  },
+  "mask_stats": {
+    "rows": 61,
+    "kept": 61,
+    "dropped_too_long": 0,
+    "prompt_not_prefix": 61,
+    "tokens_total": 8309,
+    "tokens_trained": 3654,
+    "trained_fraction": 0.4398
+  },
+  "sample_row": {
+    "tokens_total": 132,
+    "tokens_trained": 54,
+    "tokens_masked": 78,
+    "first_trained_position": 78,
+    "trained_span_contiguous": true,
+    "masked_text_tail": "art|>user\nGiven a data set, calculate the average using Python.\n\n[1, 2, 3, 4, 5]<|im_end|>\n<|im_start|>assistant\n<think>",
+    "first_trained_tokens": [
+      "\n\n",
+      "</think>",
+      "\n\n",
+      "nums",
+      " =",
+      " [",
+      "1",
+      ","
+    ],
+    "unmasked_text": "\n\n</think>\n\nnums = [1,2,3,4,5]\nsum = 0\n\nfor num in nums:\n  sum +=num\n\naverage =sum / len(nums)\n\nprint(average) // output is 3.0<|im_end|>\n"
+  },
+  "gdn_heads": {
+    "mode": "stock",
+    "requested": "stock",
+    "patched": false,
+    "pairing": "stock: value head j -> key head j // 3 (transformers' repeat_interleave, no patch; matches llama.cpp)",
+    "key_heads": null,
+    "ratio": null,
+    "head_dim": null,
+    "calls": 0
+  }
+}

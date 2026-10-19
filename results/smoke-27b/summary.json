@@ -1,0 +1,114 @@
+{
+  "args": {
+    "model": "unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "rows": 200,
+    "max_len": 4096,
+    "steps": 30,
+    "rank": 16,
+    "lr": 0.0002,
+    "gdn_heads": "auto",
+    "tag": "smoke_small",
+    "run_dir": "C:\\AI\\training\\results\\smoke-27b",
+    "resume": false
+  },
+  "versions": {
+    "python": "3.12.10",
+    "torch": "2.11.0+rocm7.14.0",
+    "torch.version.hip": "7.14.60850",
+    "triton-windows": "3.7.1.post27",
+    "unsloth": "2026.10.6",
+    "unsloth_zoo": "2026.10.6",
+    "transformers": "5.17.0",
+    "trl": "1.15.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2",
+    "accelerate": "1.15.0",
+    "datasets": "4.8.5",
+    "fla (vendored in unsloth_zoo)": "0.5.1"
+  },
+  "device": "AMD Radeon(TM) 8060S Graphics",
+  "arch": "gfx1151",
+  "mem_get_info_before_gib": {
+    "free": 43.411,
+    "total": 43.868
+  },
+  "bitsandbytes_native_lib": "C:\\AI\\training\\.venv\\Lib\\site-packages\\bitsandbytes\\libbitsandbytes_rocm714.dll",
+  "load_seconds": 30.5,
+  "after_load_allocated_gib": 20.879,
+  "lora_trainable_params": 79691776,
+  "fla": {
+    "is_flash_linear_attention_available": true,
+    "fla_unavailable_reason": null,
+    "qwen3_5 kernels resolve to": {
+      "torch_chunk_gated_delta_rule": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "torch_recurrent_gated_delta_rule": "transformers.models.qwen3_5.modeling_qwen3_5.torch_recurrent_gated_delta_rule",
+      "causal_conv1d_fn": "transformers.models.qwen3_5.modeling_qwen3_5.causal_conv1d_fn",
+      "causal_conv1d_update": "transformers.models.qwen3_5.modeling_qwen3_5.causal_conv1d_update"
+    }
+  },
+  "dataset": {
+    "name": "sahil2801/CodeAlpaca-20k",
+    "rows": 200,
+    "chats": 7,
+    "tokens_mean": 2822,
+    "tokens_max": 2938
+  },
+  "train": {
+    "steps": 30,
+    "first_loss": 1.6043962240219116,
+    "last_loss": 0.6725162267684937,
+    "any_nan_loss": false,
+    "losses": [
+      1.6043962240219116,
+      1.4955806732177734,
+      1.661506175994873,
+      1.6591376066207886,
+      1.6305698156356812,
+      1.1004390716552734,
+      0.9641605615615845,
+      0.9063475131988525,
+      0.8145142793655396,
+      0.813835859298706,
+      0.7641069293022156,
+      1.0071998834609985,
+      0.6749594211578369,
+      0.8683720231056213,
+      0.6286146640777588,
+      0.6690930128097534,
+      0.6993485689163208,
+      0.5754411220550537,
+      0.5971860885620117,
+      0.8415011763572693,
+      0.7355287075042725,
+      0.6330522298812866,
+      0.5585834383964539,
+      0.7933585047721863,
+      0.5837545394897461,
+      0.5195631980895996,
+      0.6853821277618408,
+      0.512488603591919,
+      0.5842586159706116,
+      0.6725162267684937
+    ],
+    "first_step_seconds": 182.22,
+    "seconds_per_step_after_step_2": 33.457,
+    "tokens_per_second_after_step_2": 84.4,
+    "wall_seconds": 1158.4,
+    "train_runtime_reported": 1156.2428,
+    "peak_max_memory_reserved_gib": 25.135,
+    "peak_max_memory_allocated_gib": 22.665,
+    "paused": false
+  },
+  "gdn_heads": {
+    "mode": "tile",
+    "key_heads": 16,
+    "ratio": 3,
+    "head_dim": 128,
+    "calls": 5760
+  },
+  "mem_get_info_after_gib": {
+    "free": 14.735,
+    "total": 43.868
+  }
+}

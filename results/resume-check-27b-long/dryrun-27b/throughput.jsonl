@@ -1,0 +1,1 @@
+{"step": 2, "tokens_seen": 32654, "tokens_per_s": 98.41, "loss": 0.6185111999511719, "grad_norm": 0.1360640674829483, "learning_rate": 0.0001, "epoch": 0.6666666666666666, "num_input_tokens_seen": 32654, "train_runtime": 380.2327, "train_tokens_per_second": 85.879}

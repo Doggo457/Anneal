@@ -1,0 +1,186 @@
+{
+  "args": {
+    "model": "Qwen/Qwen3.5-0.8B",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "max_len": 4096,
+    "steps": 3,
+    "rank": 16,
+    "gdn_heads": "stock",
+    "short_conv": "shift",
+    "loss": "assistant",
+    "tag": "measure_memory",
+    "run_dir": "C:\\AI\\training\\results\\mem-small-mask-check",
+    "resume": false
+  },
+  "torch": "2.11.0+rocm7.14.0",
+  "hip": "7.14.60850",
+  "device": "AMD Radeon(TM) 8060S Graphics",
+  "phases": {
+    "start": {
+      "allocated_gib": 0.062,
+      "reserved_gib": 0.064,
+      "peak_reserved_gib": 0.064,
+      "mem_get_info_free_gib": 43.411,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 0,
+        "process_rss_gib": 0,
+        "gpu_total_used_gib": 0,
+        "gpu_training_gib": 0,
+        "gpu_training_dedicated_gib": 0,
+        "gpu_training_shared_gib": 0
+      }
+    },
+    "after_load": {
+      "allocated_gib": 0.974,
+      "reserved_gib": 1.012,
+      "peak_reserved_gib": 1.012,
+      "mem_get_info_free_gib": 42.442,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 8.465,
+        "process_rss_gib": 1.259,
+        "gpu_total_used_gib": 2.083,
+        "gpu_training_gib": 2.334,
+        "gpu_training_dedicated_gib": 2.102,
+        "gpu_training_shared_gib": 0.232
+      }
+    },
+    "after_lora": {
+      "allocated_gib": 0.998,
+      "reserved_gib": 1.035,
+      "peak_reserved_gib": 1.035,
+      "mem_get_info_free_gib": 42.442,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 8.469,
+        "process_rss_gib": 1.265,
+        "gpu_total_used_gib": 2.083,
+        "gpu_training_gib": 2.334,
+        "gpu_training_dedicated_gib": 2.102,
+        "gpu_training_shared_gib": 0.232
+      }
+    },
+    "after_training": {
+      "allocated_gib": 1.016,
+      "reserved_gib": 1.07,
+      "peak_reserved_gib": 3.537,
+      "mem_get_info_free_gib": 41.896,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 9.097,
+        "process_rss_gib": 1.85,
+        "gpu_total_used_gib": 5.183,
+        "gpu_training_gib": 5.433,
+        "gpu_training_dedicated_gib": 4.969,
+        "gpu_training_shared_gib": 0.464
+      }
+    }
+  },
+  "load_seconds": 10.8,
+  "lora_trainable_params": 6389760,
+  "loss_mask": {
+    "loss": "assistant",
+    "stats": {
+      "rows": 3,
+      "kept": 3,
+      "dropped_too_long": 0,
+      "prompt_not_prefix": 0,
+      "tokens_total": 12136,
+      "tokens_trained": 240,
+      "trained_fraction": 0.0198
+    },
+    "row_tokens": [
+      3997,
+      4082,
+      4057
+    ],
+    "row_trained_tokens": [
+      87,
+      87,
+      66
+    ],
+    "sample_row": {
+      "tokens_total": 3997,
+      "tokens_trained": 87,
+      "tokens_masked": 3910,
+      "first_trained_position": 3910,
+      "trained_span_contiguous": true,
+      "masked_text_tail": "code that show the number of days in the given month.\n\nint month = 5<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "first_trained_tokens": [
+        "let",
+        " month",
+        " =",
+        " ",
+        "5",
+        "\n",
+        "let",
+        " days"
+      ],
+      "unmasked_text": "let month = 5\nlet daysEndingInth = [3, 0, 3, 2, 3, 2, 3, 3, 2, 3, 2, 3]\nlet daysInMonth = daysEndingInth[month - 1] \nprint(\"The number of days in the month of \\(month) is \\(daysInMonth).\")<|im_end|>\n"
+    },
+    "collated_check": {
+      "collator": "DataCollatorForLanguageModeling",
+      "labels_match_helper": true
+    }
+  },
+  "train_wall_seconds": 39.7,
+  "train": {
+    "steps": 3,
+    "step_seconds": [
+      32.47,
+      2.59,
+      2.64
+    ],
+    "step_tokens": [
+      4082,
+      3997,
+      4057
+    ],
+    "step_trained_tokens": [
+      87,
+      87,
+      66
+    ],
+    "losses": [
+      0.4242936074733734,
+      1.237825632095337,
+      0.1327076554298401
+    ],
+    "any_nan_loss": false,
+    "seconds_per_step_steady": 2.64,
+    "tokens_per_second_steady": 1533.8,
+    "exact_tokens_per_second_steady": 1538.2,
+    "exact_trained_tokens_per_second_steady": 25.0,
+    "peak_max_memory_reserved_gib": 3.537,
+    "peak_max_memory_allocated_gib": 1.995
+  },
+  "windows_peak": {
+    "ram_used_gib": 9.097,
+    "process_rss_gib": 1.85,
+    "gpu_total_used_gib": 5.183,
+    "gpu_training_gib": 5.433,
+    "gpu_training_dedicated_gib": 4.969,
+    "gpu_training_shared_gib": 0.464,
+    "portal_metrics": true
+  },
+  "gdn_heads": {
+    "mode": "n/a",
+    "requested": "stock",
+    "patched": false,
+    "pairing": "n/a: no grouped value heads in this model",
+    "key_heads": null,
+    "ratio": null,
+    "head_dim": null,
+    "calls": 0
+  },
+  "short_conv": {
+    "mode": "shift",
+    "modules": [
+      "transformers.models.qwen3_5.modeling_qwen3_5",
+      "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe",
+      "unsloth_compiled_module_qwen3_5"
+    ],
+    "calls": 108
+  }
+}

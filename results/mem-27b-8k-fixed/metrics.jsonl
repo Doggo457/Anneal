@@ -1,0 +1,11 @@
+{"event": "phase", "phase": "start", "allocated_gib": 0.062, "reserved_gib": 0.064, "peak_reserved_gib": 0.064, "mem_get_info_free_gib": 43.411, "mem_get_info_total_gib": 43.868, "t": 1792317713.6337397}
+{"event": "phase", "phase": "after_load", "allocated_gib": 20.879, "reserved_gib": 20.9, "peak_reserved_gib": 20.9, "mem_get_info_free_gib": 22.563, "mem_get_info_total_gib": 43.868, "t": 1792317743.348574}
+{"event": "phase", "phase": "after_lora", "allocated_gib": 21.186, "reserved_gib": 21.223, "peak_reserved_gib": 21.25, "mem_get_info_free_gib": 22.242, "mem_get_info_total_gib": 43.868, "t": 1792317747.5478232}
+{"event": "train_begin", "max_steps": 5, "step": 0, "t": 1792317751.0598118}
+{"step": 1, "seconds": 185.783, "peak_reserved_gib": 26.182, "peak_allocated_gib": 24.426, "tokens_per_second": 44.1, "loss": 1.1984212398529053, "grad_norm": 0.8271500468254089, "learning_rate": 0.0001, "epoch": 0.2, "t": 1792317936.8545804}
+{"step": 2, "seconds": 133.904, "peak_reserved_gib": 26.201, "peak_allocated_gib": 24.426, "tokens_per_second": 61.2, "loss": 1.6223242282867432, "grad_norm": 2.112488031387329, "learning_rate": 8e-05, "epoch": 0.4, "t": 1792318070.7645457}
+{"step": 3, "seconds": 134.567, "peak_reserved_gib": 26.201, "peak_allocated_gib": 24.426, "tokens_per_second": 60.9, "loss": 1.2584600448608398, "grad_norm": 1.3168985843658447, "learning_rate": 6e-05, "epoch": 0.6, "t": 1792318205.33836}
+{"step": 4, "seconds": 135.042, "peak_reserved_gib": 26.201, "peak_allocated_gib": 24.426, "tokens_per_second": 60.7, "loss": 1.061889410018921, "grad_norm": 0.6802088022232056, "learning_rate": 4e-05, "epoch": 0.8, "t": 1792318340.3879669}
+{"step": 5, "seconds": 134.038, "peak_reserved_gib": 26.201, "peak_allocated_gib": 24.426, "tokens_per_second": 61.1, "loss": 1.5161902904510498, "grad_norm": 1.6591135263442993, "learning_rate": 2e-05, "epoch": 1.0, "t": 1792318474.4307537}
+{"event": "train_end", "step": 5, "t": 1792318474.4317422}
+{"event": "phase", "phase": "after_training", "allocated_gib": 21.413, "reserved_gib": 21.518, "peak_reserved_gib": 26.201, "mem_get_info_free_gib": 5.736, "mem_get_info_total_gib": 43.868, "t": 1792318474.9425411}

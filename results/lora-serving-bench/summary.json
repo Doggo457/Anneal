@@ -1,0 +1,210 @@
+{
+ "lora": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+ "n_predict": 256,
+ "vk_coopmat": "off",
+ "speed": {
+  "nolora": {
+   "tok_per_s": 12.67,
+   "wall_s": 123.2,
+   "load_s": 9.6,
+   "acceptance": null,
+   "per_prompt_tok_per_s": {
+    "code-chat": 12.68,
+    "explain-chat": 12.61,
+    "refactor-chat": 12.61,
+    "bash-chat": 12.62,
+    "code-raw": 12.6,
+    "prose-raw": 12.62
+   },
+   "first_divergence_from_lora": {
+    "code-chat": 137,
+    "explain-chat": 167,
+    "refactor-chat": 86,
+    "bash-chat": 161,
+    "code-raw": 126,
+    "prose-raw": 7
+   },
+   "speedup_vs_lora_no_mtp": 1.036
+  },
+  "lora": {
+   "tok_per_s": 12.23,
+   "wall_s": 127.7,
+   "load_s": 6.6,
+   "acceptance": null,
+   "per_prompt_tok_per_s": {
+    "code-chat": 12.21,
+    "explain-chat": 12.17,
+    "refactor-chat": 12.17,
+    "bash-chat": 12.17,
+    "code-raw": 12.18,
+    "prose-raw": 12.18
+   },
+   "first_divergence_from_nolora": {
+    "code-chat": 137,
+    "explain-chat": 167,
+    "refactor-chat": 86,
+    "bash-chat": 161,
+    "code-raw": 126,
+    "prose-raw": 7
+   }
+  },
+  "lora-mtp": {
+   "tok_per_s": 22.64,
+   "wall_s": 70.0,
+   "load_s": 6.6,
+   "acceptance": {
+    "accepted": 1035,
+    "drafted": 1513,
+    "rate": 0.6841
+   },
+   "per_prompt_tok_per_s": {
+    "code-chat": 20.55,
+    "explain-chat": 20.16,
+    "refactor-chat": 24.86,
+    "bash-chat": 24.94,
+    "code-raw": 25.23,
+    "prose-raw": 20.9
+   },
+   "first_divergence_from_nolora": {
+    "code-chat": 137,
+    "explain-chat": 167,
+    "refactor-chat": 86,
+    "bash-chat": 161,
+    "code-raw": 126,
+    "prose-raw": 7
+   },
+   "first_divergence_from_lora": {
+    "code-chat": null,
+    "explain-chat": 192,
+    "refactor-chat": null,
+    "bash-chat": null,
+    "code-raw": null,
+    "prose-raw": null
+   },
+   "speedup_vs_lora_no_mtp": 1.851
+  },
+  "lora-mtp-md4": {
+   "tok_per_s": 24.25,
+   "wall_s": 65.5,
+   "load_s": 7.6,
+   "acceptance": {
+    "accepted": 1084,
+    "drafted": 1814,
+    "rate": 0.5976
+   },
+   "per_prompt_tok_per_s": {
+    "code-chat": 21.97,
+    "explain-chat": 20.66,
+    "refactor-chat": 27.74,
+    "bash-chat": 27.6,
+    "code-raw": 27.31,
+    "prose-raw": 21.95
+   },
+   "first_divergence_from_nolora": {
+    "code-chat": 137,
+    "explain-chat": 167,
+    "refactor-chat": 86,
+    "bash-chat": 161,
+    "code-raw": 126,
+    "prose-raw": 7
+   },
+   "first_divergence_from_lora": {
+    "code-chat": null,
+    "explain-chat": 192,
+    "refactor-chat": null,
+    "bash-chat": null,
+    "code-raw": null,
+    "prose-raw": null
+   },
+   "speedup_vs_lora_no_mtp": 1.983
+  }
+ },
+ "batch": {
+  "seq": {
+   "batch_wall_s": 232.2,
+   "generated_tokens": 2736,
+   "aggregate_tok_per_s": 11.78,
+   "mean_slot_tok_per_s": 12.15,
+   "load_s": 6.6,
+   "acceptance": null
+  },
+  "seq-mtp": {
+   "batch_wall_s": 134.0,
+   "generated_tokens": 2738,
+   "aggregate_tok_per_s": 20.44,
+   "mean_slot_tok_per_s": 22.16,
+   "load_s": 6.6,
+   "acceptance": {
+    "accepted": 1797,
+    "drafted": 2811,
+    "rate": 0.6393
+   },
+   "speedup_vs_seq": 1.733,
+   "first_divergence_from_seq": [
+    null,
+    null,
+    null,
+    null,
+    163,
+    null,
+    28,
+    30,
+    null,
+    28,
+    null,
+    null
+   ]
+  },
+  "np4": {
+   "batch_wall_s": 110.4,
+   "generated_tokens": 2728,
+   "aggregate_tok_per_s": 24.72,
+   "mean_slot_tok_per_s": 7.2,
+   "load_s": 6.6,
+   "acceptance": null,
+   "speedup_vs_seq": 2.103,
+   "first_divergence_from_seq": [
+    null,
+    null,
+    null,
+    null,
+    163,
+    28,
+    28,
+    30,
+    null,
+    28,
+    null,
+    218
+   ]
+  },
+  "np4-mtp": {
+   "batch_wall_s": 108.3,
+   "generated_tokens": 2738,
+   "aggregate_tok_per_s": 25.27,
+   "mean_slot_tok_per_s": 7.51,
+   "load_s": 7.6,
+   "acceptance": {
+    "accepted": 1824,
+    "drafted": 2730,
+    "rate": 0.6681
+   },
+   "speedup_vs_seq": 2.144,
+   "first_divergence_from_seq": [
+    null,
+    null,
+    null,
+    40,
+    58,
+    null,
+    28,
+    30,
+    null,
+    28,
+    null,
+    97
+   ]
+  }
+ },
+ "fastest_batch": "np4-mtp"
+}

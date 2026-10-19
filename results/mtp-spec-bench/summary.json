@@ -1,0 +1,219 @@
+{
+ "n_predict": 256,
+ "prompts": [
+  "code-chat",
+  "explain-chat",
+  "refactor-chat",
+  "bash-chat",
+  "code-raw",
+  "prose-raw"
+ ],
+ "configs": {
+  "base": {
+   "tok_per_s": 12.69,
+   "wall_s": 123.0,
+   "load_s": 10.7,
+   "per_prompt_tok_per_s": {
+    "code-chat": 12.71,
+    "explain-chat": 12.63,
+    "refactor-chat": 12.62,
+    "bash-chat": 12.62,
+    "code-raw": 12.63,
+    "prose-raw": 12.63
+   },
+   "acceptance": null,
+   "speedup_vs_base": 1.0,
+   "identical_to_base": {
+    "code-chat": true,
+    "explain-chat": true,
+    "refactor-chat": true,
+    "bash-chat": true,
+    "code-raw": true,
+    "prose-raw": true
+   },
+   "first_divergence_from_base": {
+    "code-chat": null,
+    "explain-chat": null,
+    "refactor-chat": null,
+    "bash-chat": null,
+    "code-raw": null,
+    "prose-raw": null
+   }
+  },
+  "mtp": {
+   "tok_per_s": 24.14,
+   "wall_s": 65.6,
+   "load_s": 7.6,
+   "per_prompt_tok_per_s": {
+    "code-chat": 21.95,
+    "explain-chat": 21.61,
+    "refactor-chat": 26.14,
+    "bash-chat": 27.26,
+    "code-raw": 26.81,
+    "prose-raw": 22.01
+   },
+   "acceptance": {
+    "accepted": 1025,
+    "drafted": 1536,
+    "rate": 0.6673
+   },
+   "speedup_vs_base": 1.902,
+   "identical_to_base": {
+    "code-chat": false,
+    "explain-chat": false,
+    "refactor-chat": false,
+    "bash-chat": false,
+    "code-raw": true,
+    "prose-raw": false
+   },
+   "first_divergence_from_base": {
+    "code-chat": 87,
+    "explain-chat": 152,
+    "refactor-chat": 86,
+    "bash-chat": 161,
+    "code-raw": null,
+    "prose-raw": 170
+   }
+  },
+  "mtp-n1": {
+   "tok_per_s": 19.7,
+   "wall_s": 80.0,
+   "load_s": 6.6,
+   "per_prompt_tok_per_s": {
+    "code-chat": 19.26,
+    "explain-chat": 18.47,
+    "refactor-chat": 20.07,
+    "bash-chat": 20.19,
+    "code-raw": 20.46,
+    "prose-raw": 19.42
+   },
+   "acceptance": {
+    "accepted": 714,
+    "drafted": 828,
+    "rate": 0.8623
+   },
+   "speedup_vs_base": 1.552,
+   "identical_to_base": {
+    "code-chat": false,
+    "explain-chat": false,
+    "refactor-chat": false,
+    "bash-chat": false,
+    "code-raw": false,
+    "prose-raw": false
+   },
+   "first_divergence_from_base": {
+    "code-chat": 87,
+    "explain-chat": 192,
+    "refactor-chat": 214,
+    "bash-chat": 161,
+    "code-raw": 126,
+    "prose-raw": 170
+   }
+  },
+  "mtp-n2": {
+   "tok_per_s": 23.53,
+   "wall_s": 67.2,
+   "load_s": 6.6,
+   "per_prompt_tok_per_s": {
+    "code-chat": 23.9,
+    "explain-chat": 20.5,
+    "refactor-chat": 23.96,
+    "bash-chat": 24.25,
+    "code-raw": 25.31,
+    "prose-raw": 23.32
+   },
+   "acceptance": {
+    "accepted": 948,
+    "drafted": 1184,
+    "rate": 0.8007
+   },
+   "speedup_vs_base": 1.854,
+   "identical_to_base": {
+    "code-chat": false,
+    "explain-chat": false,
+    "refactor-chat": false,
+    "bash-chat": false,
+    "code-raw": true,
+    "prose-raw": false
+   },
+   "first_divergence_from_base": {
+    "code-chat": 120,
+    "explain-chat": 152,
+    "refactor-chat": 238,
+    "bash-chat": 161,
+    "code-raw": null,
+    "prose-raw": 154
+   }
+  },
+  "mtp-n4": {
+   "tok_per_s": 25.41,
+   "wall_s": 62.4,
+   "load_s": 6.6,
+   "per_prompt_tok_per_s": {
+    "code-chat": 23.54,
+    "explain-chat": 21.53,
+    "refactor-chat": 27.34,
+    "bash-chat": 28.56,
+    "code-raw": 27.78,
+    "prose-raw": 24.69
+   },
+   "acceptance": {
+    "accepted": 1085,
+    "drafted": 1810,
+    "rate": 0.5994
+   },
+   "speedup_vs_base": 2.002,
+   "identical_to_base": {
+    "code-chat": false,
+    "explain-chat": false,
+    "refactor-chat": true,
+    "bash-chat": false,
+    "code-raw": true,
+    "prose-raw": false
+   },
+   "first_divergence_from_base": {
+    "code-chat": 87,
+    "explain-chat": 152,
+    "refactor-chat": null,
+    "bash-chat": 161,
+    "code-raw": null,
+    "prose-raw": 154
+   }
+  },
+  "builtin": {
+   "tok_per_s": 23.72,
+   "wall_s": 66.8,
+   "load_s": 6.6,
+   "per_prompt_tok_per_s": {
+    "code-chat": 22.65,
+    "explain-chat": 20.89,
+    "refactor-chat": 24.97,
+    "bash-chat": 26.02,
+    "code-raw": 27.0,
+    "prose-raw": 21.57
+   },
+   "acceptance": {
+    "accepted": 1036,
+    "drafted": 1508,
+    "rate": 0.687
+   },
+   "speedup_vs_base": 1.869,
+   "identical_to_base": {
+    "code-chat": false,
+    "explain-chat": false,
+    "refactor-chat": false,
+    "bash-chat": false,
+    "code-raw": false,
+    "prose-raw": false
+   },
+   "first_divergence_from_base": {
+    "code-chat": 87,
+    "explain-chat": 152,
+    "refactor-chat": 214,
+    "bash-chat": 161,
+    "code-raw": 83,
+    "prose-raw": 7
+   }
+  }
+ }
+}

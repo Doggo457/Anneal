@@ -1,0 +1,203 @@
+{
+  "args": {
+    "model": "Qwen/Qwen3.5-0.8B",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "rows": 200,
+    "max_len": 4096,
+    "steps": 5,
+    "rank": 16,
+    "lr": 0.0002,
+    "gdn_heads": "stock",
+    "short_conv": "shift",
+    "loss": "assistant",
+    "save_adapter": true,
+    "tag": "smoke_small",
+    "run_dir": "C:\\AI\\training\\results\\smoke-small-mask-check",
+    "resume": false
+  },
+  "versions": {
+    "python": "3.12.10",
+    "torch": "2.11.0+rocm7.14.0",
+    "torch.version.hip": "7.14.60850",
+    "triton-windows": "3.7.1.post27",
+    "unsloth": "2026.10.6",
+    "unsloth_zoo": "2026.10.6",
+    "transformers": "5.17.0",
+    "trl": "1.15.0",
+    "peft": "0.21.2",
+    "bitsandbytes": "0.50.2",
+    "accelerate": "1.15.0",
+    "datasets": "4.8.5",
+    "fla (vendored in unsloth_zoo)": "0.5.1"
+  },
+  "device": "AMD Radeon(TM) 8060S Graphics",
+  "arch": "gfx1151",
+  "mem_get_info_before_gib": {
+    "free": 43.411,
+    "total": 43.868
+  },
+  "bitsandbytes_native_lib": "C:\\AI\\training\\.venv\\Lib\\site-packages\\bitsandbytes\\libbitsandbytes_rocm714.dll",
+  "load_seconds": 11.6,
+  "after_load_allocated_gib": 0.974,
+  "lora_trainable_params": 6389760,
+  "fla": {
+    "is_flash_linear_attention_available": true,
+    "fla_unavailable_reason": null,
+    "qwen3_5 kernels resolve to": {
+      "torch_chunk_gated_delta_rule": "fla.ops.gated_delta_rule.chunk.chunk_gated_delta_rule",
+      "torch_recurrent_gated_delta_rule": "transformers.models.qwen3_5.modeling_qwen3_5.torch_recurrent_gated_delta_rule",
+      "causal_conv1d_fn": "anneal.short_conv.causal_conv1d_fn",
+      "causal_conv1d_update": "transformers.models.qwen3_5.modeling_qwen3_5.causal_conv1d_update"
+    }
+  },
+  "dataset": {
+    "name": "sahil2801/CodeAlpaca-20k",
+    "rows": 200,
+    "chats": 5,
+    "tokens_mean": 3827,
+    "tokens_min": 3793,
+    "tokens_max": 3878,
+    "row_tokens": [
+      3803,
+      3829,
+      3878,
+      3833,
+      3793
+    ],
+    "row_trained_tokens": [
+      230,
+      99,
+      125,
+      74,
+      133
+    ]
+  },
+  "loss_mask": {
+    "loss": "assistant",
+    "stats": {
+      "rows": 6,
+      "kept": 5,
+      "dropped_too_long": 0,
+      "prompt_not_prefix": 0,
+      "tokens_total": 19136,
+      "tokens_trained": 661,
+      "dropped_short_leftover": 1,
+      "trained_fraction": 0.0345
+    },
+    "sample_row": {
+      "tokens_total": 3803,
+      "tokens_trained": 230,
+      "tokens_masked": 3573,
+      "first_trained_position": 3573,
+      "trained_span_contiguous": true,
+      "masked_text_tail": "given array in descending order.\n\nint array[] = {6, 3, 8, 12, 9, 4};<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
+      "first_trained_tokens": [
+        "#include",
+        "<iostream",
+        ">",
+        "\n",
+        "using",
+        " namespace",
+        " std",
+        ";"
+      ],
+      "unmasked_text": "#include<iostream>\nusing namespace std;\n \nint main()\n{\n    int array[] = {6, 3, 8, 12, 9, 4};\n    int arraySize = sizeof(array)/sizeof(array[0]);\n \n    //ascending order sorting\n    for(int i = 0; i < arraySize; i++)\n    {\n        // find the position of smallest element\n        int small = i;\n        for(int j = i+1; j < arraySize; j++)\n        {\n            if(array[j] > array[small])\n                small = j;\n        }\n \n        // swap the position of smallest element\n        int temp = array[i];\n        array[i] = array[small];\n        array[small] = temp;\n    }\n \n    // print the sorted array\n    cout << \"Sorted array : \";\n    for(int i = 0; i < arraySize; i++)\n        cout << array[i] << \" \";\n \n    return 0;\n}<|im_end|>\n"
+    },
+    "collated_check": {
+      "collator": "DataCollatorForLanguageModeling",
+      "row_found": true,
+      "labels_match_helper": true,
+      "batch_tokens": 3803,
+      "batch_trained": 230
+    }
+  },
+  "train": {
+    "steps": 5,
+    "first_loss": 0.8112505674362183,
+    "last_loss": 0.4318717122077942,
+    "lowest_loss": 0.4318717122077942,
+    "lowest_loss_step": 5,
+    "any_nan_loss": false,
+    "losses": [
+      0.8112505674362183,
+      0.7039692997932434,
+      0.9841902256011963,
+      0.5486040711402893,
+      0.4318717122077942
+    ],
+    "step_seconds": [
+      34.08,
+      2.47,
+      2.47,
+      2.46,
+      2.53
+    ],
+    "step_tokens": [
+      3793,
+      3829,
+      3833,
+      3803,
+      3878
+    ],
+    "step_trained_tokens": [
+      133,
+      99,
+      74,
+      230,
+      125
+    ],
+    "first_step_seconds": 34.08,
+    "seconds_per_step_after_step_2": 2.486,
+    "tokens_per_second_after_step_2": 1539.4,
+    "exact_tokens_per_second_after_step_2": 1543.7,
+    "exact_trained_tokens_per_second_after_step_2": 57.5,
+    "wall_seconds": 46.0,
+    "train_runtime_reported": 44.0672,
+    "peak_max_memory_reserved_gib": 4.332,
+    "peak_max_memory_allocated_gib": 1.955,
+    "paused": false
+  },
+  "windows_peak": {
+    "ram_used_gib": 9.262,
+    "process_rss_gib": 2.001,
+    "gpu_total_used_gib": 7.018,
+    "gpu_training_gib": 7.269,
+    "gpu_training_dedicated_gib": 6.656,
+    "gpu_training_shared_gib": 0.613,
+    "portal_metrics": true
+  },
+  "gdn_heads": {
+    "mode": "n/a",
+    "requested": "stock",
+    "patched": false,
+    "pairing": "n/a: no grouped value heads in this model",
+    "key_heads": null,
+    "ratio": null,
+    "head_dim": null,
+    "calls": 0
+  },
+  "short_conv": {
+    "mode": "shift",
+    "modules": [
+      "transformers.models.qwen3_5.modeling_qwen3_5",
+      "transformers.models.qwen3_5_moe.modeling_qwen3_5_moe",
+      "unsloth_compiled_module_qwen3_5"
+    ],
+    "calls": 180
+  },
+  "adapter": {
+    "path": "C:\\AI\\training\\results\\smoke-small-mask-check\\adapter",
+    "files": {
+      "README.md": 5210,
+      "adapter_config.json": 1622,
+      "adapter_model.safetensors": 25587104,
+      "chat_template.jinja": 7908,
+      "tokenizer.json": 19989325,
+      "tokenizer_config.json": 7445
+    }
+  },
+  "mem_get_info_after_gib": {
+    "free": 41.521,
+    "total": 43.868
+  }
+}

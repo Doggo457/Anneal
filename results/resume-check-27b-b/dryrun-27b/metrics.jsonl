@@ -1,0 +1,10 @@
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": null, "t": 1792373872.8314133}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792373874.4783137}
+{"event": "mem", "step": 1, "hip_free_gib": 13.824, "hip_total_gib": 43.868, "reserved_gib": 21.494, "t": 1792374005.3554857}
+{"step": 1, "seconds": 130.871, "peak_reserved_gib": 24.197, "peak_allocated_gib": 23.571, "tokens": 8588, "trained_tokens": 7589, "tokens_per_second": 65.6, "trained_tokens_per_second": 58.0, "loss": 0.6151648163795471, "grad_norm": 0.21890141069889069, "learning_rate": 0.0, "epoch": 0.125, "t": 1792374005.3594856}
+{"event": "failed", "error": "RuntimeError: Unsloth: No or negligible GPU memory available for fused cross entropy.", "t": 1792374011.3065298}
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": null, "t": 1792374065.653909}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792374067.289441}
+{"event": "mem", "step": 1, "hip_free_gib": 13.824, "hip_total_gib": 43.868, "reserved_gib": 21.494, "t": 1792374198.2152483}
+{"step": 1, "seconds": 130.92, "peak_reserved_gib": 24.189, "peak_allocated_gib": 23.571, "tokens": 8588, "trained_tokens": 7589, "tokens_per_second": 65.6, "trained_tokens_per_second": 58.0, "loss": 0.6151648163795471, "grad_norm": 0.21890141069889069, "learning_rate": 0.0, "epoch": 0.125, "t": 1792374198.218758}
+{"event": "failed", "error": "RuntimeError: Unsloth: No or negligible GPU memory available for fused cross entropy.", "t": 1792374204.0327418}

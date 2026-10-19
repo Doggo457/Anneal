@@ -1,0 +1,111 @@
+{
+  "args": {
+    "model": "unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
+    "dataset": "sahil2801/CodeAlpaca-20k",
+    "max_len": 8192,
+    "steps": 5,
+    "rank": 16,
+    "tag": "measure_memory",
+    "run_dir": "C:\\AI\\training\\results\\mem-27b-8k-b",
+    "resume": false
+  },
+  "torch": "2.11.0+rocm7.14.0",
+  "hip": "7.14.60850",
+  "device": "AMD Radeon(TM) 8060S Graphics",
+  "phases": {
+    "start": {
+      "allocated_gib": 0.062,
+      "reserved_gib": 0.064,
+      "peak_reserved_gib": 0.064,
+      "mem_get_info_free_gib": 43.411,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 0,
+        "process_rss_gib": 0,
+        "gpu_total_used_gib": 0,
+        "gpu_training_gib": 0,
+        "gpu_training_dedicated_gib": 0,
+        "gpu_training_shared_gib": 0
+      }
+    },
+    "after_load": {
+      "allocated_gib": 20.879,
+      "reserved_gib": 20.9,
+      "peak_reserved_gib": 20.9,
+      "mem_get_info_free_gib": 22.563,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 14.214,
+        "process_rss_gib": 5.84,
+        "gpu_total_used_gib": 22.206,
+        "gpu_training_gib": 22.428,
+        "gpu_training_dedicated_gib": 22.207,
+        "gpu_training_shared_gib": 0.471
+      }
+    },
+    "after_lora": {
+      "allocated_gib": 21.186,
+      "reserved_gib": 21.225,
+      "peak_reserved_gib": 21.25,
+      "mem_get_info_free_gib": 22.242,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 14.214,
+        "process_rss_gib": 5.84,
+        "gpu_total_used_gib": 22.526,
+        "gpu_training_gib": 22.749,
+        "gpu_training_dedicated_gib": 22.527,
+        "gpu_training_shared_gib": 0.471
+      }
+    },
+    "after_training": {
+      "allocated_gib": 21.413,
+      "reserved_gib": 21.52,
+      "peak_reserved_gib": 25.848,
+      "mem_get_info_free_gib": 3.702,
+      "mem_get_info_total_gib": 43.868,
+      "windows_view": {
+        "ram_used_gib": 20.343,
+        "process_rss_gib": 11.709,
+        "gpu_total_used_gib": 38.619,
+        "gpu_training_gib": 38.88,
+        "gpu_training_dedicated_gib": 29.585,
+        "gpu_training_shared_gib": 9.296
+      }
+    }
+  },
+  "load_seconds": 35.3,
+  "lora_trainable_params": 79691776,
+  "train_wall_seconds": 944.5,
+  "train": {
+    "steps": 5,
+    "step_seconds": [
+      442.19,
+      124.48,
+      124.41,
+      125.25,
+      125.85
+    ],
+    "losses": [
+      5.473457336425781,
+      4.585470676422119,
+      1.511654257774353,
+      0.764727771282196,
+      0.5452964901924133
+    ],
+    "any_nan_loss": false,
+    "seconds_per_step_steady": 125.17,
+    "tokens_per_second_steady": 65.4,
+    "peak_max_memory_reserved_gib": 25.848,
+    "peak_max_memory_allocated_gib": 24.427
+  },
+  "windows_peak": {
+    "ram_used_gib": 20.343,
+    "process_rss_gib": 11.709,
+    "gpu_total_used_gib": 38.619,
+    "gpu_training_gib": 38.88,
+    "gpu_training_dedicated_gib": 29.585,
+    "gpu_training_shared_gib": 9.296,
+    "portal_metrics": true
+  }
+}

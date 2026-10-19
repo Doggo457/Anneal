@@ -1,0 +1,6 @@
+{"step": 1, "config": "base", "tok_per_s": 12.69, "t": 1792362635.4985294}
+{"step": 2, "config": "mtp", "tok_per_s": 24.14, "t": 1792362709.9780362}
+{"step": 3, "config": "mtp-n1", "tok_per_s": 19.7, "t": 1792362798.0027924}
+{"step": 4, "config": "mtp-n2", "tok_per_s": 23.53, "t": 1792362873.030836}
+{"step": 5, "config": "mtp-n4", "tok_per_s": 25.41, "t": 1792362943.721853}
+{"step": 6, "config": "builtin", "tok_per_s": 23.72, "t": 1792363018.2939436}

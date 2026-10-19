@@ -1,0 +1,921 @@
+{
+ "nolora": {
+  "flags": [],
+  "env": {},
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 86.63,
+    "gen_tok_per_s": 12.77297676048114,
+    "seconds": 0.66
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 87.253,
+    "gen_tok_per_s": 12.77491153373763,
+    "seconds": 0.66
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 1081.355,
+    "gen_tok_per_s": 12.724496473496691,
+    "seconds": 1.65
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": true,
+    "tokens": [
+     3158,
+     271,
+     760,
+     2393,
+     1220,
+     524,
+     12131,
+     421
+    ],
+    "prompt_ms": 326.444,
+    "gen_tok_per_s": 12.734218664726214,
+    "seconds": 0.9
+   },
+   {
+    "prompt_tokens": 128,
+    "ok": true,
+    "tokens": [
+     32343,
+     919,
+     369,
+     524,
+     279,
+     15162,
+     4924,
+     694
+    ],
+    "prompt_ms": 427.617,
+    "gen_tok_per_s": 12.710633352701917,
+    "seconds": 1.01
+   }
+  ],
+  "load_s": 5.6,
+  "lora_adapters": [],
+  "exit_code": 1,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.06.865.506 I slot print_timing: id  0 | task 10 |        eval time =     547.95 ms /     8 tokens (   78.28 ms per token,    12.77 tokens per second)",
+   "0.06.865.507 I slot print_timing: id  0 | task 10 |       total time =     635.20 ms /    10 tokens",
+   "0.06.865.508 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.06.865.532 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.06.885.035 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.06.885.414 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.08.516.926 I slot print_timing: id  0 | task 19 | prompt eval time =    1081.36 ms /     8 tokens (  135.17 ms per token,     7.40 tokens per second)",
+   "0.08.516.933 I slot print_timing: id  0 | task 19 |        eval time =     550.12 ms /     8 tokens (   78.59 ms per token,    12.72 tokens per second)",
+   "0.08.516.934 I slot print_timing: id  0 | task 19 |       total time =    1631.47 ms /    16 tokens",
+   "0.08.516.935 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.08.516.958 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.08.542.601 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.08.542.915 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0",
+   "0.09.419.090 I slot print_timing: id  0 | task 28 | prompt eval time =     326.44 ms /    32 tokens (   10.20 ms per token,    98.03 tokens per second)",
+   "0.09.419.097 I slot print_timing: id  0 | task 28 |        eval time =     549.70 ms /     8 tokens (   78.53 ms per token,    12.73 tokens per second)",
+   "0.09.419.098 I slot print_timing: id  0 | task 28 |       total time =     876.14 ms /    40 tokens",
+   "0.09.419.099 I slot print_timing: id  0 | task 28 |    graphs reused =         25",
+   "0.09.419.125 I slot      release: id  0 | task 28 | stop processing: n_tokens = 39, truncated = 0",
+   "0.09.445.840 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.821",
+   "0.09.446.158 I slot launch_slot_: id  0 | task 37 | processing task, is_child = 0",
+   "0.10.424.533 I slot print_timing: id  0 | task 37 | prompt eval time =     427.62 ms /   128 tokens (    3.34 ms per token,   299.33 tokens per second)",
+   "0.10.424.541 I slot print_timing: id  0 | task 37 |        eval time =     550.72 ms /     8 tokens (   78.67 ms per token,    12.71 tokens per second)",
+   "0.10.424.542 I slot print_timing: id  0 | task 37 |       total time =     978.34 ms /   136 tokens",
+   "0.10.424.543 I slot print_timing: id  0 | task 37 |    graphs reused =         31",
+   "0.10.424.587 I slot      release: id  0 | task 37 | stop processing: n_tokens = 135, truncated = 0"
+  ],
+  "max_ok_prompt_tokens": 128
+ },
+ "f16": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf"
+  ],
+  "env": {},
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 91.856,
+    "gen_tok_per_s": 12.313386233986002,
+    "seconds": 0.67
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 94.213,
+    "gen_tok_per_s": 12.159300735985102,
+    "seconds": 0.68
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 776.866,
+    "gen_tok_per_s": 12.3169828318855,
+    "seconds": 1.35
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": false,
+    "error": "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+    "server_exit_code": 3221226505
+   }
+  ],
+  "load_s": 6.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 3221226505,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.05.666.702 I srv  llama_server: model loaded",
+   "0.05.666.706 I srv  llama_server: listening on http://127.0.0.1:18096",
+   "0.06.658.216 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+   "0.06.658.282 I slot launch_slot_: id  0 | task 1 | processing task, is_child = 0",
+   "0.07.318.660 I slot print_timing: id  0 | task 1 | prompt eval time =      91.86 ms /     1 tokens (   91.86 ms per token,    10.89 tokens per second)",
+   "0.07.318.667 I slot print_timing: id  0 | task 1 |        eval time =     568.49 ms /     8 tokens (   81.21 ms per token,    12.31 tokens per second)",
+   "0.07.318.668 I slot print_timing: id  0 | task 1 |       total time =     660.34 ms /     9 tokens",
+   "0.07.318.669 I slot print_timing: id  0 | task 1 |    graphs reused =          7",
+   "0.07.318.692 I slot      release: id  0 | task 1 | stop processing: n_tokens = 8, truncated = 0",
+   "0.07.332.026 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.500 (> 0.100 thold), f_keep = 0.125",
+   "0.07.332.385 I slot launch_slot_: id  0 | task 10 | processing task, is_child = 0",
+   "0.08.002.326 I slot print_timing: id  0 | task 10 | prompt eval time =      94.21 ms /     2 tokens (   47.11 ms per token,    21.23 tokens per second)",
+   "0.08.002.335 I slot print_timing: id  0 | task 10 |        eval time =     575.69 ms /     8 tokens (   82.24 ms per token,    12.16 tokens per second)",
+   "0.08.002.337 I slot print_timing: id  0 | task 10 |       total time =     669.90 ms /    10 tokens",
+   "0.08.002.338 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.08.002.370 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.08.004.401 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.08.004.556 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.09.349.762 I slot print_timing: id  0 | task 19 | prompt eval time =     776.87 ms /     8 tokens (   97.11 ms per token,    10.30 tokens per second)",
+   "0.09.349.769 I slot print_timing: id  0 | task 19 |        eval time =     568.32 ms /     8 tokens (   81.19 ms per token,    12.32 tokens per second)",
+   "0.09.349.770 I slot print_timing: id  0 | task 19 |       total time =    1345.19 ms /    16 tokens",
+   "0.09.349.771 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.09.349.789 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.09.369.398 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.09.369.587 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0"
+  ],
+  "max_ok_prompt_tokens": 8
+ },
+ "f32": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F32-LoRA.gguf"
+  ],
+  "env": {},
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 174.05,
+    "gen_tok_per_s": 12.252606742084378,
+    "seconds": 0.76
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 94.027,
+    "gen_tok_per_s": 12.204179408411122,
+    "seconds": 0.69
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 482.053,
+    "gen_tok_per_s": 12.187032649060468,
+    "seconds": 1.06
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": false,
+    "error": "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+    "server_exit_code": 3221226505
+   }
+  ],
+  "load_s": 6.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F32-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 3221226505,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.05.664.782 I srv  llama_server: model loaded",
+   "0.05.664.787 I srv  llama_server: listening on http://127.0.0.1:18096",
+   "0.06.557.671 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+   "0.06.557.706 I slot launch_slot_: id  0 | task 1 | processing task, is_child = 0",
+   "0.07.303.103 I slot print_timing: id  0 | task 1 | prompt eval time =     174.05 ms /     1 tokens (  174.05 ms per token,     5.75 tokens per second)",
+   "0.07.303.111 I slot print_timing: id  0 | task 1 |        eval time =     571.31 ms /     8 tokens (   81.62 ms per token,    12.25 tokens per second)",
+   "0.07.303.112 I slot print_timing: id  0 | task 1 |       total time =     745.36 ms /     9 tokens",
+   "0.07.303.113 I slot print_timing: id  0 | task 1 |    graphs reused =          7",
+   "0.07.303.142 I slot      release: id  0 | task 1 | stop processing: n_tokens = 8, truncated = 0",
+   "0.07.326.929 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.500 (> 0.100 thold), f_keep = 0.125",
+   "0.07.327.279 I slot launch_slot_: id  0 | task 10 | processing task, is_child = 0",
+   "0.07.994.906 I slot print_timing: id  0 | task 10 | prompt eval time =      94.03 ms /     2 tokens (   47.01 ms per token,    21.27 tokens per second)",
+   "0.07.994.913 I slot print_timing: id  0 | task 10 |        eval time =     573.57 ms /     8 tokens (   81.94 ms per token,    12.20 tokens per second)",
+   "0.07.994.914 I slot print_timing: id  0 | task 10 |       total time =     667.60 ms /    10 tokens",
+   "0.07.994.915 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.07.994.932 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.07.997.026 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.07.997.341 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.09.053.791 I slot print_timing: id  0 | task 19 | prompt eval time =     482.05 ms /     8 tokens (   60.26 ms per token,    16.60 tokens per second)",
+   "0.09.053.798 I slot print_timing: id  0 | task 19 |        eval time =     574.38 ms /     8 tokens (   82.05 ms per token,    12.19 tokens per second)",
+   "0.09.053.800 I slot print_timing: id  0 | task 19 |       total time =    1056.43 ms /    16 tokens",
+   "0.09.053.801 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.09.053.818 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.09.072.566 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.09.073.112 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0"
+  ],
+  "max_ok_prompt_tokens": 8
+ },
+ "f16-ub1": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+   "-ub",
+   "1",
+   "-b",
+   "1"
+  ],
+  "env": {},
+  "prompts": [],
+  "load_s": 8.9,
+  "exit_code": 3221226505,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.00.067.197 I srv  llama_server: initializing ...",
+   "0.00.067.205 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+   "0.00.067.354 I srv  init_listene: The UI is disabled",
+   "0.00.067.355 I srv  init_listene: Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable",
+   "0.00.067.452 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)",
+   "0.00.072.737 I srv    load_model: loading model 'C:\\Users\\ai sever\\.ollama\\models\\blobs\\sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d'",
+   "0.00.803.977 W model has unused tensor blk.64.attn_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.803.988 W model has unused tensor blk.64.post_attention_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.804.003 W model has unused tensor blk.64.attn_q.weight (size = 35389440 bytes) -- ignoring",
+   "0.00.804.008 W model has unused tensor blk.64.attn_k.weight (size = 2949120 bytes) -- ignoring",
+   "0.00.804.013 W model has unused tensor blk.64.attn_v.weight (size = 4300800 bytes) -- ignoring",
+   "0.00.804.031 W model has unused tensor blk.64.attn_output.weight (size = 17694720 bytes) -- ignoring",
+   "0.00.804.036 W model has unused tensor blk.64.attn_q_norm.weight (size = 1024 bytes) -- ignoring",
+   "0.00.804.041 W model has unused tensor blk.64.attn_k_norm.weight (size = 1024 bytes) -- ignoring",
+   "0.00.804.046 W model has unused tensor blk.64.ffn_gate.weight (size = 50135040 bytes) -- ignoring",
+   "0.00.804.051 W model has unused tensor blk.64.ffn_down.weight (size = 73113600 bytes) -- ignoring",
+   "0.00.804.056 W model has unused tensor blk.64.ffn_up.weight (size = 50135040 bytes) -- ignoring",
+   "0.00.804.064 W model has unused tensor blk.64.nextn.eh_proj.weight (size = 29491200 bytes) -- ignoring",
+   "0.00.804.071 W model has unused tensor blk.64.nextn.enorm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.804.076 W model has unused tensor blk.64.nextn.hnorm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.804.092 W model has unused tensor blk.64.nextn.shared_head_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.05.083.975 I cmn          init: llama threadpool init, n_threads = 16",
+   "D:/a/llama.cpp/llama.cpp/common/common.cpp:2216: get_sub_batch: failed to add token 0 at index 1 (error -1, n = 2)",
+   ""
+  ],
+  "max_ok_prompt_tokens": 0
+ },
+ "f16-ub8": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+   "-ub",
+   "8"
+  ],
+  "env": {},
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 92.144,
+    "gen_tok_per_s": 12.310376240270408,
+    "seconds": 0.68
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 91.932,
+    "gen_tok_per_s": 12.32329278383184,
+    "seconds": 0.66
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 231.431,
+    "gen_tok_per_s": 12.283718808128313,
+    "seconds": 0.83
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": true,
+    "tokens": [
+     3158,
+     1368,
+     488,
+     12131,
+     421,
+     3798,
+     11,
+     279
+    ],
+    "prompt_ms": 835.51,
+    "gen_tok_per_s": 12.293966296969538,
+    "seconds": 1.41
+   },
+   {
+    "prompt_tokens": 128,
+    "ok": true,
+    "tokens": [
+     32343,
+     919,
+     369,
+     524,
+     279,
+     15162,
+     4924,
+     694
+    ],
+    "prompt_ms": 3350.338,
+    "gen_tok_per_s": 11.903871138894369,
+    "seconds": 3.95
+   }
+  ],
+  "load_s": 5.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 1,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.06.901.904 I slot print_timing: id  0 | task 10 |        eval time =     568.03 ms /     8 tokens (   81.15 ms per token,    12.32 tokens per second)",
+   "0.06.901.905 I slot print_timing: id  0 | task 10 |       total time =     659.96 ms /    10 tokens",
+   "0.06.901.906 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.06.901.929 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.06.924.850 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.06.925.114 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.07.726.431 I slot print_timing: id  0 | task 19 | prompt eval time =     231.43 ms /     8 tokens (   28.93 ms per token,    34.57 tokens per second)",
+   "0.07.726.439 I slot print_timing: id  0 | task 19 |        eval time =     569.86 ms /     8 tokens (   81.41 ms per token,    12.28 tokens per second)",
+   "0.07.726.440 I slot print_timing: id  0 | task 19 |       total time =     801.29 ms /    16 tokens",
+   "0.07.726.441 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.07.726.463 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.07.728.741 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.07.729.062 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0",
+   "0.09.133.976 I slot print_timing: id  0 | task 28 | prompt eval time =     835.51 ms /    32 tokens (   26.11 ms per token,    38.30 tokens per second)",
+   "0.09.133.985 I slot print_timing: id  0 | task 28 |        eval time =     569.38 ms /     8 tokens (   81.34 ms per token,    12.29 tokens per second)",
+   "0.09.133.987 I slot print_timing: id  0 | task 28 |       total time =    1404.89 ms /    40 tokens",
+   "0.09.133.989 I slot print_timing: id  0 | task 28 |    graphs reused =         26",
+   "0.09.134.014 I slot      release: id  0 | task 28 | stop processing: n_tokens = 39, truncated = 0",
+   "0.09.149.853 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.821",
+   "0.09.150.074 I slot launch_slot_: id  0 | task 37 | processing task, is_child = 0",
+   "0.13.088.534 I slot print_timing: id  0 | task 37 | prompt eval time =    3350.34 ms /   128 tokens (   26.17 ms per token,    38.21 tokens per second)",
+   "0.13.088.558 I slot print_timing: id  0 | task 37 |        eval time =     588.04 ms /     8 tokens (   84.01 ms per token,    11.90 tokens per second)",
+   "0.13.088.562 I slot print_timing: id  0 | task 37 |       total time =    3938.38 ms /   136 tokens",
+   "0.13.088.565 I slot print_timing: id  0 | task 37 |    graphs reused =         45",
+   "0.13.088.632 I slot      release: id  0 | task 37 | stop processing: n_tokens = 135, truncated = 0"
+  ],
+  "max_ok_prompt_tokens": 128
+ },
+ "f16-fa-off": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+   "-fa",
+   "off"
+  ],
+  "env": {},
+  "prompts": [],
+  "load_s": 8.8,
+  "exit_code": 3221226505,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.00.061.167 I srv  llama_server: initializing ...",
+   "0.00.061.176 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)",
+   "0.00.061.303 I srv  init_listene: The UI is disabled",
+   "0.00.061.305 I srv  init_listene: Use --ui/--no-ui (or deprecated --webui/--no-webui) to enable/disable",
+   "0.00.061.397 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)",
+   "0.00.066.691 I srv    load_model: loading model 'C:\\Users\\ai sever\\.ollama\\models\\blobs\\sha256-f5f1dd8920d417aac2718b0bda3403da274301efdd6760b4f0f4b864ff2ad57d'",
+   "0.00.810.597 W model has unused tensor blk.64.attn_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.810.611 W model has unused tensor blk.64.post_attention_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.810.626 W model has unused tensor blk.64.attn_q.weight (size = 35389440 bytes) -- ignoring",
+   "0.00.810.631 W model has unused tensor blk.64.attn_k.weight (size = 2949120 bytes) -- ignoring",
+   "0.00.810.636 W model has unused tensor blk.64.attn_v.weight (size = 4300800 bytes) -- ignoring",
+   "0.00.810.655 W model has unused tensor blk.64.attn_output.weight (size = 17694720 bytes) -- ignoring",
+   "0.00.810.660 W model has unused tensor blk.64.attn_q_norm.weight (size = 1024 bytes) -- ignoring",
+   "0.00.810.665 W model has unused tensor blk.64.attn_k_norm.weight (size = 1024 bytes) -- ignoring",
+   "0.00.810.670 W model has unused tensor blk.64.ffn_gate.weight (size = 50135040 bytes) -- ignoring",
+   "0.00.810.675 W model has unused tensor blk.64.ffn_down.weight (size = 73113600 bytes) -- ignoring",
+   "0.00.810.680 W model has unused tensor blk.64.ffn_up.weight (size = 50135040 bytes) -- ignoring",
+   "0.00.810.688 W model has unused tensor blk.64.nextn.eh_proj.weight (size = 29491200 bytes) -- ignoring",
+   "0.00.810.694 W model has unused tensor blk.64.nextn.enorm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.810.700 W model has unused tensor blk.64.nextn.hnorm.weight (size = 20480 bytes) -- ignoring",
+   "0.00.810.716 W model has unused tensor blk.64.nextn.shared_head_norm.weight (size = 20480 bytes) -- ignoring",
+   "0.05.151.911 I cmn          init: llama threadpool init, n_threads = 16"
+  ],
+  "max_ok_prompt_tokens": 0
+ },
+ "f16-nofuse": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf"
+  ],
+  "env": {
+   "GGML_VK_DISABLE_FUSION": "1"
+  },
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 91.311,
+    "gen_tok_per_s": 12.257369743558312,
+    "seconds": 0.68
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 93.653,
+    "gen_tok_per_s": 12.252177824608324,
+    "seconds": 0.69
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 231.893,
+    "gen_tok_per_s": 12.226924736291435,
+    "seconds": 0.83
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": false,
+    "error": "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+    "server_exit_code": 3221226505
+   }
+  ],
+  "load_s": 5.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 3221226505,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.05.406.193 I srv  llama_server: model loaded",
+   "0.05.406.196 I srv  llama_server: listening on http://127.0.0.1:18096",
+   "0.05.617.970 I slot get_availabl: id  0 | task -1 | selected slot by LRU, t_last = -1",
+   "0.05.618.032 I slot launch_slot_: id  0 | task 1 | processing task, is_child = 0",
+   "0.06.280.464 I slot print_timing: id  0 | task 1 | prompt eval time =      91.31 ms /     1 tokens (   91.31 ms per token,    10.95 tokens per second)",
+   "0.06.280.471 I slot print_timing: id  0 | task 1 |        eval time =     571.09 ms /     8 tokens (   81.58 ms per token,    12.26 tokens per second)",
+   "0.06.280.472 I slot print_timing: id  0 | task 1 |       total time =     662.40 ms /     9 tokens",
+   "0.06.280.473 I slot print_timing: id  0 | task 1 |    graphs reused =          7",
+   "0.06.280.495 I slot      release: id  0 | task 1 | stop processing: n_tokens = 8, truncated = 0",
+   "0.06.305.251 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.500 (> 0.100 thold), f_keep = 0.125",
+   "0.06.305.561 I slot launch_slot_: id  0 | task 10 | processing task, is_child = 0",
+   "0.06.970.572 I slot print_timing: id  0 | task 10 | prompt eval time =      93.65 ms /     2 tokens (   46.83 ms per token,    21.36 tokens per second)",
+   "0.06.970.580 I slot print_timing: id  0 | task 10 |        eval time =     571.33 ms /     8 tokens (   81.62 ms per token,    12.25 tokens per second)",
+   "0.06.970.582 I slot print_timing: id  0 | task 10 |       total time =     664.98 ms /    10 tokens",
+   "0.06.970.583 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.06.970.604 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.06.998.007 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.06.998.254 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.07.802.675 I slot print_timing: id  0 | task 19 | prompt eval time =     231.89 ms /     8 tokens (   28.99 ms per token,    34.50 tokens per second)",
+   "0.07.802.681 I slot print_timing: id  0 | task 19 |        eval time =     572.51 ms /     8 tokens (   81.79 ms per token,    12.23 tokens per second)",
+   "0.07.802.683 I slot print_timing: id  0 | task 19 |       total time =     804.40 ms /    16 tokens",
+   "0.07.802.684 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.07.802.701 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.07.804.258 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.07.804.441 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0"
+  ],
+  "max_ok_prompt_tokens": 8
+ },
+ "f16-nocoopmat": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf"
+  ],
+  "env": {
+   "GGML_VK_DISABLE_COOPMAT": "1"
+  },
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 89.035,
+    "gen_tok_per_s": 12.217257749232058,
+    "seconds": 0.66
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 92.398,
+    "gen_tok_per_s": 12.298977603561783,
+    "seconds": 0.69
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 229.423,
+    "gen_tok_per_s": 12.281175764678638,
+    "seconds": 0.8
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": true,
+    "tokens": [
+     3158,
+     1368,
+     488,
+     12131,
+     421,
+     3798,
+     11,
+     279
+    ],
+    "prompt_ms": 619.519,
+    "gen_tok_per_s": 12.258035142035604,
+    "seconds": 1.19
+   },
+   {
+    "prompt_tokens": 128,
+    "ok": true,
+    "tokens": [
+     32343,
+     919,
+     369,
+     524,
+     279,
+     15162,
+     4924,
+     694
+    ],
+    "prompt_ms": 973.233,
+    "gen_tok_per_s": 12.220457045093488,
+    "seconds": 1.57
+   }
+  ],
+  "load_s": 5.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 1,
+  "log_lora_lines": [],
+  "log_tail": [
+   "0.06.985.564 I slot print_timing: id  0 | task 10 |        eval time =     569.15 ms /     8 tokens (   81.31 ms per token,    12.30 tokens per second)",
+   "0.06.985.565 I slot print_timing: id  0 | task 10 |       total time =     661.55 ms /    10 tokens",
+   "0.06.985.566 I slot print_timing: id  0 | task 10 |    graphs reused =         13",
+   "0.06.985.585 I slot      release: id  0 | task 10 | stop processing: n_tokens = 9, truncated = 0",
+   "0.06.987.275 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.375 (> 0.100 thold), f_keep = 0.333",
+   "0.06.987.434 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.07.786.854 I slot print_timing: id  0 | task 19 | prompt eval time =     229.42 ms /     8 tokens (   28.68 ms per token,    34.87 tokens per second)",
+   "0.07.786.861 I slot print_timing: id  0 | task 19 |        eval time =     569.98 ms /     8 tokens (   81.43 ms per token,    12.28 tokens per second)",
+   "0.07.786.863 I slot print_timing: id  0 | task 19 |       total time =     799.40 ms /    16 tokens",
+   "0.07.786.864 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.07.786.882 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.07.788.526 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.07.788.852 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0",
+   "0.08.979.454 I slot print_timing: id  0 | task 28 | prompt eval time =     619.52 ms /    32 tokens (   19.36 ms per token,    51.65 tokens per second)",
+   "0.08.979.461 I slot print_timing: id  0 | task 28 |        eval time =     571.05 ms /     8 tokens (   81.58 ms per token,    12.26 tokens per second)",
+   "0.08.979.462 I slot print_timing: id  0 | task 28 |       total time =    1190.57 ms /    40 tokens",
+   "0.08.979.463 I slot print_timing: id  0 | task 28 |    graphs reused =         25",
+   "0.08.979.489 I slot      release: id  0 | task 28 | stop processing: n_tokens = 39, truncated = 0",
+   "0.09.000.337 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.821",
+   "0.09.000.670 I slot launch_slot_: id  0 | task 37 | processing task, is_child = 0",
+   "0.10.546.744 I slot print_timing: id  0 | task 37 | prompt eval time =     973.23 ms /   128 tokens (    7.60 ms per token,   131.52 tokens per second)",
+   "0.10.546.751 I slot print_timing: id  0 | task 37 |        eval time =     572.81 ms /     8 tokens (   81.83 ms per token,    12.22 tokens per second)",
+   "0.10.546.753 I slot print_timing: id  0 | task 37 |       total time =    1546.04 ms /   136 tokens",
+   "0.10.546.754 I slot print_timing: id  0 | task 37 |    graphs reused =         31",
+   "0.10.546.790 I slot      release: id  0 | task 37 | stop processing: n_tokens = 135, truncated = 0"
+  ],
+  "max_ok_prompt_tokens": 128
+ },
+ "f16-verbose": {
+  "flags": [
+   "--lora",
+   "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+   "-lv",
+   "4"
+  ],
+  "env": {},
+  "prompts": [
+   {
+    "prompt_tokens": 1,
+    "ok": true,
+    "tokens": [
+     220,
+     17,
+     15,
+     17,
+     21,
+     95859,
+     18,
+     96212
+    ],
+    "prompt_ms": 91.688,
+    "gen_tok_per_s": 12.301787449716443,
+    "seconds": 0.68
+   },
+   {
+    "prompt_tokens": 2,
+    "ok": true,
+    "tokens": [
+     31802,
+     303,
+     279,
+     5165,
+     271,
+     332,
+     6910,
+     64700
+    ],
+    "prompt_ms": 92.451,
+    "gen_tok_per_s": 12.341586916507401,
+    "seconds": 0.66
+   },
+   {
+    "prompt_tokens": 8,
+    "ok": true,
+    "tokens": [
+     1608,
+     449,
+     9830,
+     2849,
+     11,
+     424,
+     579,
+     4047
+    ],
+    "prompt_ms": 230.802,
+    "gen_tok_per_s": 12.273359271032593,
+    "seconds": 0.83
+   },
+   {
+    "prompt_tokens": 32,
+    "ok": false,
+    "error": "ConnectionResetError: [WinError 10054] An existing connection was forcibly closed by the remote host",
+    "server_exit_code": 3221226505
+   }
+  ],
+  "load_s": 5.6,
+  "lora_adapters": [
+   {
+    "id": 0,
+    "path": "C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf",
+    "scale": 1.0,
+    "task_name": "",
+    "prompt_prefix": ""
+   }
+  ],
+  "exit_code": 3221226505,
+  "log_lora_lines": [
+   "0.04.909.577 I llama_adapter_lora_init: loading lora adapter from 'C:/AI/training/results/smoke-27b-stock/adapter-gguf/smoke-27b-stock-F16-LoRA.gguf' ...",
+   "0.04.910.121 I llama_adapter_lora_init_impl: Dumping metadata keys/values.",
+   "0.04.910.137 I llama_adapter_lora_init_impl: - kv   0:                       general.architecture str              = qwen35",
+   "0.04.910.138 I llama_adapter_lora_init_impl: - kv   1:                               general.type str              = adapter",
+   "0.04.910.139 I llama_adapter_lora_init_impl: - kv   2:                               adapter.type str              = lora",
+   "0.04.910.140 I llama_adapter_lora_init_impl: - kv   3:                               general.name str              = Adapter",
+   "0.04.910.143 I llama_adapter_lora_init_impl: - kv   4:                   general.base_model.count u32              = 1",
+   "0.04.910.146 I llama_adapter_lora_init_impl: - kv   5:                  general.base_model.0.name str              = Qwen3.8 27B Unsloth Bnb 4bit",
+   "0.04.910.147 I llama_adapter_lora_init_impl: - kv   6:          general.base_model.0.organization str              = Unsloth",
+   "0.04.910.150 I llama_adapter_lora_init_impl: - kv   7:              general.base_model.0.repo_url str              = https://huggingface.co/unsloth/Qwen3....",
+   "0.04.910.169 I llama_adapter_lora_init_impl: - kv   8:                               general.tags arr[str,7]       = [\"base_model:adapter:unsloth/Qwen3.8-...",
+   "0.04.910.179 I llama_adapter_lora_init_impl: - kv   9:                         adapter.lora.alpha f32              = 16.000000",
+   "0.04.910.180 I llama_adapter_lora_init_impl: - kv  10:               general.quantization_version u32              = 2",
+   "0.04.921.982 I llama_adapter_lora_init_impl:    Vulkan0 LoRA buffer size =   152.00 MiB",
+   "0.04.965.746 I llama_adapter_lora_init_impl: loaded 512 tensors from lora file"
+  ],
+  "log_tail": [
+   "\ttop_k = 20, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000",
+   "\tmirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900",
+   "0.06.940.438 I slot launch_slot_: id  0 | task 19 | processing task, is_child = 0",
+   "0.06.940.447 I slot   operator(): id  0 | task 19 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 8",
+   "0.06.940.450 I slot   operator(): id  0 | task 19 | cached n_tokens = 0, memory_seq_rm [0, end)",
+   "0.06.940.471 I slot init_sampler: id  0 | task 19 | init sampler, took 0.00 ms, tokens: text = 8, total = 8",
+   "0.07.741.615 I slot print_timing: id  0 | task 19 | prompt eval time =     230.80 ms /     8 tokens (   28.85 ms per token,    34.66 tokens per second)",
+   "0.07.741.635 I slot print_timing: id  0 | task 19 |        eval time =     570.34 ms /     8 tokens (   81.48 ms per token,    12.27 tokens per second)",
+   "0.07.741.638 I slot print_timing: id  0 | task 19 |       total time =     801.14 ms /    16 tokens",
+   "0.07.741.640 I slot print_timing: id  0 | task 19 |    graphs reused =         19",
+   "0.07.741.679 I slot      release: id  0 | task 19 | stop processing: n_tokens = 15, truncated = 0",
+   "0.07.741.702 I srv  update_slots: all slots are idle",
+   "0.07.756.728 I srv  server_strea: conv_id= (empty=1)",
+   "0.07.756.924 I slot get_availabl: id  0 | task -1 |  - checking sim = 0.250 (8/32) > 0.100",
+   "0.07.756.936 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.250 (> 0.100 thold), f_keep = 0.533",
+   "0.07.757.257 I slot launch_slot_: id  0 | task -1 | sampler chain: logits -> ?penalties -> ?dry -> ?top-n-sigma -> top-k -> ?typical -> top-p -> min-p -> ?xtc -> temp-ext -> dist ",
+   "0.07.757.286 I slot launch_slot_: id  0 | task -1 | sampler params: ",
+   "\trepeat_last_n = 64, repeat_penalty = 1.000, frequency_penalty = 0.000, presence_penalty = 0.000",
+   "\tdry_multiplier = 0.000, dry_base = 1.750, dry_allowed_length = 2, dry_penalty_last_n = 64",
+   "\ttop_k = 20, top_p = 0.950, min_p = 0.050, xtc_probability = 0.000, xtc_threshold = 0.100, typical_p = 1.000, top_n_sigma = -1.000, temp = 0.000",
+   "\tmirostat = 0, mirostat_lr = 0.100, mirostat_ent = 5.000, adaptive_target = -1.000, adaptive_decay = 0.900",
+   "0.07.757.290 I slot launch_slot_: id  0 | task 28 | processing task, is_child = 0",
+   "0.07.757.303 I slot   operator(): id  0 | task 28 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 32",
+   "0.07.757.307 I slot   operator(): id  0 | task 28 | cached n_tokens = 0, memory_seq_rm [0, end)",
+   "0.07.757.351 I slot init_sampler: id  0 | task 28 | init sampler, took 0.01 ms, tokens: text = 32, total = 32"
+  ],
+  "max_ok_prompt_tokens": 8
+ }
+}

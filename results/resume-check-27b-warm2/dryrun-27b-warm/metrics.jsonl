@@ -1,0 +1,26 @@
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": null, "t": 1792376321.3101342}
+{"event": "pre_loss_mem", "tokens": 7891, "grad": true, "hip_free_gib": 3.343, "torch_reserved_gib": 23.984, "torch_allocated_gib": 21.49, "win_dedicated_gib": 25.358, "win_shared_gib": 4.007, "t": 1792376334.605084}
+{"event": "warm_up", "row": 0, "tokens": 7891, "trained_tokens": 7639, "loss": 0.64141, "seconds": 126.5, "hip_free_gib": 6.002, "torch_reserved_gib": 21.291, "t": 1792376449.490543}
+{"event": "train_begin", "max_steps": 3, "step": 0, "t": 1792376449.493553}
+{"event": "pre_loss_mem", "tokens": 6019, "grad": true, "hip_free_gib": 3.156, "torch_reserved_gib": 23.312, "torch_allocated_gib": 21.491, "win_dedicated_gib": 27.619, "win_shared_gib": 8.256, "t": 1792376449.7609105}
+{"event": "pre_loss_mem", "tokens": 2569, "grad": true, "hip_free_gib": 3.906, "torch_reserved_gib": 22.705, "torch_allocated_gib": 21.671, "win_dedicated_gib": 27.682, "win_shared_gib": 8.256, "t": 1792376510.112496}
+{"event": "mem", "step": 1, "hip_free_gib": 5.806, "hip_total_gib": 43.868, "reserved_gib": 21.51, "t": 1792376535.599353}
+{"step": 1, "seconds": 86.085, "peak_reserved_gib": 25.066, "peak_allocated_gib": 24.315, "tokens": 8588, "trained_tokens": 7589, "tokens_per_second": 99.8, "trained_tokens_per_second": 88.2, "loss": 0.6151648759841919, "grad_norm": 0.21890141069889069, "learning_rate": 0.0, "epoch": 0.125, "t": 1792376535.6027153}
+{"event": "pre_loss_mem", "tokens": 7891, "grad": true, "hip_free_gib": 2.31, "torch_reserved_gib": 24.203, "torch_allocated_gib": 21.716, "win_dedicated_gib": 27.682, "win_shared_gib": 8.256, "t": 1792376535.790581}
+{"event": "pre_loss_mem", "tokens": 6301, "grad": true, "hip_free_gib": 1.916, "torch_reserved_gib": 24.775, "torch_allocated_gib": 21.988, "win_dedicated_gib": 28.062, "win_shared_gib": 8.256, "t": 1792376617.7215912}
+{"event": "mem", "step": 2, "hip_free_gib": 5.806, "hip_total_gib": 43.868, "reserved_gib": 21.51, "t": 1792376680.9146733}
+{"event": "pause_requested", "step": 2, "t": 1792376680.9176767}
+{"step": 2, "seconds": 145.309, "peak_reserved_gib": 25.264, "peak_allocated_gib": 24.315, "tokens": 14192, "trained_tokens": 12556, "tokens_per_second": 97.7, "trained_tokens_per_second": 86.4, "loss": 0.6087740659713745, "grad_norm": 0.17032179236412048, "learning_rate": 0.0001, "epoch": 0.25, "t": 1792376680.9186707}
+{"event": "checkpoint", "step": 2, "path": "C:\\AI\\training\\results\\resume-check-27b-warm2\\dryrun-27b-warm\\checkpoints\\checkpoint-2", "t": 1792376681.64853}
+{"event": "paused", "step": 2, "t": 1792376681.65083}
+{"event": "plan", "rows": 16, "tokens": 79055, "total_steps": 3, "warmup": 1, "decay": 1, "resume": "C:\\AI\\training\\results\\resume-check-27b-warm2\\dryrun-27b-warm\\checkpoints\\checkpoint-2", "t": 1792376735.5993507}
+{"event": "pre_loss_mem", "tokens": 7891, "grad": true, "hip_free_gib": 3.28, "torch_reserved_gib": 24.119, "torch_allocated_gib": 21.642, "win_dedicated_gib": 25.624, "win_shared_gib": 5.756, "t": 1792376749.7717242}
+{"event": "warm_up", "row": 0, "tokens": 7891, "trained_tokens": 7639, "loss": 0.63275, "seconds": 126.9, "hip_free_gib": 5.877, "torch_reserved_gib": 21.42, "t": 1792376864.943438}
+{"event": "train_begin", "max_steps": 3, "step": 2, "t": 1792376864.945437}
+{"event": "pre_loss_mem", "tokens": 6620, "grad": true, "hip_free_gib": 2.988, "torch_reserved_gib": 23.596, "torch_allocated_gib": 21.666, "win_dedicated_gib": 26.656, "win_shared_gib": 8.256, "t": 1792376865.2344494}
+{"event": "pre_loss_mem", "tokens": 7087, "grad": true, "hip_free_gib": 1.775, "torch_reserved_gib": 24.633, "torch_allocated_gib": 22.002, "win_dedicated_gib": 27.646, "win_shared_gib": 8.256, "t": 1792376932.1799045}
+{"event": "mem", "step": 3, "hip_free_gib": 5.744, "hip_total_gib": 43.868, "reserved_gib": 21.424, "t": 1792377004.4662974}
+{"step": 3, "seconds": 139.487, "peak_reserved_gib": 25.324, "peak_allocated_gib": 24.465, "tokens": 13707, "trained_tokens": 13116, "tokens_per_second": 98.3, "trained_tokens_per_second": 94.0, "loss": 0.5989859104156494, "grad_norm": 0.09785574674606323, "learning_rate": 0.0001, "epoch": 0.375, "t": 1792377004.4698117}
+{"event": "checkpoint", "step": 3, "path": "C:\\AI\\training\\results\\resume-check-27b-warm2\\dryrun-27b-warm\\checkpoints\\checkpoint-3", "t": 1792377005.263409}
+{"event": "train_end", "step": 3, "t": 1792377005.2654102}
+{"event": "adapter_saved", "path": "C:\\AI\\training\\results\\resume-check-27b-warm2\\dryrun-27b-warm\\adapter", "t": 1792377006.1952739}

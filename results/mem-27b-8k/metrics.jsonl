@@ -1,0 +1,4 @@
+{"event": "phase", "phase": "start", "allocated_gib": 0.062, "reserved_gib": 0.064, "peak_reserved_gib": 0.064, "mem_get_info_free_gib": 43.411, "mem_get_info_total_gib": 43.868, "t": 1792311860.3442302}
+{"event": "phase", "phase": "after_load", "allocated_gib": 20.879, "reserved_gib": 20.9, "peak_reserved_gib": 20.9, "mem_get_info_free_gib": 22.563, "mem_get_info_total_gib": 43.868, "t": 1792311896.0974042}
+{"event": "phase", "phase": "after_lora", "allocated_gib": 21.186, "reserved_gib": 21.223, "peak_reserved_gib": 21.25, "mem_get_info_free_gib": 22.242, "mem_get_info_total_gib": 43.868, "t": 1792311900.653999}
+{"event": "train_begin", "max_steps": 5, "step": 0, "t": 1792311904.293719}
