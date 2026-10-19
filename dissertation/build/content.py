@@ -63,13 +63,13 @@ BLOCKS = [
    ["Inference", "llama.cpp (GGUF); Ollama; PyTorch", "llama.cpp [@llamacpp], Vulkan build: full 262k context with a quantised KV cache, separate reasoning output, runtime adapters and MTP speculative decoding."],
    ["Code benchmarks", "HumanEval+ and MBPP+; LiveCodeBench; SWE-bench Verified", "EvalPlus [@evalplus] HumanEval+ and MBPP+ (542 problems, far more tests than the originals) as the primary measure; LiveCodeBench [@lcb] problems released after the model guard against contamination; SWE-bench is too slow (Section 2.3)."],
    ["Long-context code", "RepoQA; LongCodeBench", "LongCodeBench [@longcode], which covers 32k to 1M tokens; RepoQA [@repoqa] defaults to 16k-token contexts."],
-   ["Training data", "Public sets with and without traces; self-generated traces; SWE-Gym", "OpenCodeReasoning [@ocr] (CC-BY-4.0) and, if enough fit, public agent-session steps [@agentset] (Apache-2.0), both with reasoning traces. Self-generated traces only in the first run; sets lacking traces or answers rejected; SWE-Gym [@swegym] trajectories exceed 8,192 tokens."],
+   ["Training data", "Public trace sets; self-generated traces; teacher API; SWE-Gym", "DeepSeek-V4-Pro code traces [@tachibana], [@banaxi] (Apache-2.0) and AoPS maths [@nemomath] (CC-BY-4.0); agent-session steps [@agentset] if enough fit. Own and OpenCodeReasoning [@ocr] traces only in the first run; API-generated rows are not public; SWE-Gym [@swegym] trajectories exceed 8,192 tokens."],
    ["Existing products", "Cloud assistants (e.g. GitHub Copilot); vendor code models", "Cloud assistants send code off the machine; vendor models cannot be specialised further without solving the problem Anneal addresses."],
   ]),
 ("bt", "In summary, QLoRA fixes the training configuration; LoRA and Biderman et al. frame what improvement to expect and which hyperparameters to test; LongLoRA and RULER define the long-context risk and how to measure it; and SWE-bench shapes the realistic tasks. Anneal's contribution is to combine these at 256k context, on AMD hardware, within 32 GB, and to report the outcome openly."),
 
 ("h1", "Prototype Development"),
-("bf", "The prototype is a version-controlled repository of scripts and configuration for every stage in Figure 1. Drafted before access to the training machine, it was brought up there in October 2026, and the first real run, round 0 of the improvement loop (Section 3.3), started on 19 October with scores due on 21 October."),
+("bf", "The prototype is a version-controlled repository of scripts and configuration for every stage in Figure 1. Drafted before access to the training machine, it was brought up there in October 2026; the first real run, round 0 of the loop (Section 3.2), started on 19 October."),
 ("fig", "fig1.png", "Anneal pipeline. Baseline (B) and adapted models (A) share one quantised base."),
 
 ("h2", "Memory: Estimate, Then Measure"),
@@ -91,11 +91,11 @@ BLOCKS = [
   ]),
 
 ("h2", "Data Pipeline"),
-("bf", "From loop round 1, every adapter trains only on public datasets with reasoning traces and training licences, never on rows the base model generated, since self-training reinforces the model's own biases. OpenCodeReasoning gives up to three traces per question, but its teacher, DeepSeek-R1, scores 63.5 on LiveCodeBench (August 2024 to May 2025) [@deepseek] against 90.3 reported for Qwen3.8-27B on v6 [@qwen], so stronger teachers are sought. A public set's long agent sessions are split into one row per assistant step and used only if at least 500 steps fit 8,192 tokens with real tool names. `prepare_dataset.py` keeps rows with a `<think>` trace, drops rather than truncates rows over 8,192 tokens, and removes any sharing a 13-token window with, or above 0.8 Jaccard similarity to, a gate or evaluation prompt."),
-("bt", "The first run is a comparison between the model's own rows and public data: 1,000 base-model answers to OpenCodeInstruct [@oci] prompts that passed their tests, as in ReST-EM [@restem], plus 1,000 OpenCodeReasoning rows. The base model passed 54% of attempts, about 27 kept rows an hour, but traces hitting the 6,144-token budget (16% of attempts) were rejected, so kept traces are short (median 436 tokens). Model-written code runs in a sandbox needing no administrator rights, a Windows AppContainer without network or file access inside a job object that limits processes, memory and time; it passed 264 escape checks, and 97.5% of reference solutions pass inside it."),
+("bf", "From round 1, the loop trains only on public datasets, never on the base model's own rows, which would reinforce its biases. No large public set of test-verified traces from an equally strong teacher exists, so loop rows come from DeepSeek-V4-Pro, level with Qwen3.8-27B on LiveCodeBench (89.8 against 90.3 [@dsv4], [@qwen]): 85% Tachibana4 code traces [@tachibana], 5% a second V4-Pro code set [@banaxi] and 10% AoPS maths [@nemomath]. These carry no tests, so the gate decides whether they help. Public agent sessions, split into one row per step, get their own round if 500 steps fit 8,192 tokens. `prepare_dataset.py` keeps rows with a `<think>` trace, drops rather than truncates rows over 8,192 tokens, and removes any sharing a 13-token window with, or above 0.8 Jaccard similarity to, an evaluation prompt."),
+("bt", "The first run, round 0, is a comparison run using the model's own rows: 1,000 base-model answers to OpenCodeInstruct [@oci] prompts that passed their tests, as in ReST-EM [@restem], plus 1,000 OpenCodeReasoning rows, whose DeepSeek-R1 teacher scores only 63.5 on LiveCodeBench [@deepseek]. The base model passed 54% of attempts, but traces hitting the 6,144-token budget (16% of attempts) were rejected, so kept traces are short (median 436 tokens). Model-written code runs, without administrator rights, in a Windows AppContainer with no network or file access, inside a job object limiting processes, memory and time; it passed 264 escape checks, and 97.5% of reference solutions pass inside it."),
 
 ("h2", "Training"),
-("bf", "Training runs as an unattended keep-if-better loop. Each round trains on fresh public rows, from the base model in round 1 and from the best kept adapter after that, and is scored on a held-out gate that is never trained on or reported: CodeContests [@alphacode] validation and test problems whose reference passes in the sandbox, plus 300 held-out OpenCodeInstruct problems. A round is kept only if its gate score beats the best so far with a one-sided sign test at p ≤ 0.05, and neither the CodeContests part nor a 100-question MMLU-Pro [@mmlupro] non-coding check worsens beyond a set tolerance. Rejected adapters are deleted but their scores kept; EvalPlus is scored only on kept adapters, so the reported benchmark never selects them."),
+("bf", "Training runs as an unattended keep-if-better loop. Each round continues the best adapter on 1,000 unused public rows and is scored on a held-out gate, never trained on or reported: decontaminated CodeContests [@alphacode] validation and test problems whose reference passes in the sandbox, plus 300 OpenCodeInstruct problems. A round is kept only if a one-sided exact sign test against the best adapter gives p ≤ 0.05, its CodeContests part drops at most 5 points, 100 MMLU-Pro [@mmlupro] questions outside computing stay within 5 points of the base, and sample answers are clean. A kept adapter is re-scored with a fresh seed that becomes the new reference, so a lucky seed cannot raise the bar. Rejected adapters are deleted but their scores kept, and EvalPlus is scored only on kept adapters, so the reported benchmark never selects them."),
 ("bt", "`train_longrun.py` uses a warmup-stable-decay schedule [@wsd] (Listing 1). To survive crashes and updates over months, it saves every 10 steps, resumes when the same command is re-run, pauses cleanly on a STOP file, and refuses to resume if the training file's SHA-256 has changed. In a CPU test with a tiny model of the same architecture, a run killed with `kill -9` resumed to bit-identical losses and weights."),
 ("code", "Listing 1. Excerpt of the first-run configuration.", [
  "base_model: unsloth/Qwen3.8-27B-unsloth-bnb-4bit",
@@ -105,7 +105,6 @@ BLOCKS = [
  "target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj,",
  "                 down_proj]    # DeltaNet projections: A2",
  "schedule: wsd                  # 20 warmup steps, last 20% decays",
- "save_steps: 10                 # every 80 rows",
 ]),
 ("bt", "Small test fixtures caught four silent bugs, all fixed: the unit-test filter passed every answer, length was checked in characters so over-length rows could be truncated, the targets missed the 48 DeltaNet layers' projections, and a seed set after adapter creation made identical runs diverge from step 3."),
 
@@ -114,7 +113,7 @@ BLOCKS = [
 ("table", "Table 3. Issues found during bring-up and the first run.", [2200, 2900, 3196],
   ["Issue", "Cause", "Resolution"],
   [
-   ["Base model looked broken in training (perplexity 56 to 2,100)", "The loss included the template's system prompt, which the model never predicts; a weight-order patch written to fix it was wrong", "Parity test on identical tokens: unpatched transformers matched llama.cpp (loss 0.515 vs 0.519, 95% top-1 agreement); patch removed, loss on answers only"],
+   ["Base model looked broken in training (perplexity 56 to 2,100)", "The loss scored the template's system prompt; a weight-order patch written to fix it was wrong", "Parity test on identical tokens: unpatched transformers matched llama.cpp (loss 0.515 vs 0.519, 95% top-1 agreement); patch removed, loss on answers only"],
    ["DeltaNet convolution slow", "The fast kernel needs an administrator build; PyTorch's fallback is slow here", "Shift-and-add rewrite, checked against a float64 reference: 61 to 97 tokens per second"],
    ["Training aborted on a long row that followed shorter ones", "Shared GPU memory grows to the longest row seen and is never returned, starving the fused loss", "Fixed loss chunk size and a warm-up step on the longest row: peak 28.1 GiB dedicated plus 8.3 shared, losses unchanged"],
    ["EvalPlus scorer does not run on Windows", "It relies on Unix-only signals and resource limits", "Sandboxed port; reference solutions score 378/378 (MBPP+) and 163/164 (HumanEval+)"],
@@ -126,7 +125,7 @@ BLOCKS = [
 ("bt", "The adapter is converted alone to GGUF and loaded over the same base, which avoids a 55 GB merged model and keeps the base weights identical. Trained against NF4 but served over Q4_K_M, the smoke-test adapter gave losses of 0.756 in training and 0.728 in llama.cpp on 779 identical answer tokens, with 96% top-1 agreement, as close as the base model alone, so evaluation measures the adapter as deployed."),
 
 ("h2", "Critical Assessment"),
-("bf", "The measurement-first design has paid off: the parity test caught a wrong fix before any real run used it. Weaknesses remain. Speed and memory were measured only at rank 16, and the first run's scores will be the first evidence that training helps. The Windows workarounds (a bundled C compiler, the convolution rewrite, disabled Vulkan kernels) could break on an update, so versions are pinned, and slower prompt processing lengthens the 256k-token evaluations. With 20 to 50 personal tasks, confidence intervals will be wide."),
+("bf", "The measurement-first design has paid off: the parity test caught a wrong fix before any real run used it. Weaknesses remain. Speed and memory were measured only at rank 16, and the first run's scores will be the first evidence that training helps. The Windows workarounds (a bundled C compiler, the convolution rewrite, disabled Vulkan kernels) could break on an update, so versions are pinned. With 20 to 50 personal tasks, confidence intervals will be wide. Only an estimated 10 to 25% of Tachibana4 fits 8,192 tokens, enough for a few rounds until 16,384-token training is measured."),
 
 ("h1", "Evaluation Plan"),
 ("bf", "Each objective has a success criterion (Table 4). The base (B) and adapted (A) models run on the same Q4_K_M GGUF with identical settings and seeds. The model card recommends temperature 1.0 and a longer reasoning allowance for thinking mode [@qwen]; Anneal keeps 0.6 and 32,768 tokens to bound evaluation time. Both systems share every setting, so the comparison stays fair, though absolute scores may sit below the card's."),
@@ -142,19 +141,19 @@ BLOCKS = [
   ]),
 ("bt", "**Statistics.** Pass rates are averaged over seeds; 95% confidence intervals for A minus B come from a paired bootstrap over problems, with a paired permutation test for significance. In calibration, 2 of 20 answers changed between two runs of the same model, so one seed over 542 problems resolves only a gain of roughly 3 points (an estimate); three seeds narrow this."),
 ("bt", "**Data scaling.** The scaling curve is the main research question beyond O3. Published results suggest small, flattening gains: supervised fine-tuning gains are log-linear in data and smaller for stronger models [@yuan], and LoRA learns less than full fine-tuning and forgets more the longer it trains [@biderman]. Round 0, half from a weaker teacher, may show no clear gain, and many rounds may be rejected; a flat curve is a result, not a failure, and shows how much data is worth the machine time."),
-("bt", "**Ablations.** Run on 1,000 public rows between loop rounds, each changes one factor: A1 rank (16, 64); A2 adding the DeltaNet targets; A3 example length (4,096, 8,192); A4 data source: OpenCodeReasoning alone against round 0's mix; A5 long examples or trainable normalisation, only if a kept adapter fails O4; A6 an 8-bit base."),
-("bt", "**Contamination.** LiveCodeBench is limited to problems released after the model (August 2026 [@qwen]); every training prompt source predates that date, so these problems are clean by date. Training rows are also checked against the gate and MMLU-Pro questions."),
+("bt", "**Ablations.** Planned as separate 1,000-row runs outside the loop, each changes one factor: A1 rank (16, 64); A2 adding the DeltaNet targets; A3 example length (4,096, 8,192); A4 data source: OpenCodeReasoning alone against round 0's mix; A5 long examples or trainable normalisation, only if a kept adapter fails O4; A6 an 8-bit base."),
+("bt", "**Contamination.** LiveCodeBench is limited to problems released after the model (August 2026 [@qwen]). Two code sets are undated, so training rows are checked for overlap with these problems as well as the gate and MMLU-Pro."),
 
 ("h1", "Project Plan"),
 ("bf", "Bring-up finished early and the first real run is under way (Section 3.4), so the plan starts with its scores, which everything else depends on. Of about 136 usable machine days from November to March, roughly 15 go to ablations and 20 to evaluation; loop rounds use the rest, since only one job can use the GPU at a time."),
 ("plan", "autumn", [
    ["Autumn: 7 - 8", "Round 0: 1,000 own and 1,000 OpenCodeReasoning rows, trained and scored against the base by 21 October. Build the gate; start loop rounds.", "First before-and-after scores"],
-   ["Autumn: 9 - 10", "Three-seed baseline; write the personal tasks. Ablations A1 to A4 between loop rounds.", "Baseline results with spread"],
+   ["Autumn: 9 - 10", "Three-seed baseline; write the personal tasks. Ablations A1 to A4, pausing the loop.", "Baseline results with spread"],
    ["Autumn: 11 - 12", "Remaining ablations, including A6. Loop continues.", "Ablation results; working pipeline (O1)"],
    ["Autumn: 13 - 15", "Exams. The loop runs unattended.", ""],
   ]),
 ("plan", "spring", [
-   ["Winter break", "Loop rounds with the best ablation settings and each new public set.", "Data card (O2)"],
+   ["Winter break", "Loop continues; ablation winners restart it from the base.", "Data card (O2)"],
    ["Spring: 1 - 2", "Loop continues. Interim demo. EvalPlus on new kept adapters.", "Scaling points"],
    ["Spring: 3 - 4", "Loop continues. Long-context checks on the best adapter.", "Retention results (O4)"],
    ["Spring: 5 - 6", "Loop continues. Poster session.", "Scaling points; poster"],
@@ -162,7 +161,7 @@ BLOCKS = [
    ["Spring: 9 - 10", "Reproducibility package. Draft method and results; send to supervisor.", "Public repository (O6); chapters 4 and 5"],
    ["Spring: 11 - 12", "Draft evaluation and conclusions; address comments; submit.", "Final dissertation and code"],
   ]),
-("bt", "The main risks have planned responses. If a driver or package update breaks the Windows stack, the pinned versions are reinstalled, with WSL2 as a fallback. If a larger adapter trains much slower than measured, rounds use fewer rows, and every kept round still adds a point to the curve. If an improvement sits inside run-to-run noise, more seeds are run before concluding. Every change of plan is dated in the decision log."),
+("bt", "The main risks have planned responses. If a driver or package update breaks the Windows stack, the pinned versions are reinstalled, with WSL2 as a fallback. If a larger adapter trains much slower than measured, fewer rounds fit, but every kept round still adds a point to the curve. If an improvement sits inside run-to-run noise, more seeds are run before concluding. Every change of plan is dated in the decision log."),
 ]
 
 ACC = " (accessed Oct. 17, 2026)."
@@ -194,6 +193,10 @@ REFS = {
  "oci": ("W. U. Ahmad *et al.*, \"OpenCodeInstruct: A large-scale instruction tuning dataset for code LLMs,\" arXiv preprint arXiv:2504.04030, 2025.", "https://arxiv.org/abs/2504.04030"),
  "deepseek": ("DeepSeek-AI, \"DeepSeek-R1-0528,\" Hugging Face model card, 2025.", "https://huggingface.co/deepseek-ai/DeepSeek-R1-0528", ACC),
  "ocr": ("W. U. Ahmad *et al.*, \"OpenCodeReasoning: Advancing data distillation for competitive coding,\" arXiv preprint arXiv:2504.01943, 2025.", "https://arxiv.org/abs/2504.01943"),
+ "dsv4": ("DeepSeek-AI, \"DeepSeek-V4-Pro,\" Hugging Face model card, 2026.", "https://huggingface.co/deepseek-ai/DeepSeek-V4-Pro", ACC),
+ "tachibana": ("sequelbox, \"Tachibana4-DeepSeek-V4-Pro,\" Hugging Face dataset card, 2026.", "https://huggingface.co/datasets/sequelbox/Tachibana4-DeepSeek-V4-Pro", ACC),
+ "banaxi": ("Banaxi-Tech, \"Deepseek-V4-Reasoning-Code-2500,\" Hugging Face dataset card, 2026.", "https://huggingface.co/datasets/Banaxi-Tech/Deepseek-V4-Reasoning-Code-2500", ACC),
+ "nemomath": ("NVIDIA, \"Nemotron-SFT-Math-v4,\" Hugging Face dataset card, 2026.", "https://huggingface.co/datasets/nvidia/Nemotron-SFT-Math-v4", ACC),
  "agentset": ("Public agent-session dataset card, Hugging Face, 2026.", "https://huggingface.co/datasets", ACC),
  "mmlupro": ("Y. Wang *et al.*, \"MMLU-Pro: A more robust and challenging multi-task language understanding benchmark,\" in *Advances in Neural Information Processing Systems (NeurIPS)*, vol. 37, 2024.", "https://arxiv.org/abs/2406.01574"),
  "swegym": ("J. Pan *et al.*, \"Training software engineering agents and verifiers with SWE-Gym,\" in *Proc. 42nd Int. Conf. Machine Learning (ICML)*, PMLR vol. 267, 2025, pp. 47717-47737.", "https://proceedings.mlr.press/v267/pan25g.html"),
