@@ -58,6 +58,8 @@ def fetch(repo, files, revision=None, max_files=0):
     listed = api.list_repo_files(repo, repo_type="dataset", revision=sha)
     want = [f for f in listed if any(f == p or f.startswith(p.rstrip("*")) for p in files)
             and f.endswith((".jsonl", ".json", ".parquet"))]
+    if any(f.endswith((".jsonl", ".parquet")) for f in want):  # a .json beside data files is metadata, not rows
+        want = [f for f in want if not f.endswith(".json")]
     if not want:
         raise SystemExit(f"{repo}@{sha}: no files match {files}")
     want = sorted(want)[:max_files] if max_files else sorted(want)
