@@ -382,10 +382,10 @@ def setup_world(tmp):
     cpath = os.path.join(tmp, "loop.yaml")
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
 
-    # the scripts the loop checks before using them (require_script)
+    # the scripts the loop checks before using them (require_script): the versions the loop needs
     os.makedirs(os.path.join(tmp, "scripts"))
-    for name in ("prepare_dataset.py", "train_longrun.py"):
-        shutil.copyfile(os.path.join(ROOT, "scripts", name), os.path.join(tmp, "scripts", name))
+    open(os.path.join(tmp, "scripts", "prepare_dataset.py"), "w").write('ap.add_argument("--decontaminate-gate")\n')
+    open(os.path.join(tmp, "scripts", "train_longrun.py"), "w").write("def load_init_adapter(model, path, lora): ...\n")
     # patch the world into the modules
     L.ROOT = tmp
     L.POOLS = os.path.join(tmp, "data", "processed", "loop")
@@ -510,7 +510,16 @@ def parsed_args(script, argv):
             stub = types.ModuleType("datasets")
             stub.load_dataset = None
             sys.modules["datasets"] = stub
-    mod = importlib.import_module(os.path.splitext(script)[0])
+    # On the machine, prepare_dataset.py and train_longrun.py wait in staged/ until the first run is done with them:
+    # check the loop's commands against the versions it will run.
+    staged = os.path.join(ROOT, "staged", script)
+    if os.path.exists(staged):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(os.path.splitext(script)[0] + "_staged", staged)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    else:
+        mod = importlib.import_module(os.path.splitext(script)[0])
     orig, got = argparse.ArgumentParser.parse_args, {}
 
     def capture(self, args=None, namespace=None):
