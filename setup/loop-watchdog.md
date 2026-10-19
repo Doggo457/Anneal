@@ -38,6 +38,9 @@ and a Startup-folder entry, so it also runs a few minutes after sign-in (the por
 )
 ```
 
+If Windows refuses to create the task without admin rights, the Startup entry runs the watchdog with
+`--every 3600` instead, and it then keeps checking hourly for as long as I am signed in.
+
 The task runs only while I am signed in, like the portal. After a reboot nothing runs until someone signs in,
 unless Windows signs in automatically.
 
