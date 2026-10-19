@@ -1,5 +1,5 @@
 """Fill the Stirling dissertation outline template with content.py."""
-import copy, re, sys, importlib.util
+import copy, datetime, io, re, struct, sys, importlib.util
 import docx
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -10,6 +10,20 @@ HERE = sys.argv[1]
 TEMPLATE, OUT = sys.argv[2], sys.argv[3]
 spec = importlib.util.spec_from_file_location("content", f"{HERE}/content.py")
 C = importlib.util.module_from_spec(spec); spec.loader.exec_module(C)
+
+def clean_png(path):
+    """Figure bytes with metadata chunks removed: only image data and colour/size chunks are kept."""
+    data = open(path, "rb").read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return path
+    keep = {b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS", b"gAMA", b"cHRM", b"sRGB", b"iCCP", b"pHYs", b"sBIT"}
+    out, i = [data[:8]], 8
+    while i < len(data):
+        n = struct.unpack(">I", data[i:i + 4])[0]
+        if data[i + 4:i + 8] in keep:
+            out.append(data[i:i + 12 + n])
+        i += 12 + n
+    return io.BytesIO(b"".join(out))
 
 d = docx.Document(TEMPLATE)
 body = d.element.body
@@ -186,7 +200,7 @@ for b in C.BLOCKS:
         ppr.insert(1, tabs)
     elif kind == "fig":
         p = para("Body Centre"); set_ppr(p, keep_next=True, before=120)
-        p.add_run().add_picture(f"{HERE}/{b[1]}", width=Inches(5.7))
+        p.add_run().add_picture(clean_png(f"{HERE}/{b[1]}"), width=Inches(5.7))
         para("Figure", b[2])
     elif kind == "table":
         caption(b[1]); add_table(b[2], b[3], b[4])
@@ -241,6 +255,9 @@ for i, k in enumerate(order, 1):
     set_ppr(p, ind_left=567, hanging=567, jc="left")
 
 d.core_properties.title = C.TITLE
-d.core_properties.author = "Callum"
+author = re.sub(r"\{\{.*?\}\}", "", C.AUTHOR).strip()
+d.core_properties.author = author
+d.core_properties.last_modified_by = author
+d.core_properties.modified = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
 d.save(OUT)
 print("saved", OUT, "refs:", {k: num[k] for k in order})
