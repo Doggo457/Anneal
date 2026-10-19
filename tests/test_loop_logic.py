@@ -1,6 +1,8 @@
 """Tests for the improvement loop without a GPU, a model or Windows: the keep rule, the overlap check, scoring,
-row bookkeeping, the watchdog's decisions, and a full simulated loop (base, first run, a kept round, a skipped recipe,
-a rejected round, a pause and resume in the middle of training) with every subprocess and the model faked.
+row bookkeeping, the watchdog's decisions, and a full simulated loop with every subprocess and the model faked: base,
+first run, kept rounds, a skipped recipe, a pause and resume in the middle of training, rejected rows rolling forward
+until the stack is dropped, a fresh-seed confirm that fails, the retrain-vs-continue round, a rank-64 round whose shape
+later rounds inherit, the two-pass round when the pools run short, and the wait after it.
 
   python tests/test_loop_logic.py        (or: python -m pytest tests/test_loop_logic.py)
 """
@@ -180,14 +182,50 @@ def test_plan_counts_and_init():
     cfg = {"rows_per_round": 100, "sources": [{"name": "a", "share": 0.85}, {"name": "b", "share": 0.05},
                                               {"name": "c", "share": 0.10}, {"name": "f", "share": 0}]}
     st = {"offsets": {"a": 10}}
-    c = L.plan_counts(cfg, {}, st, {"a": 300, "c": 60, "f": 100})  # b unusable
+    c = L.plan_counts(cfg, {}, st, {"a": 300, "c": 60, "f": 100})  # b unusable: out of the mix
     assert c == {"a": 89, "c": 11}, c
     assert L.plan_counts(cfg, {"mix": {"f": 1.0}}, st, {"a": 300}) == {}
+    assert L.plan_counts(cfg, {}, st, {"a": 300, "c": 60}, rows=50) == {"a": 45, "c": 5}
+    # the ratio is held when a source runs low: the round shrinks instead of c taking a's share
+    assert L.plan_counts(cfg, {}, {"offsets": {"a": 290}}, {"a": 300, "c": 600}) == {"a": 10, "c": 1}
+    assert L.plan_counts(cfg, {}, {"offsets": {"a": 300}}, {"a": 300, "c": 600}) == {}
+    # a source in the same group stands in (b for a), but c still never takes the code share
+    grp = {"rows_per_round": 100, "sources": [{"name": "a", "share": 0.85, "group": "code"},
+                                              {"name": "b", "share": 0.05, "group": "code"}, {"name": "c", "share": 0.10}]}
+    c = L.plan_counts(grp, {}, {"offsets": {"a": 290}}, {"a": 300, "b": 50, "c": 1000})
+    assert c == {"a": 10, "b": 49, "c": 7} and sum(c.values()) == 66, c  # 59 code rows : 7 math = the 90:10 ratio
+    assert L.plan_counts(grp, {}, {"offsets": {"a": 300, "b": 50}}, {"a": 300, "b": 50, "c": 1000}) == {}
+    c = L.plan_counts(grp, {}, {"offsets": {"b": 50}}, {"a": 3000, "b": 50, "c": 1000})  # b used up: a covers it
+    assert c == {"a": 90, "c": 10}, c
+    assert L.apportion(10, {"x": 1, "y": 1, "z": 1}, {"x": 2, "y": 100, "z": 100}) == {"x": 2, "y": 4, "z": 4}
+    assert L.spec_hash({"name": "a", "share": 1, "group": "g"}) == L.spec_hash({"name": "a", "share": 0.5})
     shape = {"lora_r": 16, "lora_alpha": 32, "target_modules": ["q"]}
     assert L.choose_init({}, {"adapter": None}, shape) == "base"
     assert L.choose_init({}, {"adapter": "x", "lora_shape": shape}, shape) == "best"
     assert L.choose_init({}, {"adapter": "x", "lora_shape": shape}, dict(shape, lora_r=32)) == "base_lineage"
     assert L.choose_init({"init": "base_lineage"}, {"adapter": "x", "lora_shape": shape}, shape) == "base_lineage"
+
+
+def test_recipes_and_shape():
+    tcfg = {"train": {"lora_r": 16, "lora_alpha": 32, "target_modules": ["q"], "expect_trainable_params": 7, "lr": 1}}
+    r64 = {"lora_r": 64, "lora_alpha": 128, "target_modules": ["q", "z"], "expect_trainable_params": 9}
+    assert L.effective_train(tcfg, {}) == tcfg["train"]
+    assert L.effective_train(tcfg, {"train": dict(r64, lr=2)}) == dict(r64, lr=2)
+    assert L.effective_train(tcfg, {}, {"train_shape": r64}) == dict(r64, lr=1)  # a kept rank-up carries on
+    t = L.effective_train(tcfg, {"train": {"lora_r": 32}}, {"train_shape": r64})  # the recipe's own shape wins;
+    assert t == {"lora_r": 32, "lora_alpha": 32, "target_modules": ["q"], "lr": 1}, t  # no stale parameter count
+    st = {"rounds": [{"status": "kept"}, {"status": "rejected"}], "recipes_done": [], "best": {"init": "base"}}
+    assert L.recipe_ready({}, st) and not L.recipe_ready({"after_kept": 2}, st)
+    assert L.recipe_ready({"after_kept": 3, "after_dropped_stacks": 1}, dict(st, stacks_dropped=[{}]))
+    assert not L.recipe_ready({"when_best_continued": True}, st)
+    assert L.recipe_ready({"when_best_continued": True}, dict(st, best={"init": "best"}))
+    cfg = {"recipes": [{"id": "later", "after_kept": 2}, {"id": "short", "when_pools_short": True}, {"id": "now"}],
+           "default_recipe": {"id": "default"}}
+    assert L.pick_recipe(cfg, st)["id"] == "now"
+    assert L.pick_recipe(cfg, st, pools_short=True)["id"] == "short"
+    assert L.pick_recipe(cfg, dict(st, recipes_done=["now"]))["id"] == "default"
+    assert L.takes_stack({}) and L.takes_stack({"train": {"epochs": 2}})
+    assert not L.takes_stack({"mix": {"f": 1}}) and not L.takes_stack({"rows": 0, "init": "base_lineage"})
 
 
 def test_pick_replay():
@@ -245,7 +283,9 @@ def test_watchdog_decide():
 # ============================================================================================ simulated loop
 
 GATE_N, NC_N = 40, 10
-PASSING = {None: 20, "first-run": 22, "r002": 30, "r003": 18, "r004": 35}  # gate items 0..k-1 pass
+PASSING = {None: 20, "first-run": 22, "r002": 30, "r003": 18, "r004": 35, "r005": 36, "r006": 33, "r007": 40,
+           "r008": 30, "r009": 40, "r010": 40, "r011": 40}  # gate items 0..k-1 pass
+CONFIRM_PASSING = {"r007": 34}  # on its fresh-seed confirm (seed 1000 + round) r007 does worse than when it was kept
 
 
 class FakeServer:
@@ -285,7 +325,10 @@ class World:
         if message in self.prompt_to_idx:
             kind, i = self.prompt_to_idx[message]
             if kind == "gate":
-                ok = i < PASSING[m]
+                k = PASSING[m]
+                if m in CONFIRM_PASSING and seed // 100000 == 1000 + int(m[1:]):
+                    k = CONFIRM_PASSING[m]
+                ok = i < k
                 return {"content": f"```python\n# {'PASS' if ok else 'FAIL'}\n```", "reasoning": "r",
                         "finish_reason": "stop", "completion_tokens": 50, "seconds": 0.0}
             return {"content": f"The answer is ({'A' if i < 7 else 'B'})", "reasoning": "r", "finish_reason": "stop",
@@ -300,7 +343,7 @@ class World:
         if script in ("prepare_dataset.py", "public_source.py"):
             out = arg("--out")
             name = os.path.basename(out)
-            n = {"tachibana4_v4pro": 300, "banaxi_v4pro": 20, "math_v4_aops": 60, "agent_sessions": 100}[name]
+            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120, "agent_sessions": 100}[name]
             E.write_jsonl(os.path.join(out, "train.jsonl"),
                           [{"messages": [{"role": "user", "content": f"{name} q{i}"},
                                          {"role": "assistant", "content": f"<think>t</think> a{i}"}]} for i in range(n)])
@@ -386,8 +429,9 @@ def setup_world(tmp):
     # config: the real loop.yaml with this world's first-run folder and smaller rounds
     import yaml
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
-    cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0)
-    for src in cfg["sources"]:  # small fake pools: tachibana (300) and math (60) usable; banaxi and agent-session keep theirs
+    cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
+    cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
+    for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; banaxi and agent-session keep theirs
         if src["name"] in ("tachibana4_v4pro", "math_v4_aops"):
             src["min_pool_rows"] = 10
     cpath = os.path.join(tmp, "loop.yaml")
@@ -440,70 +484,131 @@ def run_main(argv):
 def test_simulated_loop():
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     try:
-        w, cpath = setup_world(tmp)
-        run_dir = os.path.join(tmp, "results", "loop")
-        args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "2"]
-        # first call: r000, r001, r002 (kept), r003 paused in training
-        assert run_main(args) == 0
-        st = json.load(open(os.path.join(run_dir, "status.json")))
-        assert st["state"] == "paused", st
-        state = json.load(open(os.path.join(run_dir, "state.json")))
-        assert [r["status"] for r in state["rounds"]] == ["reference", "record", "kept", "running"], state["rounds"]
-        plan3 = json.load(open(os.path.join(run_dir, "rounds", "r003", "stages", "plan.done.json")))
-        # second call: resumes r003 (same plan), rejects it, then r004
-        assert run_main(args) == 0, open(os.path.join(run_dir, "status.json")).read()
-        st = json.load(open(os.path.join(run_dir, "status.json")))
-        assert st["state"] == "finished", st
-        state = json.load(open(os.path.join(run_dir, "state.json")))
-        status = {r["round"]: r["status"] for r in state["rounds"]}
-        assert status == {0: "reference", 1: "record", 2: "kept", 3: "rejected", 4: "kept"}, state["rounds"]
-        assert json.load(open(os.path.join(run_dir, "rounds", "r003", "stages", "plan.done.json"))) == plan3
-        # r001 (first run): scored for the record, never the best
-        r1 = state["rounds"][1]
-        assert r1["gate"] == "22/40" and r1["would_keep"] is False
-        # r002 from the base, kept; confirm with a fresh seed
-        rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
-        import yaml
-        y2 = yaml.safe_load(open(os.path.join(rd(2), "train.yaml")))
-        assert "init_adapter" not in y2 and y2["expect_trainable_params"] == 79691776
-        # the agent-session recipe had no usable rows (100 < 500): skipped, round 3 used the default recipe
-        assert state["recipes_skipped"] == ["agent-sessions"] and "v4pro-1" in state["recipes_done"]
-        assert plan3["recipe"]["id"] == "default" and plan3["init"] == "best"
-        assert sum(len(ix) for _, ix in plan3["replay"]) == 25 and plan3["rows"] == 125  # 25% of 100 fresh rows
-        y3 = yaml.safe_load(open(os.path.join(rd(3), "train.yaml")))
-        assert y3["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
-        # r003 rejected: adapter, checkpoints and GGUF deleted; scores, plan and report kept
-        assert not os.path.exists(os.path.join(rd(3), "train", "adapter"))
-        assert not os.path.exists(os.path.join(rd(3), "train", "checkpoints"))
-        assert not os.path.exists(os.path.join(rd(3), "convert"))
-        assert os.path.exists(os.path.join(rd(3), "report.md")) and os.path.exists(os.path.join(rd(3), "gate.seed1002.jsonl"))
-        # r002 kept: adapter and GGUF kept
-        assert os.path.exists(os.path.join(rd(2), "train", "adapter")) and os.path.exists(os.path.join(rd(2), "convert"))
-        # r004 continued from r002 (the best), compared against r002's fresh-seed rows, and kept
-        y4 = yaml.safe_load(open(os.path.join(rd(4), "train.yaml")))
-        assert y4["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
-        d4 = json.load(open(os.path.join(rd(4), "stages", "decide.done.json")))
-        assert d4["keep"] and d4["best_round"] == 2 and d4["gate"]["wins"] == 5 and d4["gate"]["losses"] == 0
-        best = state["best"]
-        assert best["round"] == 4 and best["gate_seed"] == 1004 and len(best["lineage"]) == 4  # 2 sources x 2 rounds
-        # fresh rows every round, nothing from before the loop; rounds that continue r002 mix back in 25 of r002's
-        # rows, never the rejected r003's
-        qs = {n: [r["messages"][0]["content"] for r in E.read_jsonl(os.path.join(rd(n), "data", "mix", "train.jsonl"))]
-              for n in (2, 3, 4)}
-        assert [len(qs[n]) for n in (2, 3, 4)] == [100, 125, 125] and all(len(set(q)) == len(q) for q in qs.values())
-        q2, q3, q4 = (set(qs[n]) for n in (2, 3, 4))
-        assert len(q3 & q2) == 25 and len(q4 & q2) == 25 and not (q4 & (q3 - q2)), (len(q3 & q2), len(q4 & q2))
-        fresh = q2 | (q3 - q2) | (q4 - q2)
-        assert len(fresh) == 300 and "tachibana4_v4pro q0" not in fresh  # 89 + 11 per round; banaxi and agent-session unused
-        # milestone EvalPlus only on kept rounds
-        assert os.path.exists(os.path.join(rd(2), "stages", "milestone.done.json"))
-        assert not os.path.exists(os.path.join(rd(3), "stages", "milestone.done.json"))
-        summary = open(os.path.join(run_dir, "summary.md")).read()
-        assert summary.count("\n| ") >= 6 and "rejected" in summary
-        assert "KEPT" in open(os.path.join(rd(4), "report.md")).read()
-        check_child_commands(w.calls)
+        _simulated_loop(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _simulated_loop(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "2"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    ty = lambda n: yaml.safe_load(open(os.path.join(rd(n), "train.yaml")))  # noqa: E731
+    qs = lambda n: [r["messages"][0]["content"] for r in E.read_jsonl(os.path.join(rd(n), "data", "mix", "train.jsonl"))]  # noqa: E731
+    n_rows = lambda parts: sum(len(ix) for _, ix in parts)  # noqa: E731
+    # first call: r000, r001, r002 (kept), r003 paused in training
+    assert run_main(args) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "paused", st
+    state = json.load(open(os.path.join(run_dir, "state.json")))
+    assert [r["status"] for r in state["rounds"]] == ["reference", "record", "kept", "running"], state["rounds"]
+    plan3 = done(3, "plan")
+    # second call: resumes r003 (same plan), rejects it, then r004 takes r003's rows plus fresh ones and is kept
+    assert run_main(args) == 0, open(os.path.join(run_dir, "status.json")).read()
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "finished", st
+    state = json.load(open(os.path.join(run_dir, "state.json")))
+    status = {r["round"]: r["status"] for r in state["rounds"]}
+    assert status == {0: "reference", 1: "record", 2: "kept", 3: "rejected", 4: "kept"}, state["rounds"]
+    assert done(3, "plan") == plan3
+    # r001 (first run): scored for the record, never the best
+    r1 = state["rounds"][1]
+    assert r1["gate"] == "22/40" and r1["would_keep"] is False
+    # r002 from the base, kept; confirm with a fresh seed
+    y2 = ty(2)
+    assert "init_adapter" not in y2 and y2["expect_trainable_params"] == 79691776
+    assert done(2, "confirm")["confirmed"] and done(2, "confirm")["vs_previous_best"]["wins"] == 10
+    # the agent-session recipe had no usable rows (100 < 500): skipped; round 3 used the default recipe (the twin and rank-64
+    # recipes wait for their conditions, two-pass for short pools)
+    assert state["recipes_skipped"] == ["agent-sessions"] and state["recipes_done"] == ["v4pro-1", "agent-sessions"]
+    assert plan3["recipe"]["id"] == "default" and plan3["init"] == "best"
+    assert n_rows(plan3["replay"]) == 25 and plan3["rows"] == 125 and plan3["rolled"] == []  # 25% of 100 fresh rows
+    assert ty(3)["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
+    # r003 rejected: adapter, checkpoints and GGUF deleted; scores, plan and report kept; its rows roll forward
+    assert not os.path.exists(os.path.join(rd(3), "train", "adapter"))
+    assert not os.path.exists(os.path.join(rd(3), "train", "checkpoints"))
+    assert not os.path.exists(os.path.join(rd(3), "convert"))
+    assert os.path.exists(os.path.join(rd(3), "gate.seed1002.jsonl"))
+    assert "100 rows roll into the next round (attempt 2)" in open(os.path.join(rd(3), "report.md")).read()
+    # r002 kept: adapter and GGUF kept
+    assert os.path.exists(os.path.join(rd(2), "train", "adapter")) and os.path.exists(os.path.join(rd(2), "convert"))
+    # r004 continued r002 on r003's rows + 100 fresh + 25% replay of the 200 new rows, compared against r002's
+    # fresh-seed rows, and kept
+    plan4 = done(4, "plan")
+    assert plan4["rolled"] == [[n, ix] for n, ix in plan3["slices"].items()] and plan4["stack_attempt"] == 2
+    assert plan4["stack_rounds"] == [3, 4] and n_rows(plan4["replay"]) == 50 and plan4["rows"] == 250, plan4
+    assert ty(4)["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
+    d4 = done(4, "decide")
+    assert d4["keep"] and d4["best_round"] == 2 and d4["gate"]["wins"] == 5 and d4["gate"]["losses"] == 0
+    best = state["best"]
+    assert best["round"] == 4 and best["gate_seed"] == 1004 and best["init"] == "best" and state.get("stack") is None
+    assert len(best["lineage"]) == 6 and n_rows(best["lineage"]) == 300  # r002's, r003's and r004's fresh rows
+    # fresh rows every round, nothing from before the loop; replay only from the best's rows
+    q2, q3, q4 = (set(qs(n)) for n in (2, 3, 4))
+    assert [len(qs(n)) for n in (2, 3, 4)] == [100, 125, 250] and all(len(set(qs(n))) == len(qs(n)) for n in (2, 3, 4))
+    assert len(q3 & q2) == 25 and (q3 - q2) <= q4 and len(q4 & q2) == 50, (len(q3 & q2), len(q4 & q2))
+    fresh = q2 | (q3 - q2) | (q4 - q2)
+    assert len(fresh) == 300 and "tachibana4_v4pro q0" not in fresh  # 89 + 11 per round; banaxi and agent-session unused
+    assert os.path.exists(os.path.join(rd(2), "stages", "milestone.done.json"))
+    assert not os.path.exists(os.path.join(rd(3), "stages", "milestone.done.json"))
+    assert "KEPT" in open(os.path.join(rd(4), "report.md")).read()
+
+    # third call: r005 (retrain-vs-continue), r006-r008 (a stack rejected three times, one confirm failing),
+    # r009 (rank 64 after the dropped stack), r010 (inherits rank 64)
+    assert run_main(["--config", cpath, "--run-dir", run_dir, "--max-rounds", "6"]) == 0
+    state = json.load(open(os.path.join(run_dir, "state.json")))
+    status = {r["round"]: r["status"] for r in state["rounds"]}
+    assert [status[n] for n in range(5, 11)] == ["rejected"] * 4 + ["kept", "rejected"], state["rounds"]
+    # r005: every row r004 was built from, retrained from the base, scored on r004's confirm seed
+    p5 = done(5, "plan")
+    assert p5["recipe"]["id"] == "retrain-vs-continue" and p5["init"] == "base_lineage" and p5["slices"] == {}
+    assert p5["lineage"] == best["lineage"] and p5["rows"] == 300 and p5["replay"] == [] and p5["rolled"] == []
+    assert "init_adapter" not in ty(5) and set(qs(5)) == q2 | q3 | q4 and len(qs(5)) == 300
+    d5 = done(5, "decide")
+    assert d5["best_round"] == 4 and d5["gate"]["wins"] == 1 and not d5["keep"]
+    assert "Paired comparison" in open(os.path.join(rd(5), "report.md")).read()
+    # r006 rejected (stack of 100), r007 kept by the gate but its fresh-seed confirm lost, r008 at the 300-row cap
+    p6, p7, p8 = done(6, "plan"), done(7, "plan"), done(8, "plan")
+    assert (p6["rows"], p7["rows"], p8["rows"]) == (125, 250, 375) and p8["stack_attempt"] == 3
+    assert n_rows(p8["rolled"]) == 200 and p8["stack_rounds"] == [6, 7, 8]
+    assert done(7, "decide")["keep"] and not done(7, "confirm")["confirmed"]
+    r7 = [r for r in state["rounds"] if r["round"] == 7][0]
+    assert any("fresh-seed confirm" in x for x in r7["reasons"]) and not os.path.exists(os.path.join(rd(7), "convert"))
+    assert not os.path.exists(os.path.join(rd(7), "stages", "milestone.done.json"))
+    assert [(s["rows"], s["attempts"], s["rounds"]) for s in state["stacks_dropped"]] == [(300, 3, [6, 7, 8])]
+    # r009: rank 64 on the DeltaNet projections too, retrained from the base on every kept row + 100 fresh rows
+    p9, y9 = done(9, "plan"), ty(9)
+    assert p9["recipe"]["id"] == "rank64-dn" and p9["init"] == "base_lineage" and p9["rows"] == 400
+    assert y9["lora_r"] == 64 and y9["expect_trainable_params"] == 435159040 and "init_adapter" not in y9
+    assert "in_proj_qkv" in y9["target_modules"] and "out_proj" in y9["target_modules"]
+    best = state["best"]
+    assert best["round"] == 9 and best["lora_shape"]["lora_r"] == 64 and n_rows(best["lineage"]) == 400
+    # r010: the default recipe continues the rank-64 adapter instead of retraining a rank-16 one from the base
+    p10, y10 = done(10, "plan"), ty(10)
+    assert p10["recipe"]["id"] == "default" and p10["init"] == "best" and p10["rows"] == 125
+    assert y10["lora_r"] == 64 and y10["expect_trainable_params"] == 435159040
+    assert y10["init_adapter"].replace("/", os.sep) == os.path.join(rd(9), "train", "adapter")
+    assert state["stack"]["rows"] == 100 and state["stack"]["rounds"] == [10]
+
+    # fourth call: too few fresh rows for a round: two passes over r010's rows + the last fresh ones, then wait
+    assert run_main(["--config", cpath, "--run-dir", run_dir, "--max-rounds", "3"]) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "waiting" and "unused public rows" in st["detail"], st
+    p11, y11 = done(11, "plan"), ty(11)
+    assert p11["recipe"]["id"] == "two-pass" and y11["epochs"] == 2 and y11["lora_r"] == 64
+    assert y11["init_adapter"].replace("/", os.sep) == os.path.join(rd(9), "train", "adapter")
+    n_fresh11 = sum(len(ix) for ix in p11["slices"].values())
+    assert 0 < n_fresh11 < 30 and n_rows(p11["rolled"]) == 100 and p11["stack_attempt"] == 2
+    state = json.load(open(os.path.join(run_dir, "state.json")))
+    assert "two-pass" in state["recipes_done"] and state["stack"]["rows"] == 100 + n_fresh11
+    assert state["rounds"][-1]["round"] == 12 and state["rounds"][-1]["status"] == "running"  # waits to be planned
+    assert not os.path.exists(os.path.join(rd(12), "stages", "plan.done.json"))
+    summary = open(os.path.join(run_dir, "summary.md")).read()
+    assert summary.count("\n| ") >= 13 and "Rows waiting to roll into the next round" in summary
+    check_child_commands(w.calls)
 
 
 # ============================================================================================ command lines and sources
