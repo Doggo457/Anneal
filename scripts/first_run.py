@@ -4,9 +4,10 @@
                setup A (-np 4) then setup B (-np 4 + MTP, --spec-type draft-mtp). B is used only if its total
                generated tok/s is at least 3% higher. Projects hours for a 542-problem pass.
   2 generate   base GGUF on the chosen setup with --reasoning-budget 6144, -c 65536 (16k per slot), Vulkan coopmat
-               on (no LoRA): scripts/generate_traces.py on OpenCodeInstruct (tests run in the sandbox) until 1,020
-               rows are kept, then prepare_dataset.py --from-jsonl.
-  3 mix        mix_datasets.py: 1,000 self-generated rows + 1,000 OpenCodeReasoning rows.
+               on (no LoRA): scripts/generate_traces.py on OpenCodeInstruct (tests run in the sandbox) until 520
+               rows are kept, then prepare_dataset.py --from-jsonl. (Cut from 1,020 on 19 Oct 2026.)
+  3 mix        mix_datasets.py: 500 self-generated rows + 1,500 OpenCodeReasoning rows (ocr_first 1,000 +
+               ocr_first_b 500, a second draw de-duplicated against the first and the loop's held-out sets).
   4 train      train_longrun.py with experiments/2026-10-19_first-run.yaml (about 250 steps) in <run>/train.
   5 convert    the adapter to a GGUF LoRA (llama.cpp b11435 convert_lora_to_gguf.py, config-only --base).
   6 sanity     answer-token loss on the mix's val rows, base vs adapter (scripts/val_loss.py); 3 sample generations
@@ -63,10 +64,11 @@ OCI_FILES = [os.path.join(ROOT, "models", "hf", "hub", "datasets--nvidia--OpenCo
 RAW_SELF = os.path.join(ROOT, "data", "raw", "self_oci_r1.jsonl")
 PROC_SELF = os.path.join(ROOT, "data", "processed", "self_oci_r1")
 PROC_OCR = os.path.join(ROOT, "data", "processed", "ocr_first")
+PROC_OCR_B = os.path.join(ROOT, "data", "processed", "ocr_first_b")
 MIX = os.path.join(ROOT, "data", "processed", "mix_first_2k")
 TRAIN_CONFIG = os.path.join(ROOT, "experiments", "2026-10-19_first-run.yaml")
 CONVERT = os.path.join(ROOT, "llama.cpp", "b11435-src", "llama.cpp-b11435", "convert_lora_to_gguf.py")
-GEN_TARGET = 1020
+GEN_TARGET = 520  # 500 train + 10 val, with room for rows the 8,192-token check drops
 SANITY_PROMPTS = [
     ("function", "Write a Python function `merge_intervals(intervals)` that merges overlapping closed intervals given "
                  "as a list of [start, end] pairs and returns them sorted by start. Include a short docstring."),
@@ -358,7 +360,8 @@ class Controller:
     def mix(self):
         self.status("mix")
         rc = self.run_child([PY, "-u", os.path.join(ROOT, "scripts", "mix_datasets.py"),
-                             "--source", f"self={PROC_SELF}:1000", "--source", f"ocr={PROC_OCR}:1000",
+                             "--source", f"self={PROC_SELF}:500", "--source", f"ocr={PROC_OCR}:1000",
+                             "--source", f"ocr_b={PROC_OCR_B}:500",
                              "--tokenizer", SNAP, "--out", MIX], "mix.log")
         if rc != 0:
             raise RuntimeError(f"mix_datasets.py exited with {rc}")
