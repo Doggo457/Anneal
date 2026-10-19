@@ -43,6 +43,11 @@ Decontamination (--decontaminate) drops a row if it shares any 13-token window w
 MBPP+ prompt, or if its prompt has token-set Jaccard similarity above 0.8 with one. Both counts go in
 the data card. Needs `pip install evalplus`.
 
+--decontaminate-gate FILE (data/eval/decontam_extra.jsonl from build_evalsets.py) also drops rows that overlap the
+improvement loop's held-out gate or non-coding questions: at least 30% of a held-out problem's 13-grams in the row,
+or Jaccard > 0.8 on the prompt (anneal/evalsets.py OverlapIndex; a share, because contest statements share
+boilerplate that an any-match rule would flag everywhere).
+
 Output: <out>/train.jsonl, val.jsonl, and data_card.md with the counts.
 Each row: {"messages": [{"role": "user", ...}, {"role": "assistant", ...}]}
 """
@@ -52,6 +57,7 @@ import json
 import os
 import random
 import re
+import sys
 
 from datasets import load_dataset
 
@@ -137,6 +143,20 @@ class Decontaminator:
         return None
 
 
+def parse_where(spec):
+    """COL=VALUE or COL~TEXT -> (col, op, value)."""
+    for op in ("=", "~"):
+        col, sep, val = spec.partition(op)
+        if sep and col and "=" not in col and "~" not in col:
+            return col.strip(), op, val.strip().lower()
+    raise SystemExit(f"--where must be COL=VALUE or COL~TEXT, got {spec!r}")
+
+
+def where_ok(value, op, want):
+    v = "" if value is None else str(value).strip().lower()
+    return v == want if op == "=" else want in v
+
+
 def load_rows(name, config, split, data_files):
     """load_dataset with an optional config name and an optional shard subset (comma-separated)."""
     files = [f.strip() for f in data_files.split(",") if f.strip()] if data_files else None
@@ -185,6 +205,11 @@ def main():
     p.add_argument("--decontaminate", action="store_true", help="drop rows overlapping HumanEval+/MBPP+ prompts")
     p.add_argument("--decontaminate-extra", default=None,
                    help="file of extra evaluation questions to decontaminate against (JSONL or one per line)")
+    p.add_argument("--where", action="append", default=[],
+                   help="keep rows where COL=VALUE (exact, case-insensitive) or COL~TEXT (contains, case-insensitive); "
+                        "repeatable, all must hold")
+    p.add_argument("--decontaminate-gate", default=None,
+                   help="data/eval/decontam_extra.jsonl: drop rows overlapping the loop's held-out problems")
     p.add_argument("--ngram", type=int, default=13)
     p.add_argument("--jaccard", type=float, default=0.8)
     p.add_argument("--report-field", action="append", default=[],
@@ -209,6 +234,10 @@ def main():
     for f in args.report_field:
         if f not in ds.column_names:
             raise SystemExit(f"--report-field {f} not in columns: {ds.column_names}")
+    wheres = [parse_where(w) for w in args.where]
+    for col, _, _ in wheres:
+        if col not in ds.column_names:
+            raise SystemExit(f"--where {col} not in columns: {ds.column_names}")
 
     ds = ds.shuffle(seed=args.seed)
     count_tokens = TokenCounter(args.tokenizer) if args.tokenizer else None
@@ -216,7 +245,8 @@ def main():
         else f"max {args.max_chars} chars"
 
     counts = collections.Counter({k: 0 for k in ("examined", "too_short", "too_long", "no_think", "duplicate",
-                                                 "contaminated_ngram", "contaminated_jaccard")})
+                                                 "contaminated_ngram", "contaminated_jaccard", "contaminated_gate",
+                                                 "filtered_where")})
     seen_by = {f: collections.Counter() for f in args.report_field}
     kept_by = {f: collections.Counter() for f in args.report_field}
     per_prompt = collections.Counter()
@@ -224,6 +254,14 @@ def main():
     deco = Decontaminator.from_evalplus(args.ngram, args.jaccard, args.decontaminate_extra) if args.decontaminate else None
     if args.decontaminate and deco is None:
         print("  evalplus not installed; skipping decontamination (pip install evalplus)")
+    gate = None
+    if args.decontaminate_gate:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from anneal.evalsets import OverlapIndex
+        gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
+        if not len(gate):
+            raise SystemExit(f"{args.decontaminate_gate} holds no problems")
+        print(f"  held-out overlap check against {len(gate)} problems from {args.decontaminate_gate}")
     token_lengths = []
 
     rows = []
@@ -231,6 +269,9 @@ def main():
         if args.max_samples and len(rows) >= args.max_samples:
             break
         counts["examined"] += 1
+        if wheres and not all(where_ok(ex.get(c), op, v) for c, op, v in wheres):
+            counts["filtered_where"] += 1
+            continue
         for f in args.report_field:
             seen_by[f][str(ex[f])] += 1
         prompt = (ex[args.prompt_field] or "").strip()
@@ -270,6 +311,9 @@ def main():
             if hit:
                 counts[f"contaminated_{hit}"] += 1
                 continue
+        if gate is not None and gate.hits(prompt + "\n" + response, jaccard_text=prompt):
+            counts["contaminated_gate"] += 1
+            continue
         per_prompt[key] += 1
         seen_pairs.add(pair)
         if count_tokens:
@@ -318,7 +362,8 @@ def main():
                 f"require_think={'on' if args.require_think else 'off'}, "
                 f"decontamination={'on' if deco is not None else 'off'} "
                 f"({args.ngram}-gram on prompt+response and Jaccard > {args.jaccard} on prompt, "
-                f"vs HumanEval+/MBPP+).\n")
+                f"vs HumanEval+/MBPP+), row filters {args.where or 'none'}, held-out overlap check="
+                f"{'on (' + args.decontaminate_gate + ')' if gate is not None else 'off'}.\n")
         if token_lengths:
             s = sorted(token_lengths)
             q = lambda x: s[min(len(s) - 1, int(x * len(s)))]  # noqa: E731
