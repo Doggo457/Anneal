@@ -62,6 +62,9 @@ def main():
                    "best": {k: (state.get("best") or {}).get(k) for k in ("round", "name", "gate_seed")},
                    "rejects_in_row": state.get("rejects_in_row"), "recipes_done": state.get("recipes_done"),
                    "offsets": state.get("offsets"),
+                   "stack": {k: (state.get("stack") or {}).get(k) for k in ("rows", "attempts", "rounds")}
+                   if state.get("stack") else None,
+                   "stacks_dropped": len(state.get("stacks_dropped") or []),
                    "rounds": [{k: r.get(k) for k in ("round", "status", "recipe", "init", "rows", "gate", "gate_diff",
                                                       "p", "noncoding", "reasons", "failures", "last_error", "finished")}
                               for r in (state.get("rounds") or [])[-4:]],

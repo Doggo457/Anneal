@@ -12,13 +12,20 @@ Rounds (results/loop/rounds/rNNN):
   r001 first-run    the first run's adapter on the same sets, for the record (it trained on self-generated rows, so it
                     never becomes the best).
   r002 onwards      plan -> data -> train -> convert -> valloss -> evaluate -> decide [-> confirm -> milestone] -> finish
-    plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml, else `default_recipe`. Init: the
-               best adapter (training continues from it), or the base when the best is the base or the recipe changes
-               the LoRA shape ("base_lineage": retrain from the base on every slice the best was built from + new rows).
-               Data: the next unused rows of each public source pool (fresh rows every round, never reused). A round
-               that continues the best adapter also mixes back in `replay_fraction` x (fresh rows) of the rows the best
-               was built from (19 Oct 2026: kept rows carry forward), so earlier kept data isn't forgotten while
-               every round costs about the same; a rejected round's fresh rows never enter any later round.
+    plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml whose condition holds (after_kept,
+               after_dropped_stacks), else `default_recipe`. Init: the best adapter (training continues from it), or
+               the base when the best is the base or the recipe changes the LoRA shape ("base_lineage": retrain from
+               the base on every slice the best was built from + new rows). Later rounds inherit a kept LoRA shape.
+               Data: the next unused rows of each public source pool, split at a fixed ratio: when a source runs out
+               the round shrinks (others in its `group` stand in) rather than other sources taking its share. A round
+               that continues the best adapter also mixes back in `replay_fraction` x (new rows) of the rows the best
+               was built from (19 Oct 2026: kept rows carry forward).
+               Rejected rows roll forward (docs/growing-data-rounds.md): a rejected round's new rows join the next
+               round that draws from the default sources (the same best, plus fresh rows), up to `stack_max_new_rows`
+               new rows; a reject at the cap drops the stack for good. On 495 problems a real 2-point gain is kept
+               only 24-44% of the time, so a reject mostly means "too small to see" and a bigger step is the useful
+               next try. When the pools can't fill a round, a `when_pools_short` recipe (two passes over what is left)
+               runs once before the loop waits.
     data       slices of the source pools (data/processed/loop/SOURCE, prepared once by prepare_dataset.py or
                public_source.py with EvalPlus and held-out decontamination) mixed by mix_datasets.py.
     train      train_longrun.py (the `train` settings + the recipe's overrides, init_adapter for a continued adapter).
@@ -29,7 +36,9 @@ Rounds (results/loop/rounds/rNNN):
     decide     anneal/evalsets.decide: gate higher with a one-sided sign test p <= alpha; the CodeContests part and the
                non-coding check not worse beyond tolerance nor significantly worse; samples clean.
     confirm    (kept) the gate again with a fresh seed; those rows become the best's reference, so the next round is
-               compared against an unbiased score, not the lucky draw that got this one kept.
+               compared against an unbiased score, not the lucky draw that got this one kept. With
+               rules.confirm_net_win the fresh-seed rows must also win more problems than they lose against the best's
+               reference, or the round is rejected (offsets the extra tries that rolling rows forward gives).
     milestone  (kept) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact scoring server, paired against the
                base's first-run EvalPlus answers: the numbers that get reported.
     finish     state.json updated (best, rejects in a row); a rejected round's adapter, checkpoints and GGUF are
@@ -122,35 +131,113 @@ def pid_alive(pid):
 
 
 def spec_hash(src):
-    keep = {k: v for k, v in src.items() if k not in ("share", "note")}
+    keep = {k: v for k, v in src.items() if k not in ("share", "note", "group")}
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+SHAPE_KEYS = ("lora_r", "lora_alpha", "target_modules", "expect_trainable_params")
 
 
 def lora_shape(train_cfg):
     return {k: train_cfg.get(k) for k in ("lora_r", "lora_alpha", "target_modules")}
 
 
-def effective_train(cfg, recipe):
+def effective_train(cfg, recipe, best=None):
+    """The `train` settings + the recipe's overrides. The LoRA shape (and its parameter count check) comes from the
+    recipe if it sets one, else from the best adapter if a kept recipe changed it, else from `train`: after a
+    rank-up is kept, the default rounds continue that adapter instead of retraining a rank-16 one from the base."""
     t = copy.deepcopy(cfg["train"])
-    t.update(copy.deepcopy(recipe.get("train") or {}))
+    own = copy.deepcopy(recipe.get("train") or {})
+    shape = {k: own[k] for k in SHAPE_KEYS if k in own} or copy.deepcopy((best or {}).get("train_shape") or {})
+    if shape:
+        t.pop("expect_trainable_params", None)  # the count belongs to the shape it was given with
+        t.update(shape)
+    t.update({k: v for k, v in own.items() if k not in SHAPE_KEYS})
     return t
 
 
-def pick_recipe(cfg, state):
+def kept_rounds(state):
+    return sum(1 for r in state["rounds"] if r.get("status") == "kept")
+
+
+def recipe_ready(recipe, state):
+    """A recipe with after_kept / after_dropped_stacks waits until either count is reached; one with
+    when_best_continued waits until the best adapter was trained by continuing the one before it."""
+    if recipe.get("when_best_continued") and (state.get("best") or {}).get("init") != "best":
+        return False
+    have = {"after_kept": kept_rounds(state), "after_dropped_stacks": len(state.get("stacks_dropped") or [])}
+    conds = [(k, int(recipe[k])) for k in have if recipe.get(k)]
+    return not conds or any(have[k] >= v for k, v in conds)
+
+
+def pick_recipe(cfg, state, pools_short=False):
+    """The first queued recipe that is ready, else default_recipe. A recipe marked when_pools_short is only picked
+    when the pools can't fill a round (it runs before the loop waits), and only then."""
     for r in cfg.get("recipes") or []:
-        if r["id"] not in state["recipes_done"]:
+        if (r["id"] not in state["recipes_done"] and bool(r.get("when_pools_short")) == pools_short
+                and recipe_ready(r, state)):
             return copy.deepcopy(r)
     return copy.deepcopy(cfg["default_recipe"])
 
 
-def plan_counts(cfg, recipe, state, pool_rows):
-    """{source: rows to take} for this round, split by shares among the sources with rows left."""
-    rows = int(recipe.get("rows") or cfg["rows_per_round"])
-    shares = recipe.get("mix") or {s["name"]: s.get("share", 1.0) for s in cfg.get("sources") or []}
-    left = {n: pool_rows.get(n, 0) - state["offsets"].get(n, 0) for n in shares}
-    live = {n: float(w) for n, w in shares.items() if w and left.get(n, 0) > 0}
-    total_w = sum(live.values())
-    return {n: min(left[n], int(round(rows * w / total_w))) for n, w in live.items()} if live else {}
+def recipe_rows(cfg, recipe):
+    return int(recipe["rows"]) if recipe.get("rows") is not None else int(cfg["rows_per_round"])
+
+
+def takes_stack(recipe):
+    """Rolled-forward rows join rounds that draw new rows from the default sources (no `mix` of their own)."""
+    return bool(recipe.get("roll_forward", not recipe.get("mix") and recipe.get("rows") != 0))
+
+
+def apportion(total, weights, caps):
+    """Split `total` into integers by weight (largest remainder), none above its cap; what a capped key can't take
+    goes to the others."""
+    out = {k: 0 for k in weights}
+    live = [k for k in weights if weights[k] > 0 and caps.get(k, 0) > 0]
+    rem = int(total)
+    while rem > 0 and live:
+        tw = sum(weights[k] for k in live)
+        exact = {k: rem * weights[k] / tw for k in live}
+        give = {k: min(caps[k] - out[k], int(exact[k])) for k in live}
+        given = sum(give.values())
+        for k in sorted(live, key=lambda k: (int(exact[k]) - exact[k], -weights[k], str(k))):
+            if given >= rem:
+                break
+            if out[k] + give[k] < caps[k]:
+                give[k] += 1
+                given += 1
+        if not given:
+            break
+        for k in live:
+            out[k] += give[k]
+        rem -= given
+        live = [k for k in live if out[k] < caps[k]]
+    return out
+
+
+def plan_counts(cfg, recipe, state, pool_rows, rows=None):
+    """{source: rows to take} for this round. Sources without a usable pool drop out of the mix; otherwise the ratio
+    is held: when a source runs low the round shrinks so each group keeps its share (sources sharing a `group` stand
+    in for each other), instead of the remaining sources filling its place (e.g. a mostly-math round once the code
+    rows are used up)."""
+    rows = recipe_rows(cfg, recipe) if rows is None else int(rows)
+    srcs = {s["name"]: s for s in cfg.get("sources") or []}
+    shares = recipe.get("mix") or {n: s.get("share", 1.0) for n, s in srcs.items()}
+    w = {n: float(v) for n, v in shares.items() if v and n in pool_rows}
+    if rows <= 0 or not w:
+        return {}
+    left = {n: max(0, pool_rows[n] - state["offsets"].get(n, 0)) for n in w}
+    groups = {}
+    for n in w:
+        groups.setdefault((srcs.get(n) or {}).get("group") or n, []).append(n)
+    total_w = sum(w.values())
+    gshare = {g: sum(w[n] for n in ns) / total_w for g, ns in groups.items()}
+    gleft = {g: sum(left[n] for n in ns) for g, ns in groups.items()}
+    n_eff = min([rows] + [int(gleft[g] / gshare[g] + 1e-9) for g in groups])
+    out = {}
+    for g, take in apportion(n_eff, gshare, gleft).items():
+        out.update(apportion(take, {n: w[n] for n in groups[g]}, left))
+    return {n: k for n, k in out.items() if k > 0}
 
 
 def row_key(row):
@@ -568,7 +655,7 @@ class Loop(fr.Controller):
         conf = mile = None
         if d["keep"]:
             conf = self.run_stage("confirm", self.confirm, cfg, d)
-            if cfg.get("milestone_evalplus", True):
+            if conf.get("confirmed", True) and cfg.get("milestone_evalplus", True):
                 mile = self.run_stage("milestone", self.milestone, cfg)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile)
 
@@ -578,36 +665,66 @@ class Loop(fr.Controller):
         usable = {n: c for n, c in self.pool_rows(cfg).items()
                   if (self.read_json(os.path.join(POOLS, n, "pool.json")) or {}).get("usable", True)}
         used = self.used_keys()
+        stack = self.state.get("stack")
+        cap = int(cfg.get("stack_max_new_rows", 0) or 0)
+        short = False  # the pools can't fill a round: try a when_pools_short recipe before waiting
         while True:
-            recipe = pick_recipe(cfg, self.state)
-            counts = plan_counts(cfg, recipe, self.state, usable)
-            if sum(counts.values()) or recipe["id"] == "default":
+            recipe = pick_recipe(cfg, self.state, short)
+            tcfg = effective_train(cfg, recipe, best)
+            init = choose_init(recipe, best, tcfg)
+            take_stack = bool(stack) and takes_stack(recipe)
+            n_stack = stack["rows"] if take_stack else 0
+            target = recipe_rows(cfg, recipe)
+            if take_stack and cap:
+                target = min(target, cap - n_stack)
+            counts = plan_counts(cfg, recipe, self.state, usable, target)
+            why = None
+            mix = recipe.get("mix")
+            if recipe["id"] == "default":
+                pass
+            elif mix and not any(w and n in usable for n, w in mix.items()):
+                why = f"no usable pool among {sorted(mix)}"  # e.g. a pool under its minimum: skip it, don't stall
+            elif target <= 0 and init != "base_lineage":
+                why = "no new rows, and nothing to retrain from the base"
+            if why is not None:
+                self.log(f"recipe {recipe['id']}: {why}; skipped")
+                self.state["recipes_done"].append(recipe["id"])
+                self.state.setdefault("recipes_skipped", []).append(recipe["id"])
+                self.save()
+                continue
+            slices, offsets, new_keys = {}, {}, set(used)
+            for n, take in counts.items():
+                idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys)
+                offsets[n] = nxt
+                if idx:
+                    slices[n] = idx
+            n_new = sum(len(v) for v in slices.values())
+            if recipe.get("when_pools_short"):  # whatever is left: rolled-forward rows + the last fresh rows
+                need, have = int(recipe.get("min_rows", 100)), n_new + n_stack
+            else:
+                need, have = min(int(cfg.get("min_rows_per_round", 500)), target), n_new
+            if target <= 0 or have >= need:
                 break
-            # a queued recipe whose sources have no usable rows (e.g. a pool under its minimum): skip it, don't stall
-            self.log(f"recipe {recipe['id']}: no usable rows in {recipe.get('mix')}; skipped")
-            self.state["recipes_done"].append(recipe["id"])
-            self.state.setdefault("recipes_skipped", []).append(recipe["id"])
-            self.save()
-        tcfg = effective_train(cfg, recipe)
-        init = choose_init(recipe, best, tcfg)
-        slices, offsets, new_keys = {}, {}, set(used)
-        for n, take in counts.items():
-            idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys)
-            offsets[n] = nxt
-            if idx:
-                slices[n] = idx
-        n_new = sum(len(v) for v in slices.values())
-        if n_new < int(cfg.get("min_rows_per_round", 500)):
-            raise Waiting(f"only {n_new} unused public rows available (need {cfg.get('min_rows_per_round', 500)}); "
+            if not short and any(r.get("when_pools_short") and r["id"] not in self.state["recipes_done"]
+                                 and recipe_ready(r, self.state) for r in cfg.get("recipes") or []):
+                self.log(f"only {n_new} unused public rows at the configured mix (need {need}): trying the "
+                         f"when_pools_short recipe before waiting")
+                short = True
+                continue
+            raise Waiting(f"only {have} unused public rows available at the configured mix (need {need}); "
                           "add sources to experiments/loop.yaml")
         self.state["offsets"].update(offsets)
         self.add_used_keys(new_keys - used)
         lineage = best["lineage"] if init == "base_lineage" else []
+        rolled = copy.deepcopy(stack["slices"]) if take_stack else []
+        n_rolled = sum(len(ix) for _, ix in rolled)
         frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
-        replay = pick_replay(best["lineage"], int(round(frac * n_new)), self.rnum) if init == "best" else []
+        replay = pick_replay(best["lineage"], int(round(frac * (n_new + n_rolled))), self.rnum) if init == "best" else []
         plan = {"recipe": recipe, "init": init, "init_adapter": best["adapter"] if init == "best" else None,
-                "slices": slices, "lineage": lineage, "replay": replay,
-                "rows": n_new + sum(len(ix) for _, ix in lineage) + sum(len(ix) for _, ix in replay),
+                "slices": slices, "rolled": rolled, "lineage": lineage, "replay": replay,
+                "stack_eligible": takes_stack(recipe), "stack_attempt": (stack["attempts"] + 1) if take_stack else 1,
+                "stack_rounds": (stack["rounds"] if take_stack else []) + [self.rnum],
+                "rows": n_new + n_rolled + sum(len(ix) for _, ix in lineage) + sum(len(ix) for _, ix in replay),
                 "best_round": best["round"], "train": tcfg}
         self.save()  # offsets advance with the plan, so a crash never hands these rows to another round
         return self.mark_done("plan", plan)
@@ -637,6 +754,8 @@ class Loop(fr.Controller):
         root = os.path.join(self.rdir, "data")
         parts = {}
         for name, idx in plan["lineage"]:
+            parts.setdefault(name, []).extend(idx)
+        for name, idx in plan.get("rolled") or []:
             parts.setdefault(name, []).extend(idx)
         for name, idx in plan["slices"].items():
             parts.setdefault(name, []).extend(idx)
@@ -669,8 +788,6 @@ class Loop(fr.Controller):
         if plan["init_adapter"]:
             require_script("train_longrun.py", "def load_init_adapter")
             t["init_adapter"] = plan["init_adapter"].replace("\\", "/")
-        if lora_shape(t) != lora_shape(cfg["train"]):
-            t.pop("expect_trainable_params", None)  # only valid for the default LoRA shape
         ypath = os.path.join(self.rdir, "train.yaml")
         with open(ypath, "w", encoding="utf-8") as fh:
             fh.write(f"# loop round {self.rnum}: recipe {plan['recipe']['id']}, init {plan['init']} (scripts/loop.py)\n")
@@ -753,8 +870,11 @@ class Loop(fr.Controller):
         finally:
             self.unserve()
         best_old = [r for r in E.read_jsonl(self.state["best"]["gate_rows"]) if r["seed"] == self.state["best"]["gate_seed"]]
+        vs = E.compare(best_old, rows)
+        need = bool(cfg["rules"].get("confirm_net_win"))
         return self.mark_done("confirm", {"gate_rows": path, "gate_seed": seed, "pass": sum(r["pass"] for r in rows),
-                                          "n": len(rows), "vs_previous_best": E.compare(best_old, rows)})
+                                          "n": len(rows), "vs_previous_best": vs, "net_win_required": need,
+                                          "confirmed": (not need) or vs["wins"] > vs["losses"]})
 
     def milestone(self, cfg):
         """EvalPlus seed 1 with the first run's exact scoring server, paired against the base's first-run answers."""
@@ -791,24 +911,48 @@ class Loop(fr.Controller):
     def finish(self, cfg, plan, ev, d, conf, mile):
         rec = self.round_record()
         best = self.state["best"]
-        if d["keep"]:
+        reasons = list(d["reasons"])
+        if d["keep"] and conf and not conf.get("confirmed", True):
+            c = conf["vs_previous_best"]
+            reasons.append(f"the fresh-seed confirm did not win more problems than it lost against the best "
+                           f"({c['wins']} wins / {c['losses']} losses)")
+        kept = d["keep"] and (conf is None or conf.get("confirmed", True))
+        new_rows = [[n, list(idx)] for n, idx in plan.get("rolled") or []] + [[n, idx] for n, idx in plan["slices"].items()]
+        n_new = sum(len(ix) for _, ix in new_rows)
+        if kept:
             self.state["best"] = {"round": self.rnum, "name": f"r{self.rnum:03d}",
                                   "adapter": os.path.join(self.rdir, "train", "adapter"), "gguf": self.round_gguf(),
                                   "gate_rows": conf["gate_rows"], "gate_seed": conf["gate_seed"],
                                   "lineage": (plan["lineage"] if plan["init"] == "base_lineage" else best["lineage"])
-                                  + [[n, idx] for n, idx in plan["slices"].items()],
-                                  "lora_shape": lora_shape(plan["train"])}
+                                  + new_rows,
+                                  "lora_shape": lora_shape(plan["train"]), "init": plan["init"],
+                                  "train_shape": {k: plan["train"][k] for k in SHAPE_KEYS if plan["train"].get(k) is not None},
+                                  "recipe": plan["recipe"]["id"]}
             self.state["rejects_in_row"] = 0
+            if plan.get("rolled"):
+                self.state["stack"] = None  # its rows are in the best's lineage now
             rec["status"] = "kept"
         else:
             self.state["rejects_in_row"] += 1
             rec["status"] = "rejected"
             rec["freed_bytes"] = safe_delete(self.rdir, ["train/adapter", "train/checkpoints", "train/milestones",
                                                          "train/branches", "convert"], self.log)
+            if plan.get("stack_eligible") and n_new:
+                cap = int(cfg.get("stack_max_new_rows", 0) or 0)
+                entry = {"rows": n_new, "attempts": plan.get("stack_attempt", 1),
+                         "rounds": plan.get("stack_rounds") or [self.rnum]}
+                if cap and n_new + int(cfg.get("min_rows_per_round", 500)) <= cap:
+                    self.state["stack"] = dict(entry, slices=new_rows)
+                    rec["stack"] = f"{n_new} rows roll into the next round (attempt {entry['attempts'] + 1})"
+                else:
+                    self.state["stack"] = None
+                    self.state.setdefault("stacks_dropped", []).append(dict(entry, dropped=time.strftime("%Y-%m-%d %H:%M:%S")))
+                    rec["stack"] = f"{n_new} rows dropped after {entry['attempts']} tries"
+                self.log(f"round {self.rnum}: {rec['stack']}")
         if plan["recipe"]["id"] != "default" and plan["recipe"]["id"] not in self.state["recipes_done"]:
             self.state["recipes_done"].append(plan["recipe"]["id"])
         rec.update(gate=f"{ev['gate_pass']}/{ev['gate_n']}", gate_diff=d["gate"]["diff"], p=d["gate"]["p_one_sided"],
-                   noncoding=ev["noncoding_accuracy"], reasons=d["reasons"], best_before=d["best_round"],
+                   noncoding=ev["noncoding_accuracy"], reasons=reasons, best_before=d["best_round"],
                    evalplus=(mile or {}).get("datasets"), finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.save()
         self.write_report(cfg, rec, ev, d, plan, conf, mile)
@@ -821,8 +965,10 @@ class Loop(fr.Controller):
         g, cc, oci, nc = d["gate"], d["gate_cc"], d["gate_oci"], d["noncoding"]
         L = [f"# Loop round {self.rnum} ({rec.get('name') or 'r%03d' % self.rnum}): {rec['status'].upper()}", "",
              f"Compared with round {d['best_round']} (the best so far). Rules: {json.dumps(d['rules'])}.", ""]
-        if d["reasons"]:
-            L += ["Not kept because: " + "; ".join(d["reasons"]) + ".", ""]
+        reasons = rec.get("reasons") if rec.get("reasons") is not None else d["reasons"]
+        if reasons:
+            L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
+                  + "; ".join(reasons) + ".", ""]
         L += ["| set | n | best | this round | diff | wins / losses | one-sided p |", "|---|---|---|---|---|---|---|"]
         for name, c in (("gate (all)", g), ("CodeContests", cc), ("OpenCodeInstruct held-out", oci)):
             if c["n"]:
@@ -838,10 +984,16 @@ class Loop(fr.Controller):
         if plan:
             L += ["", "## Recipe and data", "", f"Recipe `{plan['recipe']['id']}`: {plan['recipe'].get('note', '')}",
                   f"Init: {plan['init']}" + (f" ({plan['init_adapter']})" if plan["init_adapter"] else ""),
-                  f"Fresh rows: {json.dumps({n: len(i) for n, i in plan['slices'].items()})}; earlier kept rows mixed "
-                  f"back in: {sum(len(i) for _, i in plan.get('replay') or [])}; rows from the best's lineage (retrain "
-                  f"from the base): {sum(len(i) for _, i in plan['lineage'])}.", "",
-                  (self.done("data") or {}).get("card", ""),
+                  f"Fresh rows: {json.dumps({n: len(i) for n, i in plan['slices'].items()})}; rows rolled forward from "
+                  f"rejected rounds {(plan.get('stack_rounds') or [])[:-1]}: {sum(len(i) for _, i in plan.get('rolled') or [])}"
+                  f"{' (try %d with these rows)' % plan['stack_attempt'] if plan.get('rolled') else ''}; earlier kept rows "
+                  f"mixed back in: {sum(len(i) for _, i in plan.get('replay') or [])}; rows from the best's lineage "
+                  f"(retrain from the base): {sum(len(i) for _, i in plan['lineage'])}."
+                  + (f" {rec['stack']}." if rec.get("stack") else ""), ""]
+            if plan["init"] == "base_lineage" and not plan["slices"] and not plan.get("rolled"):
+                L += [f"Paired comparison: every row the best (round {plan['best_round']}) was built from, retrained from "
+                      f"the base instead of continued; scored against the best's fresh-seed rows.", ""]
+            L += [(self.done("data") or {}).get("card", ""),
                   "", "## Training", "", json.dumps({k: v for k, v in (self.done("train") or {}).items()
                                                      if k not in ("metrics",)}, default=str)]
             vl = self.done("valloss") or {}
@@ -852,7 +1004,9 @@ class Loop(fr.Controller):
         if conf:
             c = conf["vs_previous_best"]
             L += ["", f"Confirm (fresh seed {conf['gate_seed']}): {conf['pass']}/{conf['n']}; vs previous best "
-                      f"{c['diff']:+.4f} ({c['wins']} / {c['losses']}, p {c['p_one_sided']:.4f})."]
+                      f"{c['diff']:+.4f} ({c['wins']} / {c['losses']}, p {c['p_one_sided']:.4f})"
+                      + ("; net win required: " + ("yes, passed" if conf.get("confirmed", True) else "not met")
+                         if conf.get("net_win_required") else "") + "."]
         if mile:
             L += ["", "## EvalPlus (seed 1, the first run's scoring server)", "", "| | base tests | base+extra | vs base (base+extra) |",
                   "|---|---|---|---|"]
@@ -867,7 +1021,10 @@ class Loop(fr.Controller):
     def write_summary(self):
         best = self.state.get("best") or {}
         L = ["# Improvement loop", "", f"Updated {time.strftime('%Y-%m-%d %H:%M:%S')}. Best so far: round "
-             f"{best.get('round')} ({best.get('name')}). Rejects in a row: {self.state['rejects_in_row']}.", "",
+             f"{best.get('round')} ({best.get('name')}). Rejects in a row: {self.state['rejects_in_row']}."
+             + (f" Rows waiting to roll into the next round: {self.state['stack']['rows']} from rounds "
+                f"{self.state['stack']['rounds']}." if self.state.get("stack") else "")
+             + (f" Rolled-forward stacks dropped: {len(self.state['stacks_dropped'])}." if self.state.get("stacks_dropped") else ""), "",
              "| round | recipe | init | rows | gate | diff vs best | p | non-coding | result | EvalPlus+ HE / MBPP |",
              "|---|---|---|---|---|---|---|---|---|---|"]
         for r in self.state["rounds"]:
