@@ -1,0 +1,105 @@
+# Rate limiting an HTTP client
+
+When a service talks to a third-party API, the API usually publishes a limit such as "100 requests per minute per key". Going over it gets you HTTP 429 responses, and some providers block the key for a while if you keep trying. The simplest client-side protection is a token bucket: the bucket holds up to `capacity` tokens, refills at a steady `rate` per second, and every request has to take one token before it is sent. Bursts are allowed up to the capacity, but the long-run average can never exceed the refill rate.
+
+The implementation below is deliberately small. It uses a monotonic clock, so changes to the wall clock (daylight saving, NTP corrections) cannot hand out extra tokens, and it computes the refill lazily when someone asks for a token instead of running a background timer.
+
+```python
+import threading
+import time
+
+
+class TokenBucket:
+    """A thread-safe token bucket.
+
+    capacity: the largest burst that is allowed.
+    rate: tokens added per second.
+    """
+
+    def __init__(self, capacity: int, rate: float):
+        if capacity <= 0 or rate <= 0:
+            raise ValueError("capacity and rate must be positive")
+        self.capacity = capacity
+        self.rate = rate
+        self._tokens = float(capacity)
+        self._updated = time.monotonic()
+        self._lock = threading.Lock()
+
+    def _refill(self) -> None:
+        now = time.monotonic()
+        elapsed = now - self._updated
+        self._tokens = min(self.capacity, self._tokens + elapsed * self.rate)
+        self._updated = now
+
+    def try_acquire(self, n: int = 1) -> bool:
+        with self._lock:
+            self._refill()
+            if self._tokens >= n:
+                self._tokens -= n
+                return True
+            return False
+
+    def acquire(self, n: int = 1, timeout: float | None = None) -> bool:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            with self._lock:
+                self._refill()
+                if self._tokens >= n:
+                    self._tokens -= n
+                    return True
+                wait = (n - self._tokens) / self.rate
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                wait = min(wait, remaining)
+            time.sleep(wait)
+```
+
+Two details are easy to get wrong. First, `acquire` releases the lock before sleeping; holding it while sleeping would stall every other thread, including the ones that only call `try_acquire`. Second, the wait time is computed from the shortfall, not from a fixed polling interval, so a caller that needs one token at ten tokens per second sleeps about a tenth of a second rather than spinning.
+
+A quick test makes the behaviour concrete. With a capacity of five and a rate of two per second, the first five calls succeed immediately and the sixth has to wait roughly half a second:
+
+```python
+def test_burst_then_wait():
+    bucket = TokenBucket(capacity=5, rate=2.0)
+    assert all(bucket.try_acquire() for _ in range(5))
+    assert not bucket.try_acquire()
+    start = time.monotonic()
+    assert bucket.acquire(timeout=2.0)
+    assert 0.4 < time.monotonic() - start < 0.8
+```
+
+Timing assertions like the last one are fragile on a loaded CI machine, so in a real test suite you would inject a fake clock instead of calling `time.monotonic` directly. The same idea carries over to other languages. In JavaScript, for example, a promise-based version keeps the same arithmetic and replaces the sleep with a timer:
+
+```javascript
+class TokenBucket {
+  constructor(capacity, rate) {
+    this.capacity = capacity;
+    this.rate = rate;
+    this.tokens = capacity;
+    this.updated = performance.now();
+  }
+
+  refill() {
+    const now = performance.now();
+    const elapsed = (now - this.updated) / 1000;
+    this.tokens = Math.min(this.capacity, this.tokens + elapsed * this.rate);
+    this.updated = now;
+  }
+
+  async acquire(n = 1) {
+    for (;;) {
+      this.refill();
+      if (this.tokens >= n) {
+        this.tokens -= n;
+        return;
+      }
+      const waitMs = ((n - this.tokens) / this.rate) * 1000;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+}
+```
+
+Finally, remember that a client-side bucket only protects one process. If several workers share an API key, they need a shared limiter, for example a counter in Redis with an expiry, or the server's own `Retry-After` header has to be honoured when a 429 does come back.

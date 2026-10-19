@@ -1,0 +1,7 @@
+torch==2.11.0+rocm7.14.0
+torchvision==0.26.0+rocm7.14.0
+torchaudio==2.11.0+rocm7.14.0
+triton ; sys_platform == 'never'
+xformers ; sys_platform == 'never'
+triton-windows==3.7.1.post27
+bitsandbytes==0.50.2

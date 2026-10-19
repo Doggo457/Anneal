@@ -59,8 +59,11 @@ they pass, so the total can exceed it by up to N-1.
 Every rejected prompt is written to <out>.rejected as "sha1<TAB>reason", so --resume never regenerates
 it and --retry-rejected can pick out the ones that failed their tests.
 
-Notes: --run-tests executes model-written code on this machine. Run it in a throwaway user account
-with nothing valuable if the prompts are not fully trusted.
+Notes: --run-tests executes model-written code, so on this machine it runs only in the code sandbox
+(anneal/sandbox.py: an AppContainer with no capabilities, so no network and no access to user files, inside
+a job object with a 4 GiB memory limit and no subprocesses; results/sandbox_findings.md). --run-tests is
+refused if the sandbox isn't set up. Each assert run gets --test-timeout seconds and each stdin/stdout case
+--io-test-timeout seconds of wall clock, each in a fresh scratch folder.
 """
 import argparse
 import ast
@@ -68,12 +71,15 @@ import hashlib
 import json
 import math
 import os
-import subprocess
 import sys
-import tempfile
 import time
 import urllib.request
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # C:\AI\training
+from anneal import sandbox  # noqa: E402
+
+TEST_MEM_BYTES = 4 << 30  # job memory limit per test run
 
 SYSTEM = None  # optional system prompt; keep None unless the eval uses one too
 PY_TAGS = ("python", "py", "python3", "")
@@ -205,16 +211,9 @@ def extract_code(text):
 
 
 def run_assert_tests(code, tests, timeout):
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "candidate.py")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(code + "\n\n" + tests + "\n")
-        try:
-            r = subprocess.run([sys.executable, path], capture_output=True, text=True, timeout=timeout, cwd=d,
-                               stdin=subprocess.DEVNULL)
-            return r.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False
+    r = sandbox.run(["candidate.py"], files={"candidate.py": code + "\n\n" + tests + "\n"}, timeout_s=timeout,
+                    mem_bytes=TEST_MEM_BYTES)
+    return r.returncode == 0 and not r.timed_out
 
 
 def outputs_match(got, want, rel=1e-6):
@@ -236,18 +235,11 @@ def outputs_match(got, want, rel=1e-6):
 
 
 def run_io_tests(code, cases, timeout):
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "candidate.py")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(code + "\n")
-        for stdin, expected in cases:
-            try:
-                r = subprocess.run([sys.executable, path], input=stdin, capture_output=True, text=True,
-                                   timeout=timeout, cwd=d)
-            except subprocess.TimeoutExpired:
-                return False
-            if r.returncode != 0 or not outputs_match(r.stdout, expected):
-                return False
+    for stdin, expected in cases:
+        r = sandbox.run(["candidate.py"], stdin=stdin.encode("utf-8"), files={"candidate.py": code + "\n"},
+                        timeout_s=timeout, mem_bytes=TEST_MEM_BYTES)
+        if r.timed_out or r.returncode != 0 or not outputs_match(r.stdout.decode("utf-8", "replace"), expected):
+            return False
     return True
 
 
@@ -385,6 +377,9 @@ def main():
         STDIO_SUFFIX if args.test_format == "stdio" else "")
     if args.run_tests and not (fields or args.prompts_jsonl):
         raise SystemExit("--run-tests needs --tests-field (or a prompts JSONL with a tests key)")
+    if args.run_tests and not sandbox.available():
+        raise SystemExit("--run-tests runs model-written code and needs the code sandbox, which isn't set up: "
+                         "python -m anneal.sandbox --setup (see results/sandbox_findings.md)")
 
     deco = None
     if args.decontaminate:

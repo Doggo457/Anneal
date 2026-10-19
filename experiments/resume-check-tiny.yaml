@@ -1,0 +1,26 @@
+# Resume test on the small qwen3_5 model (tests/resume_check.py): 6 steps straight vs 3 + STOP + resume to 6.
+run_name: resume-check-tiny
+base_model: Qwen/Qwen3.5-0.8B
+train_file: C:/AI/training/data/processed/ocr_first/train.jsonl
+max_samples: 64
+seq_len: 4096
+batch_size: 1
+grad_accum: 2
+max_steps: 6
+lr: 1.0e-4
+optim: adamw_8bit
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+completion_only: true
+chat_template_kwargs: {enable_thinking: true}
+schedule: wsd
+warmup_steps: 2
+decay_fraction: 0.5
+min_lr_ratio: 0.0
+save_steps: 3
+save_total_limit: 3
+seed: 42
+gdn_heads: stock
+short_conv: shift

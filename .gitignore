@@ -1,14 +1,32 @@
 # Large artefacts
 models/**
 !models/README.md
-data/raw/**
-data/processed/**
+data/**
+!data/README.md
 results/samples/**
 *.gguf
 *.safetensors
 *.bin
 *.pt
 *.pth
+*.npz
+
+# Run outputs: keep summaries, metrics and findings; drop weights, checkpoints and raw logs
+results/**/adapter/
+results/**/checkpoint*/
+results/**/checkpoints/
+results/**/gguf/
+results/**/*.log
+results/**/status.json
+results/**/stdout.txt
+results/**/*.sha256
+
+# Machine-only folders in C:\AI\training
+llama.cpp/
+sandbox/
+logs/
+cloud_originals/
+unsloth_compiled_cache/
 
 # Training outputs
 outputs/

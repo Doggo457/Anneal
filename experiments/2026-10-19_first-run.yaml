@@ -1,0 +1,35 @@
+# First real adapter (Anneal, 19 Oct 2026): 1,000 self-generated test-passing rows (base model on OpenCodeInstruct
+# prompts) + 1,000 OpenCodeReasoning split_0 rows, 4-bit QLoRA on Qwen3.8-27B. scripts/train_longrun.py.
+run_name: first-run-2k-r16
+base_model: C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299
+train_file: C:/AI/training/data/processed/mix_first_2k/train.jsonl
+val_file: C:/AI/training/data/processed/mix_first_2k/val.jsonl
+seq_len: 8192
+batch_size: 1
+grad_accum: 8
+epochs: 1
+lr: 1.0e-4
+optim: adamw_8bit
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+expect_trainable_params: 79691776   # smoke-27b-stock: MLP of all 64 layers + q/k/v/o of the 16 attention layers
+completion_only: true
+chat_template_kwargs: {enable_thinking: true}
+schedule: wsd
+warmup_steps: 20
+decay_fraction: 0.2
+min_lr_ratio: 0.0
+save_steps: 10
+save_total_limit: 3
+eval_steps: 0
+seed: 42
+gdn_heads: stock
+short_conv: shift
+# Memory on this GPU (results/first_run_plan.md): a fixed fused-CE chunk budget instead of "half of free memory",
+# because HIP's free counter (dedicated + part of shared) reads 0 on ~7.9k-token rows while training still fits;
+# verified against an unfused loss (tests/ce_check.py, |diff| < 1e-5) and on the longest 8,188-token rows.
+ce_target_gb: 2
+empty_cache_between_microbatches: true
+pinned_offload: false
