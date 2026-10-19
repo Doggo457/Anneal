@@ -100,3 +100,4 @@ Every project decision, newest at the bottom. The September entries come from my
 | 2026-10-19 | Version control | I keep the whole project in a private GitHub repo, Doggo457/Anneal. |
 | 2026-10-19 | Repo layout | My repo mirrors C:\AI\training (anneal/, scripts/, tests/, experiments/, results/), with docs/, setup/, dissertation/ and this log alongside. |
 | 2026-10-19 | What goes in git | No model weights, datasets, checkpoints, raw logs or secrets go in git. Results keep the findings notes plus their summaries and metrics, stored byte for byte as the machine wrote them; other text is stored with LF line endings. |
+| 2026-10-19 | AI-use statement | My outline cover carries my AI-use statement, under the date and outside the 4,000-word count. |
