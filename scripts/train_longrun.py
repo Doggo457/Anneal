@@ -29,6 +29,9 @@ Long-run config keys (defaults in brackets):
   warm_up_longest_row: [true]  one forward + backward on the longest row before step 1 (gradients dropped)
   ce_target_gb: []             fixed memory budget for Unsloth's fused cross entropy (UNSLOTH_CE_LOSS_TARGET_GB)
   mem_debug: [false]           log memory just before the loss in every forward
+  init_adapter: []             start the LoRA from a saved adapter folder instead of fresh weights (the improvement
+                               loop continues its best adapter). Same r, lora_alpha and target modules required; every
+                               tensor is checked equal after loading. Ignored once a checkpoint exists (resume wins).
 
 Resume: re-running the same command continues from the newest checkpoint in <run dir>/checkpoints with
 the optimizer, scheduler, RNG and data position restored (Hugging Face Trainer). It refuses to resume if
@@ -278,6 +281,38 @@ def main():
         return 1
 
 
+def load_init_adapter(model, path, lora):
+    """Copy a saved adapter's LoRA weights into the freshly created LoRA (shapes must match), then prove every tensor
+    arrived. Returns a small report for summary.json."""
+    import torch
+    from peft import get_peft_model_state_dict, set_peft_model_state_dict
+    from safetensors.torch import load_file
+
+    with open(os.path.join(path, "adapter_config.json"), encoding="utf-8") as f:
+        ac = json.load(f)
+    want = {"r": lora["r"], "lora_alpha": lora["lora_alpha"], "target_modules": sorted(lora["target_modules"])}
+    have = {"r": int(ac["r"]), "lora_alpha": int(ac["lora_alpha"]),
+            "target_modules": sorted(ac["target_modules"]) if isinstance(ac["target_modules"], list) else ac["target_modules"]}
+    if want != have:
+        raise RuntimeError(f"init_adapter {path} has {have}, this run wants {want}")
+    saved = load_file(os.path.join(path, "adapter_model.safetensors"))
+    current = get_peft_model_state_dict(model)
+    if set(saved) != set(current):
+        missing, extra = sorted(set(current) - set(saved)), sorted(set(saved) - set(current))
+        raise RuntimeError(f"init_adapter keys differ: {len(missing)} missing (e.g. {missing[:2]}), "
+                           f"{len(extra)} unexpected (e.g. {extra[:2]})")
+    res = set_peft_model_state_dict(model, saved)
+    if getattr(res, "unexpected_keys", None):
+        raise RuntimeError(f"init_adapter: unexpected keys {res.unexpected_keys[:3]}")
+    after = get_peft_model_state_dict(model)
+    bad = [k for k, v in saved.items() if not torch.equal(after[k].detach().cpu().to(v.dtype), v)]
+    if bad:
+        raise RuntimeError(f"init_adapter: {len(bad)} tensors differ after loading (e.g. {bad[:2]})")
+    rep = {"path": path, "tensors": len(saved), "parameters": sum(v.numel() for v in saved.values())}
+    print(f"init_adapter: loaded and verified {rep['tensors']} tensors ({rep['parameters']:,} parameters) from {path}")
+    return rep
+
+
 def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     # Same data or nothing: resuming against a changed file would silently train on different rows.
     digest = sha256_file(cfg["train_file"])
@@ -347,6 +382,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
         model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", **lora))
     model.print_trainable_parameters()
+    init_report = load_init_adapter(model, cfg["init_adapter"], lora) if cfg.get("init_adapter") else None
     if cfg.get("mem_debug"):
         install_mem_probe(run, model)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -548,6 +584,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         "peak_reserved_gib": round(torch.cuda.max_memory_reserved() / 2**30, 1) if on_gpu else None,
         "metrics": result.metrics,
         "data_sha256": digest,
+        "init_adapter": init_report,
     }
     if not stopped_early:
         adapter_dir = os.path.join(summary_dir, "adapter")
