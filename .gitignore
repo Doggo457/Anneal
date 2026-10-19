@@ -44,3 +44,6 @@ __pycache__/
 # Secrets
 .env
 *.token
+
+# Outline build: generated figure page
+dissertation/build/fig1.html
