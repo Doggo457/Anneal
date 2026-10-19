@@ -6,8 +6,8 @@ asks the portal (http://127.0.0.1:8080/api/training) what state the runs are in 
   - first-run finished, no "loop" run yet, held-out sets built  -> start scripts/loop.py as the Training page run "loop"
   - loop ended by a crash or reboot                             -> resume it
   - loop failed                                                 -> resume it, at most 3 times in 24 hours
-  - loop waiting (no unused rows / low disk)                    -> resume it once experiments/loop.yaml has changed,
-                                                                   or 6 hours later to re-check disk and data
+  - loop waiting (no unused rows / low disk / old scripts)      -> resume it once experiments/loop.yaml has changed or
+                                                                   staged scripts were installed, or 6 hours later
 Anything paused or stopped by a person is left alone, and nothing happens while another run holds the GPU.
 Every decision is appended to results/watchdog/watchdog.log; restarts are counted in results/watchdog/state.json.
 
@@ -212,6 +212,7 @@ def main():
         if not args.every:
             return 0
         time.sleep(args.every)
+
 
 if __name__ == "__main__":
     sys.exit(main())
