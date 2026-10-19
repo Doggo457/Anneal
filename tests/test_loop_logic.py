@@ -190,6 +190,17 @@ def test_plan_counts_and_init():
     assert L.choose_init({"init": "base_lineage"}, {"adapter": "x", "lora_shape": shape}, shape) == "base_lineage"
 
 
+def test_pick_replay():
+    lineage = [["a", [0, 1, 2, 3]], ["b", [5, 6]], ["a", [10, 11, 12, 13]]]
+    r = L.pick_replay(lineage, 5, seed=3)
+    assert r == L.pick_replay(lineage, 5, seed=3) and r != L.pick_replay(lineage, 5, seed=4)  # reproducible per round
+    flat = [(n, i) for n, ix in r for i in ix]
+    assert len(flat) == 5 == len(set(flat)) and set(flat) <= {(n, i) for n, ix in lineage for i in ix}
+    assert [n for n, _ in r] == sorted({n for n, _ in r}, key=["a", "b"].index)  # grouped by source, lineage order
+    assert sum(len(ix) for _, ix in L.pick_replay(lineage, 99, seed=1)) == 10 and L.pick_replay(lineage, 0, 1) == []
+    assert L.pick_replay([], 5, 1) == []
+
+
 def test_safe_delete_stays_inside():
     with tempfile.TemporaryDirectory() as d:
         rd = os.path.join(d, "rounds", "r003")
@@ -458,6 +469,7 @@ def test_simulated_loop():
         # the agent-session recipe had no usable rows (100 < 500): skipped, round 3 used the default recipe
         assert state["recipes_skipped"] == ["agent-sessions"] and "v4pro-1" in state["recipes_done"]
         assert plan3["recipe"]["id"] == "default" and plan3["init"] == "best"
+        assert sum(len(ix) for _, ix in plan3["replay"]) == 25 and plan3["rows"] == 125  # 25% of 100 fresh rows
         y3 = yaml.safe_load(open(os.path.join(rd(3), "train.yaml")))
         assert y3["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
         # r003 rejected: adapter, checkpoints and GGUF deleted; scores, plan and report kept
@@ -474,14 +486,15 @@ def test_simulated_loop():
         assert d4["keep"] and d4["best_round"] == 2 and d4["gate"]["wins"] == 5 and d4["gate"]["losses"] == 0
         best = state["best"]
         assert best["round"] == 4 and best["gate_seed"] == 1004 and len(best["lineage"]) == 4  # 2 sources x 2 rounds
-        # fresh rows every round: no row trained twice, nothing from before the loop
-        seen = set()
-        for n in (2, 3, 4):
-            for r in E.read_jsonl(os.path.join(rd(n), "data", "mix", "train.jsonl")):
-                q = r["messages"][0]["content"]
-                assert q not in seen and q != "tachibana4_v4pro q0", q
-                seen.add(q)
-        assert len(seen) == 300  # 89 + 11 per round; banaxi (20 < 100) and agent-session unused
+        # fresh rows every round, nothing from before the loop; rounds that continue r002 mix back in 25 of r002's
+        # rows, never the rejected r003's
+        qs = {n: [r["messages"][0]["content"] for r in E.read_jsonl(os.path.join(rd(n), "data", "mix", "train.jsonl"))]
+              for n in (2, 3, 4)}
+        assert [len(qs[n]) for n in (2, 3, 4)] == [100, 125, 125] and all(len(set(q)) == len(q) for q in qs.values())
+        q2, q3, q4 = (set(qs[n]) for n in (2, 3, 4))
+        assert len(q3 & q2) == 25 and len(q4 & q2) == 25 and not (q4 & (q3 - q2)), (len(q3 & q2), len(q4 & q2))
+        fresh = q2 | (q3 - q2) | (q4 - q2)
+        assert len(fresh) == 300 and "tachibana4_v4pro q0" not in fresh  # 89 + 11 per round; banaxi and agent-session unused
         # milestone EvalPlus only on kept rounds
         assert os.path.exists(os.path.join(rd(2), "stages", "milestone.done.json"))
         assert not os.path.exists(os.path.join(rd(3), "stages", "milestone.done.json"))

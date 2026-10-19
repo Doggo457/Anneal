@@ -15,7 +15,10 @@ Rounds (results/loop/rounds/rNNN):
     plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml, else `default_recipe`. Init: the
                best adapter (training continues from it), or the base when the best is the base or the recipe changes
                the LoRA shape ("base_lineage": retrain from the base on every slice the best was built from + new rows).
-               Data: the next unused rows of each public source pool (fresh rows every round, never reused).
+               Data: the next unused rows of each public source pool (fresh rows every round, never reused). A round
+               that continues the best adapter also mixes back in `replay_fraction` x (fresh rows) of the rows the best
+               was built from (19 Oct 2026: kept rows carry forward), so earlier kept data isn't forgotten while
+               every round costs about the same; a rejected round's fresh rows never enter any later round.
     data       slices of the source pools (data/processed/loop/SOURCE, prepared once by prepare_dataset.py or
                public_source.py with EvalPlus and held-out decontamination) mixed by mix_datasets.py.
     train      train_longrun.py (the `train` settings + the recipe's overrides, init_adapter for a continued adapter).
@@ -47,6 +50,7 @@ import glob
 import hashlib
 import json
 import os
+import random
 import shutil
 import sys
 import time
@@ -200,6 +204,20 @@ def rows_at(path, indices):
             if idx > last:
                 break
     return [got[i] for i in indices if i in got]
+
+
+def pick_replay(lineage, n, seed):
+    """n rows drawn without replacement (random.Random(seed)) from the rows the best adapter was built from
+    (lineage: [[source, [row indices]], ...]), grouped by source in lineage order: [[source, [indices]], ...]."""
+    flat = [(name, i) for name, idx in lineage for i in idx]
+    if n <= 0 or not flat:
+        return []
+    pick = set(random.Random(seed).sample(range(len(flat)), min(n, len(flat))))
+    out = {}
+    for k, (name, i) in enumerate(flat):
+        if k in pick:
+            out.setdefault(name, []).append(i)
+    return [[name, idx] for name, idx in out.items()]
 
 
 def choose_init(recipe, best, train_cfg):
@@ -585,8 +603,11 @@ class Loop(fr.Controller):
         self.state["offsets"].update(offsets)
         self.add_used_keys(new_keys - used)
         lineage = best["lineage"] if init == "base_lineage" else []
+        frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
+        replay = pick_replay(best["lineage"], int(round(frac * n_new)), self.rnum) if init == "best" else []
         plan = {"recipe": recipe, "init": init, "init_adapter": best["adapter"] if init == "best" else None,
-                "slices": slices, "lineage": lineage, "rows": n_new + sum(len(ix) for _, ix in lineage),
+                "slices": slices, "lineage": lineage, "replay": replay,
+                "rows": n_new + sum(len(ix) for _, ix in lineage) + sum(len(ix) for _, ix in replay),
                 "best_round": best["round"], "train": tcfg}
         self.save()  # offsets advance with the plan, so a crash never hands these rows to another round
         return self.mark_done("plan", plan)
@@ -618,6 +639,8 @@ class Loop(fr.Controller):
         for name, idx in plan["lineage"]:
             parts.setdefault(name, []).extend(idx)
         for name, idx in plan["slices"].items():
+            parts.setdefault(name, []).extend(idx)
+        for name, idx in plan.get("replay") or []:
             parts.setdefault(name, []).extend(idx)
         cmd = [PY, "-u", os.path.join(ROOT, "scripts", "mix_datasets.py"), "--tokenizer", fr.SNAP,
                "--val-per-source", str(cfg.get("val_rows_per_source", 50)), "--out", os.path.join(root, "mix")]
@@ -815,8 +838,9 @@ class Loop(fr.Controller):
         if plan:
             L += ["", "## Recipe and data", "", f"Recipe `{plan['recipe']['id']}`: {plan['recipe'].get('note', '')}",
                   f"Init: {plan['init']}" + (f" ({plan['init_adapter']})" if plan["init_adapter"] else ""),
-                  f"Fresh rows: {json.dumps({n: len(i) for n, i in plan['slices'].items()})}; rows from the best's "
-                  f"lineage: {sum(len(i) for _, i in plan['lineage'])}.", "",
+                  f"Fresh rows: {json.dumps({n: len(i) for n, i in plan['slices'].items()})}; earlier kept rows mixed "
+                  f"back in: {sum(len(i) for _, i in plan.get('replay') or [])}; rows from the best's lineage (retrain "
+                  f"from the base): {sum(len(i) for _, i in plan['lineage'])}.", "",
                   (self.done("data") or {}).get("card", ""),
                   "", "## Training", "", json.dumps({k: v for k, v in (self.done("train") or {}).items()
                                                      if k not in ("metrics",)}, default=str)]

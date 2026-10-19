@@ -6,6 +6,10 @@ score_first_run: true      # round 1 scores the first run's adapter (self rows +
 first_run_dir: C:/AI/training/results/first-run
 
 rows_per_round: 1000       # fresh rows per round, split by the sources' shares
+replay_fraction: 0.25      # a round that continues the best adapter also re-trains on 0.25 x 1,000 rows the best was
+                           # built from (19 Oct: kept rows carry forward). LR re-warm + re-decay + replay matched
+                           # re-training on all data within 0.02 val loss at 405M and 10B; 25% for a strong shift
+                           # (Ibrahim et al., TMLR 2024, arXiv 2403.08763). Recipes can override it.
 min_rows_per_round: 300    # fewer unused rows than this: the loop waits for new sources
 val_rows_per_source: 50
 min_free_gb: 60
@@ -91,7 +95,7 @@ sources:
     share: 0                                           # only through its own recipe below
 
 # Run once each, in order; when none is left every round uses default_recipe.
-#   init: best (continue the best adapter) | base_lineage (retrain from the base on the best's rows + new rows)
+#   init: best (continue the best adapter, with replay) | base_lineage (retrain from the base on the best's rows + new rows)
 #   mix: {source: share} for this recipe; rows: fresh rows; train: overrides of the train settings above
 recipes:
   - id: v4pro-1
@@ -104,5 +108,5 @@ recipes:
 
 default_recipe:
   id: default
-  note: next fresh DeepSeek-V4-Pro rows, continuing the best adapter
+  note: next fresh DeepSeek-V4-Pro rows plus 25% of the best's earlier rows, continuing the best adapter
   init: best
