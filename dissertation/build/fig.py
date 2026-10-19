@@ -7,10 +7,10 @@ def box(x,y,h,title,subs,key=False):
          f'<text class="t" x="{cx}" y="{ty:.0f}">{title}</text>']
     for i,s in enumerate(subs): out.append(f'<text class="s" x="{cx}" y="{ty+21+i*17:.0f}">{s}</text>')
     return '\n'.join(out)
-A=[("Training data",["self-generated (2 rounds),","OpenCodeReasoning, general"],False),
-   ("Data pipeline",["test-filter, deduplicate,","decontaminate, 8,192 tokens"],False),
-   ("QLoRA training",["frozen 4-bit base + LoRA,","one resumable long run"],True),
-   ("LoRA adapters",["2k, 8k, 20k rows and","final, converted to GGUF"],False)]
+A=[("Training data",["public sets with traces","(round 0 adds own rows)"],False),
+   ("Data pipeline",["trace check, deduplicate,","decontaminate, 8,192 tokens"],False),
+   ("QLoRA training",["frozen 4-bit base + LoRA,","resumable loop rounds"],True),
+   ("Gated adapters",["kept only if the gate","improves; GGUF export"],False)]
 B=[("Q4_K_M base model",["Qwen3.8-27B GGUF,","shared by B and A"],False),
    ("Inference (262k)",["llama-server, thinking on","B: base only","A: base + adapter"],False),
    ("Evaluation harness",["HumanEval+, MBPP+,","LiveCodeBench, own tasks,","RULER, LongCodeBench,","non-coding check"],False),
@@ -25,7 +25,9 @@ for (t,s,k),x in zip(B,xs): P.append(box(x,yb,hb,t,s,k))
 for i in range(3):
     P.append(f'<path class="arr" d="M{xs[i]+w},{ya+ha/2} H{xs[i+1]-2}"/>')
     P.append(f'<path class="arr" d="M{xs[i]+w},{yb+hb/2} H{xs[i+1]-2}"/>')
-ax=xs[3]+w/2; bx=xs[1]+w/2
+ax=xs[3]+w/2; bx=xs[1]+w/2; tx=xs[2]+w/2
+P.append(f'<path class="arr" d="M{ax},{ya} V30 H{tx} V{ya-2}"/>')
+P.append(f'<text class="lbl" x="{(ax+tx)/2}" y="25" text-anchor="middle">next round from the best kept adapter</text>')
 P.append(f'<path class="arr" d="M{ax},{ya+ha} V184 H{bx} V{yb-2}"/>')
 P.append(f'<text class="lbl" x="{(ax+bx)/2}" y="178" text-anchor="middle">adapter loaded at runtime</text>')
 H=218+hb+46+4
