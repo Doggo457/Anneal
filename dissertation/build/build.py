@@ -131,6 +131,18 @@ set_text(by_text["Author Name"], C.AUTHOR)
 set_text(by_text["Author Student ID"], C.STUDENT_ID)
 set_text(by_text["Supervisor"], C.SUPERVISOR)
 set_text(by_text["October 202X"], C.DATE)
+if getattr(C, "AI_NOTE", ""):  # AI-use statement under the date, outside the word count
+    from docx.text.paragraph import Paragraph
+    date_p = by_text["October 202X"]
+    note_el = copy.deepcopy(date_p._p); date_p._p.addnext(note_el)
+    note_p = Paragraph(note_el, date_p._parent)
+    set_text(note_p, C.AI_NOTE)
+    for r in note_el.iter(qn("w:r")):
+        rpr = r.find(qn("w:rPr"))
+        for tag in ("w:i", "w:iCs"):
+            el = rpr.find(qn(tag)) if rpr is not None else None
+            if el is not None: rpr.remove(el)
+    note_p.paragraph_format.space_before = Inches(0.15)
 
 # ---------- remove template body after the cover section ----------
 kids = list(body.iterchildren())

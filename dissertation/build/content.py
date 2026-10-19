@@ -6,6 +6,7 @@ AUTHOR = "Callum Challinor"
 STUDENT_ID = "3308299"
 SUPERVISOR = "Supervisor: Yuanlin Gu"
 DATE = "October 2026"
+AI_NOTE = "I used Claude as an AI assistant to monitor training and to help with document creation."
 
 BLOCKS = [
 ("h1", "Introduction"),
