@@ -4,7 +4,7 @@
 
 ## Goal
 
-- **Data**: 1,000 self-generated, test-passing rows (the base model's own answers to OpenCodeInstruct prompts) + 1,000 OpenCodeReasoning split_0 rows.
+- **Data**: 500 self-generated, test-passing rows (the base model's own answers to OpenCodeInstruct prompts) + 1,500 OpenCodeReasoning split_0 rows. Planned as 1,000 + 1,000; changed on 19 Oct, see "Change: 500 self rows" below.
 - **Training**: 4-bit QLoRA on Qwen3.8-27B (`first-run-2k-r16`).
 - **Scoring**: EvalPlus HumanEval+ (164) + MBPP+ (378) for base and adapter, one seed each.
 
@@ -76,6 +76,13 @@
   - 6 steps straight vs `--stop-at-step 3` → paused with checkpoint-3 → resumed to 6.
   - Steps 4–6 have bit-identical losses (0.8192, 0.8033, 0.8640) and learning rates.
 - **27B dry run** (`results/resume-check-27b`): see below.
+
+## Change: 500 self rows (19 Oct 2026, 19:41 UTC, my decision)
+
+- Self-generation stops at 520 kept rows (500 train + 10 val after `prepare_dataset.py`, with room for rows the 8,192-token check drops) instead of 1,020. At about 27 kept rows an hour this saves roughly a day of generation.
+- The other 500 rows are a second OpenCodeReasoning split_0 draw, `data/processed/ocr_first_b`: the same three shards and filters as `ocr_first`, with `--seed 43 --max-samples 515` and `--decontaminate-gate data/eval/ocr_first_plus_gate.jsonl`. That gate file is the loop's held-out problems (`decontam_extra.jsonl`) plus every `ocr_first` prompt, so no new row repeats or nearly repeats an `ocr_first` question or a held-out problem. `scripts/first_run_ocr_b.py` builds the gate file and checks the result.
+- The mix is now `self:500 + ocr:1000 + ocr_b:500` into `data/processed/mix_first_2k`, still 2,000 rows. OpenCodeReasoning rows are longer than the self rows, so training takes a few hours longer than with 1,000 + 1,000.
+- Applied by pausing the run on the Training page, patching `scripts/first_run.py` (sha-checked, backup in `backups/first_run-before-500`) and resuming; generation then stops by itself at 520.
 
 ## Choices made on this machine
 
