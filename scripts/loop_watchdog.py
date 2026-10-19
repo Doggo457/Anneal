@@ -15,7 +15,7 @@ Staged scripts: the loop needs newer prepare_dataset.py and train_longrun.py tha
 wait in staged/ and are copied into scripts/ only after the first run has finished the last stage that runs them
 (prepare_dataset.py after "generate", train_longrun.py after "train"); the replaced file is kept in staged/replaced/.
 
-  pythonw scripts\\loop_watchdog.py [--delay SECONDS] [--dry-run]
+  pythonw scripts\\loop_watchdog.py [--delay SECONDS] [--dry-run] [--every SECONDS]
 """
 
 import argparse
@@ -161,35 +161,30 @@ def decide(training, now, st, first_status, loop_status, gate_exists, config_mti
     return restart("loop", f"loop {state} (status {said})")
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--delay", type=int, default=0, help="seconds to wait first (at sign-in the portal needs a moment)")
-    ap.add_argument("--dry-run", action="store_true")
-    args = ap.parse_args()
-    if args.delay:
-        time.sleep(args.delay)
+def check(dry_run=False):
+    """One look at the runs; at most one action."""
+    try:
+        installed = install_staged(ROOT, os.path.join(RESULTS, "first-run"), dry_run)
+    except OSError as exc:
+        log(f"installing staged scripts failed ({exc}); will retry next run")
+        installed = []
     try:
         training = api("/api/training")
     except Exception as exc:  # noqa: BLE001
         log(f"portal not reachable ({type(exc).__name__}: {exc}); nothing done")
-        return 0
+        return
     now = time.time()
     st = load_state()
-    try:
-        installed = install_staged(ROOT, os.path.join(RESULTS, "first-run"), args.dry_run)
-    except OSError as exc:
-        log(f"installing staged scripts failed ({exc}); will retry next run")
-        installed = []
     action, tag, reason = decide(training, now, st, read_json(os.path.join(RESULTS, "first-run", "status.json")),
                                  read_json(os.path.join(RESULTS, "loop", "status.json")), os.path.exists(GATE),
                                  os.path.getmtime(LOOP_CONFIG) if os.path.exists(LOOP_CONFIG) else None,
                                  bool(installed))
     if action is None:
         log(f"no action: {reason}")
-        return 0
-    if args.dry_run:
+        return
+    if dry_run:
         log(f"dry run: would {action} {tag}: {reason}")
-        return 0
+        return
     if action == "start":
         res = api("/api/training/runs", {"script": "scripts/loop.py", "args": "", "tag": "loop"})
     else:
@@ -198,8 +193,25 @@ def main():
     st["restarts"] = st["restarts"][-200:]
     save_state(st)
     log(f"{action} {tag}: {reason} -> {'ok' if res.get('ok') else res.get('error')}")
-    return 0
 
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--delay", type=int, default=0, help="seconds to wait first (at sign-in the portal needs a moment)")
+    ap.add_argument("--every", type=int, default=0,
+                    help="keep running and check every SECONDS (only if no hourly scheduled task can be created)")
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    if args.delay:
+        time.sleep(args.delay)
+    while True:
+        try:
+            check(args.dry_run)
+        except Exception as exc:  # noqa: BLE001  (a bad hour must not end a --every watchdog)
+            log(f"check failed: {type(exc).__name__}: {exc}")
+        if not args.every:
+            return 0
+        time.sleep(args.every)
 
 if __name__ == "__main__":
     sys.exit(main())
