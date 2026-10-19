@@ -2,8 +2,10 @@
 
   data/eval/gate.jsonl            CodeContests valid + test problems whose own Python 3 reference passes our sandboxed
                                   runner, plus 300 OpenCodeInstruct problems from shard train-00025 (no run reads it)
-                                  whose reference passes its assert tests. Problems that overlap EvalPlus or any data
-                                  trained on so far (data/processed/*/{train,val}.jsonl) are left out.
+                                  whose reference passes its assert tests. Problems that overlap EvalPlus, any data
+                                  trained on so far (data/processed/*/{train,val}.jsonl) or any prompt in the shards
+                                  the first run generates its own rows from (train-00000 and train-00049; OpenCodeInstruct
+                                  has near-duplicate prompts across shards) are left out.
   data/eval/noncoding_100.jsonl   100 MMLU-Pro test questions outside computer science (random.Random(42)).
   data/eval/decontam_extra.jsonl  every gate problem and non-coding question, for decontaminating later training data
                                   (prepare_dataset.py --decontaminate-gate, public_source.py).
@@ -31,6 +33,8 @@ from anneal import evalsets as E  # noqa: E402
 HUB = os.path.join(ROOT, "models", "hf", "hub")
 OCI_REPO, OCI_REV = "nvidia/OpenCodeInstruct", "8f3ba5bafe4d6e8db46082cf7ae6741bc370604d"  # the first run's revision
 OCI_GATE_SHARD = "data/train-00025-of-00050.parquet"
+# the first run generates its self rows from these shards (scripts/first_run.py OCI_FILES)
+FIRST_RUN_SHARDS = ["data/train-00000-of-00050.parquet", "data/train-00049-of-00050.parquet"]
 CC_REPO, MMLU_REPO = "deepmind/code_contests", "TIGER-Lab/MMLU-Pro"
 CC_COLUMNS = ["name", "description", "public_tests", "private_tests", "generated_tests", "solutions", "input_file",
               "output_file", "cf_rating", "difficulty", "source"]
@@ -75,6 +79,33 @@ def evalplus_index():
     from evalplus.data import get_human_eval_plus, get_mbpp_plus
     items = [(f"evalplus/{k}", v["prompt"]) for ds in (get_human_eval_plus(), get_mbpp_plus()) for k, v in ds.items()]
     return E.OverlapIndex(items)
+
+
+def select_oci(pool, target, ep, harness, pool_texts, chunk=64, margin=16, log=print):
+    """OCI gate problems in pool order: not overlapping EvalPlus (ep: OverlapIndex), reference passing (harness:
+    list -> kept list), and not overlapped by any prompt from the first run's generation shards (pool_texts: callable
+    returning an iterable of prompts, scanned once per top-up). -> (kept, counts)."""
+    kept, examined, ep_hits, pool_hits = [], 0, 0, 0
+    while len(kept) < target and examined < len(pool):
+        fresh = []
+        while len(fresh) < target - len(kept) + margin and examined < len(pool):
+            batch = []
+            while len(batch) < chunk and examined < len(pool):
+                c = pool[examined]
+                examined += 1
+                if ep.hits(c["raw_prompt"]):
+                    ep_hits += 1
+                    continue
+                batch.append(c)
+            fresh += harness(batch)
+        idx = E.OverlapIndex([(c["id"], c["raw_prompt"]) for c in fresh])
+        hit = set()
+        for text in pool_texts():
+            hit |= idx.hits(text)
+        pool_hits += len(hit)
+        log(f"OCI top-up: {len(fresh)} pass their reference, {len(hit)} overlap the first run's generation shards")
+        kept += [c for c in fresh if c["id"] not in hit]
+    return kept[:target], {"examined": examined, "evalplus_overlap": ep_hits, "first_run_pool_overlap": pool_hits}
 
 
 def main():
@@ -126,20 +157,19 @@ def main():
                      "tests": tests[1], "ref": gt.extract_code(r["output"] or ""), "domain": r.get("domain")})
     random.Random(42).shuffle(pool)
     card["oci_pool"] = len(pool)
-    oci, examined, ep_hits = [], 0, 0
-    while len(oci) < args.oci_target and examined < len(pool):
-        chunk = []
-        while len(chunk) < 64 and examined < len(pool):
-            c = pool[examined]
-            examined += 1
-            if ep.hits(c["raw_prompt"]):
-                ep_hits += 1
-                continue
-            chunk.append(c)
-        oci += E.harness_check(chunk, gt.run_io_tests, gt.run_assert_tests, args.parallel, log)
-    oci = oci[: args.oci_target]
-    card.update(oci_examined=examined, oci_evalplus_overlap=ep_hits, oci_kept=len(oci))
-    log(f"OpenCodeInstruct: {len(oci)} kept of {examined} examined ({ep_hits} overlap EvalPlus)")
+    fr_paths, _ = fetch(OCI_REPO, FIRST_RUN_SHARDS, revision=OCI_REV)
+
+    def first_run_prompts():
+        return (r["input"] for r in parquet_rows(fr_paths, ["input"]) if r.get("input"))
+
+    oci, n = select_oci(pool, args.oci_target, ep,
+                        lambda batch: E.harness_check(batch, gt.run_io_tests, gt.run_assert_tests, args.parallel, log),
+                        first_run_prompts, log=log)
+    examined, ep_hits, fr_hits = n["examined"], n["evalplus_overlap"], n["first_run_pool_overlap"]
+    card.update(oci_examined=examined, oci_evalplus_overlap=ep_hits, oci_first_run_pool_overlap=fr_hits,
+                oci_kept=len(oci))
+    log(f"OpenCodeInstruct: {len(oci)} kept of {examined} examined ({ep_hits} overlap EvalPlus, {fr_hits} overlap "
+        f"the first run's generation shards)")
 
     # ---- drop gate problems that overlap EvalPlus or anything trained on so far
     gate = cc + oci
@@ -183,7 +213,8 @@ def main():
              f"reference; {card['cc_reference_passes']} whose reference passes | "
              f"{sum(g['kind'] == 'cc' for g in gate)} |",
              f"| gate: OpenCodeInstruct | `{OCI_REPO}` @ `{OCI_REV}` `{OCI_GATE_SHARD}`, {card['oci_pool']} rows with score 1.0 "
-             f"and assert tests; {examined} examined, {ep_hits} overlap EvalPlus | {sum(g['kind'] == 'oci' for g in gate)} |",
+             f"and assert tests; {examined} examined, {ep_hits} overlap EvalPlus, {fr_hits} overlap a prompt in the first "
+             f"run's generation shards ({', '.join(FIRST_RUN_SHARDS)}) | {sum(g['kind'] == 'oci' for g in gate)} |",
              f"| non-coding | `{MMLU_REPO}` @ `{mm_sha}` test ({len(mm_rows)} rows), outside computer science, "
              f"random.Random(42) | {len(nc)} |", "",
              f"Gate problems dropped for overlap with EvalPlus or data trained on so far: {len(dropped)}.",

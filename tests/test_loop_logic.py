@@ -711,6 +711,28 @@ def _staged_scripts():
         assert (a, tag) == ("resume", "loop") and "staged scripts" in why
 
 
+def test_build_select_oci():
+    import build_evalsets as B
+    words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau".split()
+
+    def text(i):  # 40 distinct-ish words per problem
+        return " ".join(f"{w}{i}" for w in words) + " " + " ".join(f"word{i}x{j}" for j in range(21))
+    pool = [{"id": f"oci/{i}", "kind": "oci", "raw_prompt": text(i), "prompt": text(i)} for i in range(40)]
+    ep = E.OverlapIndex([("evalplus/x", text(3))])              # problem 3 is an EvalPlus near-copy
+    harness = lambda batch: [c for c in batch if c["id"] != "oci/5"]  # noqa: E731  (5's reference fails)
+    gen_pool = ["Please solve: " + text(i) for i in (0, 1, 7, 12)]   # the first run's shards hold 0, 1, 7 and 12
+    scans = []
+
+    def pool_texts():
+        scans.append(1)
+        return iter(gen_pool)
+    kept, n = B.select_oci(pool, 10, ep, harness, pool_texts, chunk=2, margin=0, log=lambda m: None)
+    ids = [c["id"] for c in kept]
+    assert len(ids) == 10 and not {"oci/0", "oci/1", "oci/3", "oci/5", "oci/7", "oci/12"} & set(ids), ids
+    assert ids == [f"oci/{i}" for i in (2, 4, 6, 8, 9, 10, 11, 13, 14, 15)], ids
+    assert n["evalplus_overlap"] == 1 and n["first_run_pool_overlap"] == 4 and len(scans) == 2, (n, scans)  # one top-up after the first scan
+
+
 def main():
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = 0
