@@ -1,55 +1,35 @@
 # Anneal
 
-Workspace for the dissertation project: fine-tuning an open-weight coding model on a GMKtec EVO-X2 (Ryzen AI Max+ 395, 64GB unified memory, 1TB NVMe) and measuring the before/after difference properly.
+Honours dissertation project (University of Stirling): train a 4-bit QLoRA adapter for Qwen3.8-27B on public and self-generated coding data, and measure properly whether it makes the model better at software development. Everything runs on one machine, a GMKtec EVO-X2 (Ryzen AI Max+ 395, 64 GB unified memory, 32 GB given to the GPU), natively on Windows.
 
-Everything here was scaffolded before the machine arrived. Nothing under `scripts/` has been run on the real hardware yet. Treat each script as a starting point to validate and fix, not a finished tool. Where a command depends on a version that will have moved by the time you install (ROCm, Unsloth), the file says so and points at the page to check.
+`Decision-Log.md` is the dated record of every decision and measured result, newest at the bottom. Start there for the current state.
 
 ## Folder map
 
-| Folder | What lives there |
+| Path | What lives there |
 |---|---|
-| `docs/` | Project brief, year plan, hardware notes, model and dataset shortlists, reading list, decisions log |
-| `setup/` | Install steps for the EVO-X2: Linux + ROCm path, plus a Windows quick start for inference on day one |
-| `scripts/` | Environment check, memory estimator, model download, dataset prep, QLoRA training template, GGUF export, evaluation runner, cleanup |
-| `experiments/` | One YAML per training run + `LOG.md`, the lab notebook |
-| `data/`, `models/`, `results/` | Large files. Git-ignored except their READMEs |
+| `anneal/` | Package the scripts import: no-admin AppContainer sandbox for model-written code, shift-and-add DeltaNet short conv, runtime and data helpers, llama-server helpers |
+| `scripts/` | The pipeline: trace generation, dataset prep and mixing, training (`train_longrun.py`), the Windows EvalPlus port (`evalplus_win.py`), the first-run controller (`first_run.py`), validation loss, memory measurement |
+| `experiments/` | One YAML per run, plus `LOG.md` |
+| `tests/` | The check scripts behind each finding (parity with llama.cpp, short conv, MTP, sandbox, resume, LoRA serving) |
+| `results/` | `*_findings.md` write-ups and the summaries and metrics behind them. Weights, checkpoints and raw logs stay on the machine |
+| `docs/` | Project brief, plan, hardware notes, model and dataset shortlists, reading list, research notes (datasets, memory budget, long-run data plan) |
+| `setup/` | How the EVO-X2 is set up for training on Windows. `superseded/` holds the pre-arrival Linux notes |
+| `dissertation/` | Dissertation outline (Word) and its figures |
+| `data/`, `models/` | Git-ignored except their READMEs |
 
-## Start here
+## Where things run
 
-**Before the machine arrives**
-1. Read `docs/Plan.md`, then start `docs/Reading-List.md` with the LoRA and QLoRA papers.
-2. Make a Hugging Face account and an access token. Accept the licences on the candidate models so downloads work later.
-3. Read `docs/Model-Candidates.md` and `docs/Dataset-Candidates.md`. Write your leaning in `docs/Decisions-Log.md`.
-4. On this PC, set up a Python environment and look at real training data:
+The repo mirrors `C:\AI\training` on the EVO-X2, which has its own `.venv`. Training loads `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`; testing uses the Ollama Q4_K_M GGUF in llama-server (Vulkan build) with the adapter converted to a GGUF LoRA. `setup/windows-training-setup.md` has versions, layout and the measured numbers.
 
-```
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python scripts/prepare_dataset.py --max-samples 200
-```
-
-5. Decide Windows vs Linux for the EVO-X2 (see `docs/Hardware-Notes.md`). Log the decision.
-
-**When it arrives**
-1. Follow `setup/01-linux-and-rocm.md`, or `setup/windows-quickstart.md` if you want inference working within the hour.
-2. Run `python scripts/check_env.py` and copy the numbers into `docs/Hardware-Notes.md`.
-3. Pull the model. The bf16 safetensors are what training loads; a published Q8_0 GGUF is the quickest way to benchmark and baseline it:
-
-```
-python scripts/download_model.py Qwen/Qwen3.8-27B                                      # 55.6GB bf16, the one base model
-python scripts/download_model.py unsloth/Qwen3.8-27B-GGUF --include "*Q8_0*"           # baseline + inference speed (check the repo name)
-```
-
-   Baseline it with `scripts/run_eval.sh` before any training, in the thinking mode you will train with.
-4. Run `python scripts/train_qlora.py --config experiments/TEMPLATE-qwen3.8-27b-8bit.yaml --smoke-test` to prove train, merge, export and eval work end to end before any real run.
+`scripts/check_env.py`, `train_qlora.py`, `export_gguf.py`, `run_eval.sh`, `gen_samples.py`, `memory_estimate.py` and `cleanup_intermediates.py` are the scaffolding written before the machine arrived. They are not on the machine; the runs use `train_longrun.py`, `first_run.py` and `evalplus_win.py`.
 
 ## House rules
 
-- Every training run gets a YAML in `experiments/` and a row in `experiments/LOG.md` before it starts.
-- Delete full-precision weights once a verified GGUF exists. `scripts/cleanup_intermediates.py --dry-run` shows what would go. 1TB disappears fast.
-- Log decisions and the reasons in `docs/Decisions-Log.md`. The dissertation write-up is mostly this file, expanded.
+- Every training run gets a YAML in `experiments/` before it starts.
+- Every decision and measured result gets a dated row in `Decision-Log.md`.
 - Never look at held-out test tasks while building training data.
-- Thinking mode is ON everywhere: training rows carry `<think>` traces, and baseline and fine-tunes are evaluated with the same sampling settings and seeds. Never compare a thinking run against a non-thinking one.
-- Inference and evaluation run at the model's full 262k context (`run_eval.sh` does this). Training examples are 4k tokens; that is a different knob and does not shrink the context window.
-- One variable per experiment. If two things changed, you learned nothing.
+- Thinking mode is on everywhere: training rows carry `<think>` traces, and baseline and fine-tunes are evaluated with the same sampling settings and seeds.
+- Inference and evaluation run at the full 262k context. Training examples are up to 8,192 tokens; that is a different knob and does not shrink the context window.
+- One variable per experiment.
+- No model weights, datasets or secrets in git.
