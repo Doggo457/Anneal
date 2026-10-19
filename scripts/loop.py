@@ -16,7 +16,7 @@ Rounds (results/loop/rounds/rNNN):
                best adapter (training continues from it), or the base when the best is the base or the recipe changes
                the LoRA shape ("base_lineage": retrain from the base on every slice the best was built from + new rows).
                Data: the next unused rows of each public source pool (fresh rows every round, never reused).
-    data       slices of the source pools (data/processed/loop/<source>, prepared once by prepare_dataset.py or
+    data       slices of the source pools (data/processed/loop/SOURCE, prepared once by prepare_dataset.py or
                public_source.py with EvalPlus and held-out decontamination) mixed by mix_datasets.py.
     train      train_longrun.py (the `train` settings + the recipe's overrides, init_adapter for a continued adapter).
     convert    adapter -> GGUF LoRA (llama.cpp convert_lora_to_gguf.py).
@@ -32,7 +32,7 @@ Rounds (results/loop/rounds/rNNN):
     finish     state.json updated (best, rejects in a row); a rejected round's adapter, checkpoints and GGUF are
                deleted (its scores, logs and report stay); report.md and results/loop/summary.md written.
 
-Every stage leaves rNNN/stages/<stage>.done.json and is skipped after that; stages resume inside (training from its
+Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
 not enough unused rows, or too little disk, the loop ends with state "waiting" and the watchdog starts it again
