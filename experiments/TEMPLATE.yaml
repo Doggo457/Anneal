@@ -1,0 +1,38 @@
+# Generic run template. For this project use TEMPLATE-qwen3.8-27b-8bit.yaml, which is the same
+# thing with the base model, precision and memory guard already filled in.
+# Copy to experiments/YYYY-MM-DD_<short-name>.yaml and fill in BEFORE starting the run.
+# One variable changed per experiment. Say which one in `changed_vs_previous`.
+
+run_name: 2026-XX-XX_qwen38-27b_<what-changed>       # folder created under models/
+question: "What does this run answer?"
+changed_vs_previous: "the ONE thing that differs from the last experiment"
+
+base_model: Qwen/Qwen3.8-27B
+loader: FastLanguageModel
+load_in_4bit: false
+load_in_8bit: true
+max_load_gib: 36
+
+train_file: data/processed/train.jsonl
+val_file: data/processed/val.jsonl
+max_samples: 5000                                     # null = use everything
+
+seq_len: 4096                                         # training-example length only; the model keeps its 262k context regardless
+batch_size: 1
+grad_accum: 8                                         # effective batch = batch_size * grad_accum
+epochs: 1
+lr: 1.0e-4
+optim: adamw_8bit                                     # adamw_torch if bitsandbytes optimisers misbehave on ROCm
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+chat_template_kwargs: { enable_thinking: true }      # thinking ON everywhere (project decision); data must carry <think> traces
+seed: 42
+eval_steps: 100
+save_steps: 200
+merge_on_finish: false                                # true once the pipeline is trusted; needs ~55GB free
+
+notes: ""

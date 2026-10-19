@@ -1,0 +1,43 @@
+# Qwen3.8-27B, 4-bit QLoRA (NF4 through bitsandbytes, loaded by Unsloth). The project's training default
+# since 2026-10-17 (Decision-Log: "Training precision: 4-bit"). The 8-bit template stays for ablation A6.
+#
+# Memory (research/training-memory-budget.md, derived, not yet measured): ~21 GiB of the 48 GiB GPU pool
+# at 4,096 tokens on the Unsloth path, 40-46 GiB on plain transformers + PEFT. measure_memory.py replaces
+# these numbers on day one.
+# Unsloth routes this model (model_type qwen3_5) through FastModel and leaves the vision encoder out of the
+# LoRA targets by default, so target_modules below only hit the language model.
+# Pipeline test only. Run: python scripts/train_qlora.py --config experiments/2026-10-17_smoke-4bit.yaml --smoke-test
+
+run_name: 2026-10-17_qwen38-27b_4bit_pipeline
+question: "Do train, adapter export and evaluation work end to end on this machine?"
+changed_vs_previous: "pipeline test, run with --smoke-test"
+
+base_model: models/unsloth__Qwen3.8-27B-unsloth-bnb-4bit   # Unsloth's pre-quantised NF4 (dynamic) weights, as in its Qwen3.8 guide
+loader: FastLanguageModel
+load_in_4bit: true
+load_in_8bit: false
+max_load_gib: 22                              # 4-bit 27B should load at ~16-18 GiB; ~50 means it was not quantised
+
+train_file: data/processed/smoke/train.jsonl
+val_file: data/processed/smoke/val.jsonl
+max_samples: 200
+
+seq_len: 4096                                 # length of one TRAINING EXAMPLE; the model keeps its 262k context
+batch_size: 1
+grad_accum: 8
+epochs: 1
+lr: 1.0e-4
+optim: adamw_8bit                             # adamw_torch if bitsandbytes optimisers misbehave on ROCm
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+chat_template_kwargs: { enable_thinking: true }
+seed: 42
+eval_steps: 100
+save_steps: 200
+merge_on_finish: false                        # the adapter is loaded at runtime on the GGUF base (llama-server --lora)
+
+notes: ""

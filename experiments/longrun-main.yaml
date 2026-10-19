@@ -1,0 +1,48 @@
+# Main multi-week run (research/long-run-data-plan.md). Copy to experiments/YYYY-MM-DD_<name>.yaml.
+# Run:    python scripts/train_longrun.py --config experiments/<this>.yaml        (same command resumes)
+# Pause:  create models/<run_name>/STOP   (saves a checkpoint at the next step, then exits)
+# Branch: python scripts/train_longrun.py --config experiments/<this>.yaml --branch-from models/<run_name>/milestones/checkpoint-1000
+# Every value marked SET is decided by the 1,000-row ablations before this run starts.
+
+run_name: 2026-12-XX_qwen38-27b_4bit_r64dn_main
+question: "How does EvalPlus and post-Aug-2026 LiveCodeBench change with training rows, from 2k to the full mix?"
+changed_vs_previous: "data scale (main run)"
+
+engine: unsloth                     # hf = plain transformers + PEFT + bitsandbytes fallback (40-46 GiB at 4,096)
+base_model: models/unsloth__Qwen3.8-27B-unsloth-bnb-4bit
+loader: FastLanguageModel           # keep in step with TEMPLATE-qwen3.8-27b-4bit.yaml
+load_in_4bit: true
+load_in_8bit: false
+
+train_file: data/processed/mix_main/train.jsonl     # from mix_datasets.py; SHA-256 is pinned at first start
+val_file: data/processed/mix_main/val.jsonl         # only used if eval_steps > 0
+seq_len: 8192                       # rows over this are dropped at tokenisation, never truncated
+batch_size: 1
+grad_accum: 8                       # 8 rows per step; LoRA is less tolerant of large batches (LoRA Without Regret)
+epochs: 1                           # one pass: there is more data than time, so no row repeats
+lr: 1.0e-4                          # SET from the ablations
+optim: adamw_8bit
+
+lora_r: 64                          # SET (rank ablation 16/32/64)
+lora_alpha: 128
+lora_dropout: 0.0
+# Attention + MLP in every layer, plus the Gated DeltaNet projections in the 48 linear-attention layers.
+# Module names checked on transformers 5.20.1's qwen3_5 code; the vision encoder uses qkv/proj/linear_fc*,
+# so none of these names touch it.
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj, in_proj_qkv, in_proj_z, out_proj]
+completion_only: true               # loss on the assistant turn (trace + answer) only
+chat_template_kwargs: { enable_thinking: true }
+
+schedule: wsd                       # warmup-stable-decay
+warmup_steps: 20
+decay_fraction: 0.2                 # final cool-down: last 20% of steps
+min_lr_ratio: 0.0
+milestone_steps: [250, 1000, 2500]  # 2k, 8k and 20k rows at 8 rows/step; kept for good, decay branches start here
+branch_decay_fraction: 0.1
+
+save_steps: 10                      # ~2.5 h of training at 40 tok/s; a crash loses at most this much
+save_total_limit: 3
+eval_steps: 0                       # evaluate milestones out of process with llama-server --lora
+logging_steps: 1
+seed: 42
+notes: ""

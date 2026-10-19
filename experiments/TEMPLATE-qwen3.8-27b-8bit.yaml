@@ -1,0 +1,49 @@
+# Qwen3.8-27B (dense, Apache-2.0, published August 2026), 8-bit LoRA. The project's one base model.
+#
+# Why this trains on a 64GB box on a supported path:
+#   - Dense: no expert tensors, so bitsandbytes quantises every layer and the memory maths is real.
+#   - 8-bit keeps quantisation error small. Unsloth warns that 4-bit is lossy on Qwen3.5-family
+#     models, so 8-bit is the default here and 4-bit (load_in_4bit: true, ~22GB) is the fallback.
+#   - Published figures: 8-bit weights 31GB, 4-bit 16-19GB, bf16 56GB (Unsloth). Derived training
+#     footprint ~37GB at seq 1024, ~41GB at seq 2048. bf16 LoRA is 56-64GB and does not fit.
+#   - The comparison in this project is this model before vs after fine-tuning. Nothing else.
+# Qwen/Qwen3.6-27B (April 2026) has the identical shape if 3.8 misbehaves on ROCm: change base_model only.
+# Copy to experiments/YYYY-MM-DD_<short-name>.yaml and fill in BEFORE starting the run.
+
+run_name: 2026-XX-XX_qwen38-27b_8bit-lora_r16_5k
+question: "Does an 8-bit LoRA on Qwen3.8-27B improve the personal task set without dropping HumanEval+?"
+changed_vs_previous: "first run"
+
+base_model: Qwen/Qwen3.8-27B
+loader: FastLanguageModel
+load_in_4bit: false
+load_in_8bit: true
+max_load_gib: 36                              # 8-bit 27B should load at ~28-30GB; ~55GB means it was not quantised
+
+train_file: data/processed/train.jsonl
+val_file: data/processed/val.jsonl
+max_samples: 3000                             # traces are long; 3k rows at seq 4096 is already ~10M tokens
+
+seq_len: 4096                                 # length of one TRAINING EXAMPLE, not the model's context (that stays
+                                              # 262k whatever you put here). Traces need ~4k. 8-bit @4096 ~49GB: Linux,
+                                              # tight. If measure_memory.py says no: load_in_4bit: true (~35GB), or seq 3072
+batch_size: 1
+grad_accum: 8
+epochs: 1
+lr: 1.0e-4
+optim: adamw_8bit                             # adamw_torch if bitsandbytes optimisers misbehave on ROCm
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+# Thinking is ON (project decision, 2026-09-19). Training rows MUST contain <think> traces
+# (prepare_dataset.py --require-think), and the baseline must be evaluated with thinking on too.
+chat_template_kwargs: { enable_thinking: true }
+seed: 42
+eval_steps: 100
+save_steps: 200
+merge_on_finish: false                        # merged bf16 is ~55GB on disk; export via adapter + llama.cpp instead
+
+notes: ""

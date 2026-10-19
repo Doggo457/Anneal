@@ -1,0 +1,9 @@
+# Pure-Python tooling that works on any machine (this PC included).
+# torch / unsloth / transformers / peft / trl / bitsandbytes are NOT here on purpose:
+# they must be installed with the ROCm-specific steps in setup/02-python-env-and-unsloth.sh.
+datasets>=3.0
+huggingface_hub>=0.30
+evalplus>=0.3
+pyyaml>=6.0
+psutil>=6.0
+tqdm>=4.66
