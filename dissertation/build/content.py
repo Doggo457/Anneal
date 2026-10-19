@@ -2,9 +2,9 @@
 # Inline markup: **bold**, *italic*, [@key] citation, {{text}} yellow placeholder, `code`.
 
 TITLE = "Anneal: Memory-Constrained LoRA Fine-Tuning of Qwen3.8-27B for Software Engineering at 256k Context"
-AUTHOR = "Callum {{Surname}}"
-STUDENT_ID = "{{Student ID}}"
-SUPERVISOR = "Supervisor: {{Supervisor name}}"
+AUTHOR = "Callum Challinor"
+STUDENT_ID = "3308299"
+SUPERVISOR = "Supervisor: Yuanlin Gu"
 DATE = "October 2026"
 
 BLOCKS = [
