@@ -9,12 +9,12 @@ Honours dissertation project (University of Stirling): train a 4-bit QLoRA adapt
 | Path | What lives there |
 |---|---|
 | `anneal/` | Package the scripts import: no-admin AppContainer sandbox for model-written code, shift-and-add DeltaNet short conv, runtime and data helpers, llama-server helpers |
-| `scripts/` | The pipeline: trace generation, dataset prep and mixing, training (`train_longrun.py`), the Windows EvalPlus port (`evalplus_win.py`), the first-run controller (`first_run.py`), validation loss, memory measurement |
+| `scripts/` | The pipeline: trace generation, dataset prep and mixing, training (`train_longrun.py`), the Windows EvalPlus port (`evalplus_win.py`), the first-run controller (`first_run.py`), the keep-if-better improvement loop (`loop.py`, its held-out sets `build_evalsets.py`, public chat-format sources `public_source.py`, the restart watchdog `loop_watchdog.py` and `loop_status.py`), validation loss, memory measurement |
 | `experiments/` | One YAML per run, plus `LOG.md` |
 | `tests/` | The check scripts behind each finding (parity with llama.cpp, short conv, MTP, sandbox, resume, LoRA serving) |
 | `results/` | `*_findings.md` write-ups and the summaries and metrics behind them. Weights, checkpoints and raw logs stay on the machine |
 | `docs/` | Project brief, plan, hardware notes, model and dataset shortlists, reading list, research notes (datasets, memory budget, long-run data plan) |
-| `setup/` | How the EVO-X2 is set up for training on Windows. `superseded/` holds the pre-arrival Linux notes |
+| `setup/` | How the EVO-X2 is set up for training on Windows, and how the loop restarts itself (`loop-watchdog.md`). `superseded/` holds the pre-arrival Linux notes |
 | `dissertation/` | Dissertation outline (Word) and its figures |
 | `data/`, `models/` | Git-ignored except their READMEs |
 
