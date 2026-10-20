@@ -274,6 +274,7 @@ def main():
     sessions = collections.Counter({k: 0 for k in ("no_calls", "clean", "mixed", "redacted")})
     redacted_text = []  # stripped content length of each redacted target step
     kept_ctx_redacted = 0
+    kept_tools, kept_sessions = collections.Counter(), set()  # what the kept steps do, and how many sessions they span
     seen = set()
     groups = collections.OrderedDict()  # conversation index -> rows
     char_cap = 6 * args.max_tokens
@@ -358,6 +359,9 @@ def main():
             seen.add(key)
             counts["kept"] += 1
             kept_ctx_redacted += ctx_redacted
+            kept_sessions.add(ci)
+            for c in t.get("tool_calls", []):
+                kept_tools[c["function"]["name"]] += 1
             lengths.append(n)
             kept_by_kind["tool_call" if has_call else ("thinking" if "<think>" in (t.get("content") or "") else "text")] += 1
             if not args.measure_only:  # a count needs no rows: whole agent sessions would stay in memory
@@ -370,6 +374,7 @@ def main():
     measure = {"dataset": args.dataset, "revision": sha, "files": paths, "turns": args.turns, "counts": dict(counts),
                "kept_by_target_kind": dict(kept_by_kind), "tool_names_top": tool_names.most_common(20),
                "sessions_by_redaction": dict(sessions), "kept_with_redacted_context": kept_ctx_redacted,
+               "kept_sessions": len(kept_sessions), "kept_target_tools": kept_tools.most_common(20),
                "redacted_step_text_chars": {"steps": len(rt), "with_200_plus": sum(x >= 200 for x in rt),
                                             "median": rt[len(rt) // 2] if rt else None, "total": sum(rt)},
                "template_errors": [{"error": k, "first_conversation": v} for k, v in list(template_errors.items())[:10]],

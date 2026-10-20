@@ -829,6 +829,8 @@ def test_public_source_formats():
         m3 = json.load(open(os.path.join(out3, "measure.json")))
         assert (m3["counts"]["redacted_context"], m3["counts"]["kept"], m3["kept_with_redacted_context"]) == (1, 1, 0)
         assert m3["kept_by_target_kind"] == {"tool_call": 1}, m3
+        assert m2["kept_sessions"] == 1 and m2["kept_target_tools"] == [["bash", 1]], m2
+        assert m3["kept_sessions"] == 1 and m3["kept_target_tools"] == [["bash", 1]], m3
 
 
 def test_tool_call_rows():
