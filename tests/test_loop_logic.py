@@ -818,6 +818,17 @@ def test_public_source_formats():
         assert len(steps[1]["messages"]) == 7 and steps[1]["messages"][3] == {"role": "tool", "content": "FAILED "
                                                                               "test_parse - KeyError: 'id'",
                                                                               "tool_call_id": "c1"}
+        # the session's last step follows its unknown_tool call: counted, and dropped with --clean-context
+        assert m2["sessions_by_redaction"] == {"no_calls": 2, "clean": 0, "mixed": 1, "redacted": 1}, m2
+        assert m2["kept_with_redacted_context"] == 1 and c["redacted_context"] == 0
+        assert m2["redacted_step_text_chars"] == {"steps": 2, "with_200_plus": 0, "median": 0, "total": 0}
+        out3 = os.path.join(d, "out3")
+        assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src2, "--turns", "each",
+                                  "--drop-tool-name", "unknown_tool", "--min-target-chars", "20", "--clean-context",
+                                  "--tokenizer", "x", "--measure-only", "--out", out3]) == 0
+        m3 = json.load(open(os.path.join(out3, "measure.json")))
+        assert (m3["counts"]["redacted_context"], m3["counts"]["kept"], m3["kept_with_redacted_context"]) == (1, 1, 0)
+        assert m3["kept_by_target_kind"] == {"tool_call": 1}, m3
 
 
 def test_tool_call_rows():

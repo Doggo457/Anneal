@@ -27,6 +27,10 @@ Filters, in order, each counted in measure.json and the card:
   placeholder_args              a tool-call argument of the target is a bare placeholder such as "<bash_command>" or
                                 "<file_path>" (redacted sessions): training on it teaches the model to emit the
                                 placeholder. Always on.
+  redacted_context              (--clean-context) an earlier assistant turn of the row makes a redacted call (placeholder
+                                arguments or a --drop-tool-name tool), so the target would be learnt after steps the
+                                model never really took. Without the flag these rows are kept and counted in
+                                measure.json as kept_with_redacted_context.
   duplicate                     the same target text was kept before
   too_long                      over --max-tokens through the model's chat template (rows over 6 chars per token
                                 are counted without tokenising; later turns of a session only get longer)
@@ -34,6 +38,8 @@ Filters, in order, each counted in measure.json and the card:
   contaminated_evalplus / _gate EvalPlus 13-gram / Jaccard (prepare_dataset.Decontaminator) on the first user message
                                 + target; the loop's held-out problems (anneal/evalsets.OverlapIndex) on all user text
                                 + target
+measure.json also counts conversations by their tool calls (sessions_by_redaction: no_calls, clean, mixed,
+redacted) and the text of the redacted steps (redacted_step_text_chars), i.e. what masking the calls out could save.
 Validation is split by conversation, so no session has steps in both train and val. Conversations are read in
 file order; --max-rows stops at that many kept rows.
 """
@@ -188,6 +194,12 @@ def has_placeholder_args(msg):
                for v in _strings(json.loads(c["function"]["arguments"])))
 
 
+def redacted_call(msg, drop_names):
+    """True if msg calls a tool whose name was lost (drop_names, e.g. "unknown_tool") or with placeholder arguments."""
+    return any(c["function"]["name"] in drop_names for c in msg.get("tool_calls", [])) or (
+        bool(msg.get("tool_calls")) and has_placeholder_args(msg))
+
+
 def targets(messages, mode):
     """Indices of the assistant turns that end a row."""
     idx = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
@@ -212,6 +224,8 @@ def main():
     ap.add_argument("--require-think", action="store_true")
     ap.add_argument("--min-target-chars", type=int, default=0)
     ap.add_argument("--drop-tool-name", action="append", default=[])
+    ap.add_argument("--clean-context", action="store_true",
+                    help="drop steps that follow a redacted call in their session (see redacted_context)")
     ap.add_argument("--tokenizer", required=True)
     ap.add_argument("--max-tokens", type=int, default=8192)
     ap.add_argument("--max-rows", type=int, default=0, help="stop after this many kept rows (0 = all)")
@@ -253,10 +267,13 @@ def main():
 
     counts = collections.Counter({k: 0 for k in (
         "conversations", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
-        "dropped_tool_name", "placeholder_args", "duplicate", "too_long", "template_error", "contaminated_evalplus",
-        "contaminated_gate", "kept")})
+        "dropped_tool_name", "placeholder_args", "redacted_context", "duplicate", "too_long", "template_error",
+        "contaminated_evalplus", "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
+    sessions = collections.Counter({k: 0 for k in ("no_calls", "clean", "mixed", "redacted")})
+    redacted_text = []  # stripped content length of each redacted target step
+    kept_ctx_redacted = 0
     seen = set()
     groups = collections.OrderedDict()  # conversation index -> rows
     char_cap = 6 * args.max_tokens
@@ -281,6 +298,11 @@ def main():
         for m in msgs:
             for c in m.get("tool_calls", []):
                 tool_names[c["function"]["name"]] += 1
+        bad = [i for i, m in enumerate(msgs) if m["role"] == "assistant" and redacted_call(m, args.drop_tool_name)]
+        n_calling = sum(1 for m in msgs if m["role"] == "assistant" and m.get("tool_calls"))
+        sessions["no_calls" if not n_calling else "clean" if not bad else "redacted" if len(bad) == n_calling
+                 else "mixed"] += 1
+        first_bad = bad[0] if bad else len(msgs)
         user_text = "\n".join(m["content"] for m in msgs if m["role"] == "user")
         first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
         prefix_chars = 0
@@ -300,9 +322,15 @@ def main():
                 continue
             if any(c["function"]["name"] in args.drop_tool_name for c in t.get("tool_calls", [])):
                 counts["dropped_tool_name"] += 1
+                redacted_text.append(len((t.get("content") or "").strip()))
                 continue
             if has_call and has_placeholder_args(t):
                 counts["placeholder_args"] += 1
+                redacted_text.append(len((t.get("content") or "").strip()))
+                continue
+            ctx_redacted = first_bad < end
+            if ctx_redacted and args.clean_context:
+                counts["redacted_context"] += 1
                 continue
             key = hashlib.sha1(text.encode("utf-8")).hexdigest()
             if key in seen:
@@ -329,16 +357,21 @@ def main():
                 continue
             seen.add(key)
             counts["kept"] += 1
+            kept_ctx_redacted += ctx_redacted
             lengths.append(n)
             kept_by_kind["tool_call" if has_call else ("thinking" if "<think>" in (t.get("content") or "") else "text")] += 1
-            groups.setdefault(ci, []).append({"messages": row})
+            if not args.measure_only:  # a count needs no rows: whole agent sessions would stay in memory
+                groups.setdefault(ci, []).append({"messages": row})
             if args.max_rows and counts["kept"] >= args.max_rows:
                 break
 
-    s = sorted(lengths)
+    s, rt = sorted(lengths), sorted(redacted_text)
     q = (lambda x: s[min(len(s) - 1, int(x * len(s)))]) if s else (lambda x: None)
     measure = {"dataset": args.dataset, "revision": sha, "files": paths, "turns": args.turns, "counts": dict(counts),
                "kept_by_target_kind": dict(kept_by_kind), "tool_names_top": tool_names.most_common(20),
+               "sessions_by_redaction": dict(sessions), "kept_with_redacted_context": kept_ctx_redacted,
+               "redacted_step_text_chars": {"steps": len(rt), "with_200_plus": sum(x >= 200 for x in rt),
+                                            "median": rt[len(rt) // 2] if rt else None, "total": sum(rt)},
                "template_errors": [{"error": k, "first_conversation": v} for k, v in list(template_errors.items())[:10]],
                "kept_tokens": {"min": s[0] if s else None, "median": q(0.5), "p90": q(0.9), "max": s[-1] if s else None,
                                "total": sum(s)},
