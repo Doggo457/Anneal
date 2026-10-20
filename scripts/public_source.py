@@ -17,7 +17,9 @@ Assistant reasoning in a "reasoning_content", "reasoning" or "thinking" field is
 human/gpt) are mapped to role/content.
 
 Filters, in order, each counted in measure.json and the card:
-  no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts
+  no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
+                                or tool-call arguments that aren't a JSON object (JSON strings are parsed into one:
+                                Qwen3.8's template only takes a mapping)
   require_think                 (--require-think) the target turn has no reasoning
   short_target                  target text under --min-target-chars and no tool call
   dropped_tool_name             the target calls a tool named by --drop-tool-name (e.g. "unknown_tool": the name was
@@ -25,6 +27,7 @@ Filters, in order, each counted in measure.json and the card:
   duplicate                     the same target text was kept before
   too_long                      over --max-tokens through the model's chat template (rows over 6 chars per token
                                 are counted without tokenising; later turns of a session only get longer)
+  template_error                the chat template refused the row (the first messages are in measure.json)
   contaminated_evalplus / _gate EvalPlus 13-gram / Jaccard (prepare_dataset.Decontaminator) on the first user message
                                 + target; the loop's held-out problems (anneal/evalsets.OverlapIndex) on all user text
                                 + target
@@ -100,6 +103,21 @@ def where_ok(value, op, want):
     return v == want if op == "=" else want in v
 
 
+def parse_arguments(args):
+    """Tool-call arguments as a dict, or None if they aren't a JSON object. Many datasets store them as a JSON string
+    (the OpenAI wire format); Qwen3.8's chat template only takes a mapping and raises a TemplateError on a string."""
+    if args is None:
+        return {}
+    if isinstance(args, str):
+        if not args.strip():
+            return {}
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return None
+    return args if isinstance(args, dict) else None
+
+
 def normalise(messages):
     """-> list of clean message dicts, or None if the format isn't understood."""
     if isinstance(messages, str):
@@ -135,8 +153,11 @@ def normalise(messages):
                     fn = (c or {}).get("function") or {}
                     if not fn.get("name"):
                         return None
+                    args = parse_arguments(fn.get("arguments"))
+                    if args is None:
+                        return None
                     clean.append({"type": "function", "id": c.get("id"),
-                                  "function": {"name": fn["name"], "arguments": fn.get("arguments", "")}})
+                                  "function": {"name": fn["name"], "arguments": args}})
                 msg["tool_calls"] = clean
         if role == "tool":
             for k in ("tool_call_id", "name"):
@@ -210,7 +231,9 @@ def main():
 
     counts = collections.Counter({k: 0 for k in (
         "conversations", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
-        "dropped_tool_name", "duplicate", "too_long", "contaminated_evalplus", "contaminated_gate", "kept")})
+        "dropped_tool_name", "duplicate", "too_long", "template_error", "contaminated_evalplus", "contaminated_gate",
+        "kept")})
+    template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
     seen = set()
     groups = collections.OrderedDict()  # conversation index -> rows
@@ -264,7 +287,12 @@ def main():
                 counts["too_long"] += 1
                 continue
             row = msgs[:end + 1]
-            n = n_tokens(row)
+            try:
+                n = n_tokens(row)
+            except Exception as e:  # jinja2 TemplateError and the like: one odd row must not end the whole pool
+                counts["template_error"] += 1
+                template_errors.setdefault(f"{type(e).__name__}: {e}"[:300], ci)
+                continue
             if n > args.max_tokens:
                 counts["too_long"] += 1
                 continue
@@ -286,6 +314,7 @@ def main():
     q = (lambda x: s[min(len(s) - 1, int(x * len(s)))]) if s else (lambda x: None)
     measure = {"dataset": args.dataset, "revision": sha, "files": paths, "turns": args.turns, "counts": dict(counts),
                "kept_by_target_kind": dict(kept_by_kind), "tool_names_top": tool_names.most_common(20),
+               "template_errors": [{"error": k, "first_conversation": v} for k, v in list(template_errors.items())[:10]],
                "kept_tokens": {"min": s[0] if s else None, "median": q(0.5), "p90": q(0.9), "max": s[-1] if s else None,
                                "total": sum(s)},
                "settings": {k: v for k, v in vars(args).items() if k not in ("tokenizer",)},
