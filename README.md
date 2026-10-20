@@ -13,7 +13,7 @@ Honours dissertation project (University of Stirling): train a 4-bit QLoRA adapt
 | `experiments/` | One YAML per run, plus `LOG.md` |
 | `tests/` | The check scripts behind each finding (parity with llama.cpp, short conv, MTP, sandbox, resume, LoRA serving) |
 | `results/` | `*_findings.md` write-ups and the summaries and metrics behind them. Weights, checkpoints and raw logs stay on the machine |
-| `docs/` | Project brief, plan, hardware notes, model and dataset shortlists, reading list, research notes (datasets, memory budget, long-run data plan) |
+| `docs/` | Project brief, plan, hardware notes, model and dataset shortlists, reading list, and the card for the held-out evaluation sets |
 | `setup/` | How the EVO-X2 is set up for training on Windows, and how the loop restarts itself (`loop-watchdog.md`). `superseded/` holds the pre-arrival Linux notes |
 | `dissertation/` | Dissertation outline (Word) and its figures |
 | `data/`, `models/` | Git-ignored except their READMEs |
