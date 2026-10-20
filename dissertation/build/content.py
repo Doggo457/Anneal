@@ -91,7 +91,7 @@ BLOCKS = [
   ]),
 
 ("h2", "Data Pipeline"),
-("bf", "From round 1, the loop trains only on public datasets, never on the base model's own rows, which would reinforce its biases. No large public set of test-verified traces from an equally strong teacher exists, so loop rows are untested traces from DeepSeek-V4-Pro, level with Qwen3.8-27B on LiveCodeBench (89.8 against 90.3 [@dsv4], [@qwen]): 85% Tachibana4 code traces [@tachibana], 5% a second V4-Pro code set [@banaxi] and 10% AoPS maths [@nemomath]. A public agent-session set was dropped: 62,372 of its 64,998 steps call tools with redacted placeholders. `prepare_dataset.py` keeps rows with a `<think>` trace, drops rows over 8,192 tokens and removes near-duplicates of evaluation prompts (13-gram or Jaccard overlap). An embedding search on the otherwise idle NPU also flags reworded copies, which n-gram checks miss [@yang]."),
+("bf", "From round 1, the loop trains only on public datasets, never on the base model's own rows, which would reinforce its biases. No large public set of test-verified traces from an equally strong teacher exists, so loop rows are untested traces from DeepSeek-V4-Pro, level with Qwen3.8-27B on LiveCodeBench (89.8 against 90.3 [@dsv4], [@qwen]): 85% Tachibana4 code traces [@tachibana], 5% a second V4-Pro code set [@banaxi] and 10% AoPS maths [@nemomath]. A public agent-session set was dropped: 96% of its steps redact tool calls. `prepare_dataset.py` keeps rows with a `<think>` trace, drops rows over 8,192 tokens and removes near-duplicates of evaluation prompts (13-gram or Jaccard overlap). An embedding search on the otherwise idle NPU also flags reworded copies, which n-gram checks miss [@yang]; it flagged 33 of 15,276 loop rows without measurably slowing training."),
 ("bt", "The first run, round 0, is a comparison run using the model's own rows: 500 base-model answers to OpenCodeInstruct [@oci] prompts that passed their tests, as in ReST-EM [@restem], plus 1,500 OpenCodeReasoning rows, whose DeepSeek-R1 teacher scores only 63.5 on LiveCodeBench [@deepseek]. The base model passed 54% of attempts, but traces hitting the 6,144-token budget (16% of attempts) were rejected, so kept traces are short (median 436 tokens). Model-written code runs in a Windows AppContainer sandbox without network, file or administrator access, which passed 264 escape checks; 97.5% of reference solutions pass inside it."),
 
 ("h2", "Training"),
@@ -108,7 +108,7 @@ BLOCKS = [
 ("bt", "Small test fixtures caught four silent bugs, all fixed: the unit-test filter passed every answer, length was checked in characters so over-length rows could be truncated, the targets missed the 48 DeltaNet layers' projections, and a seed set after adapter creation made identical runs diverge from step 3."),
 
 ("h2", "Bring-up and First Run"),
-("bf", "Bring-up and the first run raised the issues in Table 3. Training then ran at 97 to 102 tokens per second on rows of up to 8,192 tokens."),
+("bf", "Bring-up and the first run raised the issues in Table 3. The run trained on 7.39 million tokens at 99.5 tokens per second; validation loss fell from 0.124 to 0.050."),
 ("table", "Table 3. Issues found during bring-up and the first run.", [2200, 2900, 3196],
   ["Issue", "Cause", "Resolution"],
   [
@@ -120,7 +120,7 @@ BLOCKS = [
   ]),
 
 ("h2", "Export and Evaluation"),
-("bf", "The evaluation script serves the model through llama.cpp at the full 262k context with thinking on and scores HumanEval+ and MBPP+ with the Windows EvalPlus port. HumanEval/32 fails every solution through an EvalPlus 0.3.1 bug, so HumanEval+ is also reported without it. A 20-problem calibration chose four parallel requests without multi-token prediction (MTP): 29.2 tokens per second in total, with answers averaging 877 tokens, so one 542-problem pass takes about 4.6 hours. Because parallel output drifts at near-ties, every model uses this one setup."),
+("bf", "The evaluation script serves the model through llama.cpp at the full 262k context with thinking on and scores HumanEval+ and MBPP+ with the Windows EvalPlus port. HumanEval+ is also reported without HumanEval/32, which fails every solution through an EvalPlus 0.3.1 bug, and, for round 0, without three problems flagged in its own rows. A 20-problem calibration chose four parallel requests without multi-token prediction (MTP): 29.2 tokens per second in total, with answers averaging 877 tokens, so one 542-problem pass takes about 4.6 hours. Because parallel output drifts at near-ties, every model uses this one setup."),
 ("bt", "The adapter is converted alone to GGUF and loaded over the same base, which avoids a 55 GB merged model and keeps the base weights identical. Trained against NF4 but served over Q4_K_M, the smoke-test adapter gave losses of 0.756 in training and 0.728 in llama.cpp on 779 identical answer tokens, with 96% top-1 agreement, as close as the base model alone, so evaluation measures the adapter as deployed."),
 
 ("h2", "Critical Assessment"),
@@ -144,7 +144,7 @@ BLOCKS = [
 ("bt", "**Contamination.** LiveCodeBench is limited to problems released after the model (August 2026 [@qwen]). Two code sets are undated, so training rows are also checked against these problems."),
 
 ("h1", "Project Plan"),
-("bf", "The first real run is under way (Section 3.4), and everything else depends on its scores. Of about 136 usable machine days from November to March, roughly 15 go to ablations and 20 to evaluation; loop rounds use the rest, since only one job can use the GPU at a time."),
+("bf", "The first real run has trained (Section 3.4), and everything else depends on its scores. Of about 136 usable machine days from November to March, roughly 15 go to ablations and 20 to evaluation; loop rounds use the rest, since only one job can use the GPU at a time."),
 ("plan", "autumn", [
    ["Autumn: 7 - 8", "Round 0 (500 own and 1,500 OpenCodeReasoning rows) trained and scored against the base. Build the gate; start the loop.", "First before-and-after scores"],
    ["Autumn: 9 - 10", "Three-seed baseline; write the personal tasks. Ablations A3 and A4, pausing the loop.", "Baseline results with spread"],
