@@ -831,6 +831,21 @@ def test_public_source_formats():
         assert m3["kept_by_target_kind"] == {"tool_call": 1}, m3
         assert m2["kept_sessions"] == 1 and m2["kept_target_tools"] == [["bash", 1]], m2
         assert m3["kept_sessions"] == 1 and m3["kept_target_tools"] == [["bash", 1]], m3
+        # one block of the file, and targets that would teach a mask
+        out5 = os.path.join(d, "out5")
+        assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src2, "--turns", "each",
+                                  "--drop-tool-name", "unknown_tool", "--min-target-chars", "20", "--row-range", "0:2",
+                                  "--drop-target-regex", r"pytest|\[REDACTED\]", "--tokenizer", "x", "--measure-only",
+                                  "--out", out5]) == 0
+        c5 = json.load(open(os.path.join(out5, "measure.json")))["counts"]
+        assert (c5["conversations"], c5["outside_range"], c5["masked_target"], c5["short_target"], c5["kept"]) == \
+            (2, 0, 1, 1, 1), c5
+        out6 = os.path.join(d, "out6")
+        assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src2, "--turns", "each",
+                                  "--min-target-chars", "20", "--row-range", "4:", "--tokenizer", "x", "--measure-only",
+                                  "--out", out6]) == 0
+        c6 = json.load(open(os.path.join(out6, "measure.json")))["counts"]
+        assert (c6["conversations"], c6["outside_range"], c6["template_error"], c6["placeholder_args"]) == (2, 4, 1, 1), c6
 
 
 def test_tool_call_rows():
