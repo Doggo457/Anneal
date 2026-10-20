@@ -74,6 +74,7 @@ import first_run as fr  # noqa: E402
 import generate_traces as gt  # noqa: E402
 from anneal import evalsets as E  # noqa: E402
 from anneal import llama, sandbox  # noqa: E402
+from anneal.rowkeys import row_key  # noqa: E402,F401  (shared with paraphrase_check.py)
 from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 
 PY = sys.executable
@@ -240,21 +241,6 @@ def plan_counts(cfg, recipe, state, pool_rows, rows=None):
     return {n: k for n, k in out.items() if k > 0}
 
 
-def row_key(row):
-    """What makes a row "the same data": the question for single-turn rows, the first user message + the trained
-    turn for multi-turn rows (each step of an agent session is its own row)."""
-    msgs = row.get("messages") or []
-    users = [m for m in msgs if m.get("role") == "user"]
-    if not users:
-        return None
-    if len(users) == 1 and sum(m.get("role") == "assistant" for m in msgs) == 1:
-        text = users[0].get("content") or ""
-    else:
-        last = msgs[-1]
-        text = (users[0].get("content") or "") + "\n#\n" + (last.get("content") or "") + json.dumps(last.get("tool_calls") or [])
-    return hashlib.sha1(text.strip().lower().encode("utf-8")).hexdigest()
-
-
 def pick_rows(path, start, n, used):
     """Indices of the next n rows from `start` whose key is not in `used` (adds their keys). Returns (indices, the
     offset to start from next time)."""
@@ -273,6 +259,16 @@ def pick_rows(path, start, n, used):
                     out.append(idx)
             idx += 1
     return out, nxt
+
+
+def blocked_keys():
+    """Row keys the reworded-copy check (scripts/paraphrase_check.py) flagged: rows whose question is a reworded copy
+    of a test problem. The loop never hands them out. Empty set if the check hasn't run."""
+    path = os.path.join(E.EVAL_DIR, "paraphrase", "blocked_keys.txt")
+    if not os.path.exists(path):
+        return set()
+    with open(path, encoding="utf-8") as fh:
+        return {line.strip() for line in fh if line.strip()}
 
 
 def rows_at(path, indices):
@@ -665,6 +661,9 @@ class Loop(fr.Controller):
         usable = {n: c for n, c in self.pool_rows(cfg).items()
                   if (self.read_json(os.path.join(POOLS, n, "pool.json")) or {}).get("usable", True)}
         used = self.used_keys()
+        blocked = blocked_keys() - used
+        self.log(f"reworded-copy check: {len(blocked)} unused rows blocked" if blocked else
+                 "reworded-copy check: no rows blocked (data/eval/paraphrase/blocked_keys.txt missing or empty)")
         stack = self.state.get("stack")
         cap = int(cfg.get("stack_max_new_rows", 0) or 0)
         short = False  # the pools can't fill a round: try a when_pools_short recipe before waiting
@@ -692,7 +691,7 @@ class Loop(fr.Controller):
                 self.state.setdefault("recipes_skipped", []).append(recipe["id"])
                 self.save()
                 continue
-            slices, offsets, new_keys = {}, {}, set(used)
+            slices, offsets, new_keys = {}, {}, set(used) | blocked  # blocked rows are skipped like used ones
             for n, take in counts.items():
                 idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys)
                 offsets[n] = nxt
@@ -714,7 +713,7 @@ class Loop(fr.Controller):
             raise Waiting(f"only {have} unused public rows available at the configured mix (need {need}); "
                           "add sources to experiments/loop.yaml")
         self.state["offsets"].update(offsets)
-        self.add_used_keys(new_keys - used)
+        self.add_used_keys(new_keys - used - blocked)  # blocked rows were never trained on
         lineage = best["lineage"] if init == "base_lineage" else []
         rolled = copy.deepcopy(stack["slices"]) if take_stack else []
         n_rolled = sum(len(ix) for _, ix in rolled)
