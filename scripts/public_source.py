@@ -18,8 +18,8 @@ human/gpt) are mapped to role/content.
 
 Filters, in order, each counted in measure.json and the card:
   no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
-                                or tool-call arguments that aren't a JSON object (JSON strings are parsed into one:
-                                Qwen3.8's template only takes a mapping)
+                                or tool-call arguments that aren't a JSON object (kept as a JSON string; the
+                                template gets them parsed, see anneal/data.py chat_messages)
   require_think                 (--require-think) the target turn has no reasoning
   short_target                  target text under --min-target-chars and no tool call
   dropped_tool_name             the target calls a tool named by --drop-tool-name (e.g. "unknown_tool": the name was
@@ -104,18 +104,17 @@ def where_ok(value, op, want):
 
 
 def parse_arguments(args):
-    """Tool-call arguments as a dict, or None if they aren't a JSON object. Many datasets store them as a JSON string
-    (the OpenAI wire format); Qwen3.8's chat template only takes a mapping and raises a TemplateError on a string."""
+    """Tool-call arguments as a canonical JSON-object string, or None if they aren't a JSON object. Rows keep the
+    string form (as the OpenAI wire format does): load_dataset's Arrow can't hold per-tool argument dicts, and
+    anneal/data.py chat_messages() parses them for Qwen3.8's template, which only takes a mapping."""
     if args is None:
-        return {}
+        args = {}
     if isinstance(args, str):
-        if not args.strip():
-            return {}
         try:
-            args = json.loads(args)
+            args = json.loads(args) if args.strip() else {}
         except ValueError:
             return None
-    return args if isinstance(args, dict) else None
+    return json.dumps(args, ensure_ascii=False) if isinstance(args, dict) else None
 
 
 def normalise(messages):
@@ -213,10 +212,11 @@ def main():
     tok = AutoTokenizer.from_pretrained(args.tokenizer)
     tok = getattr(tok, "tokenizer", tok)
 
+    from anneal.data import template_ids
+
     def n_tokens(msgs):
         thinking = "<think>" in (msgs[-1].get("content") or "")
-        out = tok.apply_chat_template(msgs, tokenize=True, add_generation_prompt=False, enable_thinking=thinking)
-        return len(out["input_ids"] if hasattr(out, "keys") else out)
+        return len(template_ids(tok, msgs, add_generation_prompt=False, enable_thinking=thinking))
 
     deco = None
     if args.decontaminate:
