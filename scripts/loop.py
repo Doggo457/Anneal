@@ -20,7 +20,7 @@ Rounds (results/loop/rounds/rNNN):
                the round shrinks (others in its `group` stand in) rather than other sources taking its share. A round
                that continues the best adapter also mixes back in `replay_fraction` x (new rows) of the rows the best
                was built from (19 Oct 2026: kept rows carry forward).
-               Rejected rows roll forward (docs/growing-data-rounds.md): a rejected round's new rows join the next
+               Rejected rows roll forward (research/growing-data-rounds.md): a rejected round's new rows join the next
                round that draws from the default sources (the same best, plus fresh rows), up to `stack_max_new_rows`
                new rows; a reject at the cap drops the stack for good. On 495 problems a real 2-point gain is kept
                only 24-44% of the time, so a reject mostly means "too small to see" and a bigger step is the useful
