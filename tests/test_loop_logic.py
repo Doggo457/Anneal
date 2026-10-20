@@ -683,6 +683,14 @@ def fake_transformers():
 
     class Tok:
         def apply_chat_template(self, msgs, tokenize=True, add_generation_prompt=False, enable_thinking=True):
+            for x in msgs:  # like Qwen3.8's template, which takes tool-call arguments only as a mapping
+                for c in x.get("tool_calls") or []:
+                    if not isinstance(c["function"]["arguments"], dict):
+                        raise ValueError(f'Tool call arguments for function "{c["function"]["name"]}" were passed '
+                                         f'as a JSON string. Parse them into an object before calling '
+                                         f'apply_chat_template.')
+                if "TEMPLATE_REFUSES" in (x.get("content") or ""):
+                    raise RuntimeError("template refused this row")
             return list(range(10 + sum(len(x.get("content") or "") for x in msgs) // 4))
 
     m.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda name: Tok())
@@ -761,18 +769,31 @@ def test_public_source_formats():
                    {"role": "assistant", "content": "parse() read row['id'] before checking it exists; it now uses "
                                                     "row.get('id') and the test passes."}]
         short = [{"role": "user", "content": "thanks"}, {"role": "assistant", "content": "ok"}]
+        bad_args = [{"role": "user", "content": "List the files in the repository root please."},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "c9", "type": "function", "function": {"name": "list_dir", "arguments": "{not json"}}]}]
+        list_args = [{"role": "user", "content": "List the files in the src folder please."},
+                     {"role": "assistant", "content": "", "tool_calls": [
+                         {"id": "c8", "type": "function", "function": {"name": "list_dir", "arguments": "[1, 2]"}}]}]
+        refused = [{"role": "user", "content": "TEMPLATE_REFUSES this one"},
+                   {"role": "assistant", "content": "An answer long enough to pass the length filter."}]
         src2 = os.path.join(d, "agent.jsonl")
-        E.write_jsonl(src2, [{"messages": session}, {"messages": short}])
+        E.write_jsonl(src2, [{"messages": session}, {"messages": short}, {"messages": bad_args},
+                             {"messages": list_args}, {"messages": refused}])
         out2 = os.path.join(d, "out2")
         assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src2, "--turns", "each",
                                   "--drop-tool-name", "unknown_tool", "--min-target-chars", "20", "--tokenizer", "x",
                                   "--val-fraction", "0.5", "--out", out2]) == 0
-        c = json.load(open(os.path.join(out2, "measure.json")))["counts"]
-        assert (c["candidate_rows"], c["dropped_tool_name"], c["short_target"], c["kept"]) == (4, 1, 1, 2), c
+        m2 = json.load(open(os.path.join(out2, "measure.json")))
+        c = m2["counts"]
+        assert (c["candidate_rows"], c["bad_format"], c["dropped_tool_name"], c["short_target"], c["template_error"],
+                c["kept"]) == (5, 2, 1, 1, 1, 2), c
+        assert m2["template_errors"] == [{"error": "RuntimeError: template refused this row", "first_conversation": 4}]
         tr, va = E.read_jsonl(os.path.join(out2, "train.jsonl")), E.read_jsonl(os.path.join(out2, "val.jsonl"))
         assert sorted([len(tr), len(va)]) == [0, 2]  # both steps of the session on the same side
         steps = sorted(tr + va, key=lambda r: len(r["messages"]))
-        assert len(steps[0]["messages"]) == 3 and steps[0]["messages"][-1]["tool_calls"][0]["function"]["name"] == "bash"
+        assert len(steps[0]["messages"]) == 3 and steps[0]["messages"][-1]["tool_calls"][0]["function"] == {
+            "name": "bash", "arguments": {"cmd": "pytest -x"}}  # the JSON-string arguments are stored as an object
         assert len(steps[1]["messages"]) == 7 and steps[1]["messages"][3] == {"role": "tool", "content": "FAILED "
                                                                               "test_parse - KeyError: 'id'",
                                                                               "tool_call_id": "c1"}
