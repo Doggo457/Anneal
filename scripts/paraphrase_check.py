@@ -25,12 +25,13 @@ Outputs (data/eval/paraphrase/, never committed: they hold row text)
   pairs.jsonl       the flagged pairs with both texts, for reading
   report.json, card.md   calibration, cut-offs, counts, speed, and the training-speed A/B; copied without any row
                     text to results/paraphrase_check/
+  stops.jsonl       one line per stopped attempt (exit code, reason, training-speed A/B so far), also copied there
   cache_<tag>.npz   embeddings (float16), so a stopped run resumes where it stopped
 
 Runs beside training, so it stops itself (state kept, rerun to resume):
   exit 3  free RAM under --min-free-gb (default 3)
   exit 4  the training run's tokens_per_second (--watch-metrics) fell more than --max-slowdown (default 2%) below its
-          mean over the 30 minutes before this run started (mean of the last 3 steps since the start)
+          mean over the last 12 steps before this run started (mean of all steps since the start, once there are 4)
   exit 5  the embedder failed its self-check: rewordings must rank above unrelated pairs (AUC >= 0.90) and the same
           text must embed the same twice. FastFlowLM's EmbeddingGemma output is wrong in 1.0.4 on Windows (issue #732)
           and non-discriminative from 0.9.45 to 1.0.8 (issue #789), so use FastFlowLM 0.9.43.
@@ -167,12 +168,13 @@ def load_test_sets(extra=(), use_evalplus=True):
 
 
 def discover_train(root):
-    """[(source name, path)]: the first run's sets and the loop's pools."""
+    """[(source name, path)]: the first run's sets and the loop's pools. Folders with a dot in their name are set-aside
+    copies (e.g. loop/agent_sessions.placeholders-20oct, rows filtered out of a pool) and are skipped."""
     proc = os.path.join(root, "data", "processed")
-    out = [(os.path.basename(os.path.dirname(p)), p) for p in sorted(glob.glob(os.path.join(proc, "*", "train.jsonl")))]
-    out += [("loop/" + os.path.basename(os.path.dirname(p)), p)
-            for p in sorted(glob.glob(os.path.join(proc, "loop", "*", "train.jsonl")))]
-    return out
+    found = [(os.path.basename(os.path.dirname(p)), p) for p in sorted(glob.glob(os.path.join(proc, "*", "train.jsonl")))]
+    found += [("loop/" + os.path.basename(os.path.dirname(p)), p)
+              for p in sorted(glob.glob(os.path.join(proc, "loop", "*", "train.jsonl")))]
+    return [(n, p) for n, p in found if "." not in n.split("/")[-1]]
 
 
 def load_train(sources):
@@ -311,21 +313,25 @@ def free_ram_gb():
 
 
 class SlowdownGuard:
-    """Training speed from a run's metrics.jsonl ("t", "tokens_per_second" per step): the mean over the window before
-    the start is the baseline; check() stops once the mean of the last `recent` steps since the start is more than
-    max_slowdown below it."""
+    """Training speed from a run's metrics.jsonl ("t", "tokens_per_second" per step). Baseline: the last `base_steps`
+    steps logged in the `window_s` before the start. check() stops once the mean of ALL steps since the start (at
+    least `min_steps` of them) is more than max_slowdown below the baseline.
 
-    def __init__(self, path, max_slowdown=0.02, window_s=1800, recent=3, now=None):
-        self.path, self.max_slowdown, self.recent = path, max_slowdown, recent
+    Why these numbers: on the first run (167 steps of ~290 s, 20 Oct) tokens_per_second has a 1.5% coefficient of
+    variation with no step-to-step correlation. Replayed on those steps, a 6-step baseline against a sliding 3-step mean
+    stops a run that changes nothing 19% of the time within 12 steps; 12 steps against the running mean of 4 or more
+    stops 0.7% of the time and still catches a 3% slowdown 97-100% of the time."""
+
+    def __init__(self, path, max_slowdown=0.02, base_steps=12, window_s=7200, min_steps=4, now=None):
+        self.path, self.max_slowdown, self.min_steps = path, max_slowdown, min_steps
         self.start = time.time() if now is None else now
         self.offset, self.before, self.during = 0, [], []
         self._read()
-        base = [r for r in self.before if r["t"] >= self.start - window_s]
+        base = [r for r in self.before if r["t"] >= self.start - window_s][-base_steps:]
         if len(base) < 3:
-            base = self.before[-6:]
-        if len(base) < 3:
-            raise Stop(EXIT_BAD_INPUT, f"{path}: fewer than 3 training steps logged before now, so there is no "
-                                       "baseline speed; leave out --watch-metrics if training isn't running")
+            raise Stop(EXIT_BAD_INPUT, f"{path}: fewer than 3 training steps logged in the {window_s / 3600:g} h before "
+                                       "now, so there is no baseline speed; leave out --watch-metrics if training "
+                                       "isn't running")
         self.base = [r["tokens_per_second"] for r in base]
         self.baseline = float(np.mean(self.base))
         log(f"training speed baseline: {self.baseline:.1f} tok/s over {len(self.base)} steps")
@@ -350,19 +356,23 @@ class SlowdownGuard:
 
     def check(self):
         self._read()
-        if len(self.during) >= self.recent:
-            m = float(np.mean([r["tokens_per_second"] for r in self.during[-self.recent:]]))
+        if len(self.during) >= self.min_steps:
+            m = float(np.mean([r["tokens_per_second"] for r in self.during]))
             if m < self.baseline * (1 - self.max_slowdown):
-                raise Stop(EXIT_SLOWED, f"training slowed to {m:.1f} tok/s (mean of the last {self.recent} steps) "
-                                        f"from {self.baseline:.1f}: over {self.max_slowdown:.0%}")
+                raise Stop(EXIT_SLOWED, f"training slowed to {m:.1f} tok/s (mean of the {len(self.during)} steps since "
+                                        f"the start) from {self.baseline:.1f}: over {self.max_slowdown:.0%}")
 
     def summary(self):
         d = [r["tokens_per_second"] for r in self.during]
         out = {"metrics": self.path, "baseline_tok_s": round(self.baseline, 2), "baseline_steps": len(self.base),
                "during_steps": len(d), "max_slowdown": self.max_slowdown}
         if d:
-            out.update(during_tok_s=round(float(np.mean(d)), 2),
-                       slowdown_pct=round(100 * (1 - float(np.mean(d)) / self.baseline), 2))
+            mb, md = self.baseline, float(np.mean(d))
+            out.update(during_tok_s=round(md, 2), slowdown_pct=round(100 * (1 - md / mb), 2))
+            if len(d) >= 2:  # normal-approximation 95% interval on the difference of the two means
+                se = float(np.sqrt(np.var(self.base, ddof=1) / len(self.base) + np.var(d, ddof=1) / len(d)))
+                out["slowdown_ci95_pct"] = [round(100 * (mb - md - 1.96 * se) / mb, 2),
+                                            round(100 * (mb - md + 1.96 * se) / mb, 2)]
         return out
 
 
@@ -455,13 +465,43 @@ def embed_missing(emb, cache, hashes, texts, guards, label):
 
 
 def run(args, emb=None, calib_pairs=None, test_sets=None, sources=None):
+    """The whole check. A Stop (a guard, a bad embedder, bad input) first appends one line to stops.jsonl with what
+    was measured so far, including the training-speed A/B, then is raised again."""
     out_dir = args.out_dir or os.path.join(E.EVAL_DIR, "paraphrase")
     os.makedirs(out_dir, exist_ok=True)
     started = time.time()
     report = {"started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)), "tag": args.tag,
               "url": args.url, "model": args.model, "k": args.k, "pos_percentile": POS_PERCENTILE,
               "neg_percentile": NEG_PERCENTILE, "calibration": f"lm-sys/llm-decontaminator@{CALIB_COMMIT}"}
+    ctx = {"emb": emb}
+    try:
+        return _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources)
+    except Stop as stop:
+        record_stop(stop, report, ctx, started, out_dir, args.results_dir)
+        raise
 
+
+def record_stop(stop, report, ctx, started, out_dir, results_dir):
+    """One JSON line per stopped attempt, appended (a rerun keeps earlier stops). No row text."""
+    emb, guards, slowdown = ctx.get("emb"), ctx.get("guards"), ctx.get("slowdown")
+    secs = getattr(emb, "seconds", 0) or 0
+    rec = {k: report[k] for k in ("started", "tag", "url", "model")}
+    rec.update(stopped=time.strftime("%Y-%m-%d %H:%M:%S"), exit=stop.code, reason=str(stop),
+               minutes=round((time.time() - started) / 60, 1), self_check=report.get("self_check"),
+               training_speed=slowdown.summary() if slowdown else None,
+               min_free_ram_gb=round(guards.min_seen, 2) if guards and np.isfinite(guards.min_seen) else None,
+               embedder_speed={"texts": getattr(emb, "texts", 0), "seconds": round(secs, 1),
+                               "texts_per_s": round(emb.texts / secs, 3) if secs else None})
+    for d in filter(None, [out_dir, results_dir]):
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "stops.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec) + "\n")
+        except OSError as exc:  # recording must never hide the reason for the stop
+            log(f"could not write {d}/stops.jsonl: {exc}")
+
+
+def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
     calib_pairs = calib_pairs if calib_pairs is not None else load_calibration(os.path.join(out_dir, "calib"), args.calib_dir)
     test_sets = test_sets if test_sets is not None else load_test_sets(args.test)
     sources = sources if sources is not None else ([tuple(s.split("=", 1)) for s in args.train] or discover_train(ROOT))
@@ -471,9 +511,9 @@ def run(args, emb=None, calib_pairs=None, test_sets=None, sources=None):
     for n, items in test_sets.items():
         log(f"test set {n}: {len(items)} problems")
 
-    emb = emb or Embedder(args.url, args.model, batch=args.batch)
-    slowdown = SlowdownGuard(args.watch_metrics, args.max_slowdown) if args.watch_metrics else None
-    guards = Guards(args.min_free_gb, slowdown)
+    emb = ctx["emb"] = ctx["emb"] or Embedder(args.url, args.model, batch=args.batch)
+    slowdown = ctx["slowdown"] = SlowdownGuard(args.watch_metrics, args.max_slowdown) if args.watch_metrics else None
+    guards = ctx["guards"] = Guards(args.min_free_gb, slowdown)
     guards.check()
     cache = Cache(os.path.join(out_dir, f"cache_{args.tag}.npz"))
 

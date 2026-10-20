@@ -143,6 +143,15 @@ def test_question_text():
     assert question_text({"messages": [{"role": "assistant", "content": "x"}]}) == ""
 
 
+def test_discover_train_skips_set_aside_folders():
+    with tempfile.TemporaryDirectory() as tmp:
+        for d in ("mix_first_2k", "opencodereasoning.old", "loop/tachibana4_v4pro", "loop/agent_sessions",
+                  "loop/agent_sessions.placeholders-20oct"):
+            E.write_jsonl(os.path.join(tmp, "data", "processed", *d.split("/"), "train.jsonl"), [{"messages": []}])
+        names = [n for n, _ in P.discover_train(tmp)]
+        assert names == ["mix_first_2k", "loop/agent_sessions", "loop/tachibana4_v4pro"], names
+
+
 def test_end_to_end_and_resume():
     srv = Server("good")
     with tempfile.TemporaryDirectory() as tmp:
@@ -227,6 +236,8 @@ def test_low_ram_stops_then_resumes():
                 raise AssertionError("should have stopped")
             except P.Stop as s:
                 assert s.code == P.EXIT_LOW_RAM, s.code
+            rec = json.loads(open(os.path.join(tmp, "results", "stops.jsonl"), encoding="utf-8").read())
+            assert rec["exit"] == P.EXIT_LOW_RAM and rec["min_free_ram_gb"] == 1.0 and rec["embedder_speed"]["texts"], rec
             cache = P.Cache(os.path.join(tmp, "out", "cache_test.npz"))
             partial = len(cache.vec)
             assert partial > len(P.PROBES)  # what was embedded before the stop was saved
@@ -255,24 +266,75 @@ def test_slowdown_guard():
             with open(path, "ab") as fh:
                 for s in speeds:
                     fh.write(json.dumps({"t": time.time() + 1, "tokens_per_second": s}).encode() + b"\r\n")
-        add(99.0, 98.5)
-        g.check()  # fewer than 3 steps since the start: no decision yet
-        add(99.0)
-        g.check()  # mean 98.8: within 2%
+        add(99.0, 98.5, 99.0)
+        g.check()  # fewer than 4 steps since the start: no decision yet
         with open(path, "ab") as fh:
             fh.write(b'{"t": 1, "tokens_per_')  # a half-written line: unreadable once the next line is glued on
-        add(96.0, 96.0)  # the first 96 is lost to the glued line; last 3 readable steps: 98.5, 99, 96 -> 97.8
+        add(95.0, 95.0)  # the first 95 is lost to the glued line; mean of 99, 98.5, 99, 95 = 97.9 (> 2% down)
         try:
             g.check()
             raise AssertionError("should have stopped")
         except P.Stop as s:
-            assert s.code == P.EXIT_SLOWED and "slowed" in str(s)
-        assert g.summary()["slowdown_pct"] > 0
+            assert s.code == P.EXIT_SLOWED and "slowed" in str(s) and "4 steps" in str(s), str(s)
+        sm = g.summary()
+        assert sm["during_steps"] == 4 and abs(sm["slowdown_pct"] - 2.125) < 0.01, sm
+        lo, hi = sm["slowdown_ci95_pct"]
+        assert lo < 2.125 < hi, sm
+
+        # the running mean decides, not the last few steps: 1.4% down keeps going, one slow step more tips it
+        path2 = os.path.join(tmp, "metrics2.jsonl")
+        with open(path2, "wb") as fh:
+            for i in range(12):
+                fh.write(json.dumps({"t": now - 3000 + 240 * i, "tokens_per_second": 100.0}).encode() + b"\r\n")
+            fh.write(json.dumps({"t": now - 9000, "tokens_per_second": 50.0}).encode() + b"\r\n")  # too old
+        g2 = P.SlowdownGuard(path2, max_slowdown=0.02, now=now)
+        assert g2.baseline == 100.0 and len(g2.base) == 12
+        with open(path2, "ab") as fh:
+            for v in (99.5, 98.5, 98.5, 98.0):
+                fh.write(json.dumps({"t": now + 1, "tokens_per_second": v}).encode() + b"\r\n")
+        g2.check()
+        with open(path2, "ab") as fh:
+            fh.write(json.dumps({"t": now + 2, "tokens_per_second": 94.0}).encode() + b"\r\n")
+        try:
+            g2.check()
+            raise AssertionError("should have stopped")
+        except P.Stop as s:
+            assert s.code == P.EXIT_SLOWED and "5 steps" in str(s), str(s)
         try:
             P.SlowdownGuard(os.path.join(tmp, "missing.jsonl"))
             raise AssertionError("no baseline should stop")
         except P.Stop as s:
             assert s.code == P.EXIT_BAD_INPUT
+
+
+def test_slowdown_stop_is_recorded():
+    """The 2% rule stops a real run: its A/B numbers must survive in stops.jsonl (local and results copies)."""
+    srv = Server("good")
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            tests, sources, _, _ = make_world(tmp)
+            path = os.path.join(tmp, "metrics.jsonl")
+            now = time.time()
+            with open(path, "wb") as fh:
+                for i in range(6):
+                    fh.write(json.dumps({"t": now - 600 + 60 * i, "tokens_per_second": 100.0}).encode() + b"\r\n")
+                for i in range(4):  # steps logged after the start, 10% slower
+                    fh.write(json.dumps({"t": now + 1000 + i, "tokens_per_second": 90.0}).encode() + b"\r\n")
+            try:
+                P.run(args_for(tmp, srv.url, watch_metrics=path), calib_pairs=calib_pairs(), test_sets=tests,
+                      sources=sources)
+                raise AssertionError("should have stopped")
+            except P.Stop as s:
+                assert s.code == P.EXIT_SLOWED, s.code
+            for d in ("out", "results"):
+                recs = [json.loads(x) for x in open(os.path.join(tmp, d, "stops.jsonl"), encoding="utf-8")]
+                assert len(recs) == 1 and recs[0]["exit"] == P.EXIT_SLOWED, recs
+                ts = recs[0]["training_speed"]
+                assert ts["baseline_tok_s"] == 100.0 and ts["during_tok_s"] == 90.0 and ts["slowdown_pct"] == 10.0, ts
+                assert recs[0]["min_free_ram_gb"] is not None and "training slowed" in recs[0]["reason"]
+            assert not os.path.exists(os.path.join(tmp, "out", "report.json"))
+        finally:
+            srv.close()
 
 
 def test_unreachable_server():
