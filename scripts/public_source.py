@@ -17,6 +17,9 @@ Assistant reasoning in a "reasoning_content", "reasoning" or "thinking" field is
 human/gpt) are mapped to role/content.
 
 Filters, in order, each counted in measure.json and the card:
+  outside_range                 (--row-range START:END) conversations before START; reading stops at END. Indices count
+                                every conversation of the matched files in order, so a range can pick one block of a
+                                file (e.g. the only unaltered sessions of a set whose other blocks were rewritten)
   no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
                                 or tool-call arguments that aren't a JSON object (kept as a JSON string; the
                                 template gets them parsed, see anneal/data.py chat_messages)
@@ -27,6 +30,8 @@ Filters, in order, each counted in measure.json and the card:
   placeholder_args              a tool-call argument of the target is a bare placeholder such as "<bash_command>" or
                                 "<file_path>" (redacted sessions): training on it teaches the model to emit the
                                 placeholder. Always on.
+  masked_target                 (--drop-target-regex) the target text matches one of the patterns, e.g. masked
+                                personal data such as "[REDACTED]" inside code: the model would learn to write the mask
   redacted_context              (--clean-context) an earlier assistant turn of the row makes a redacted call (placeholder
                                 arguments or a --drop-tool-name tool), so the target would be learnt after steps the
                                 model never really took. Without the flag these rows are kept and counted in
@@ -224,6 +229,9 @@ def main():
     ap.add_argument("--require-think", action="store_true")
     ap.add_argument("--min-target-chars", type=int, default=0)
     ap.add_argument("--drop-tool-name", action="append", default=[])
+    ap.add_argument("--row-range", default=None, help="START:END (END optional): only these conversations, see above")
+    ap.add_argument("--drop-target-regex", action="append", default=[],
+                    help="drop a step whose target text matches this regular expression; repeatable")
     ap.add_argument("--clean-context", action="store_true",
                     help="drop steps that follow a redacted call in their session (see redacted_context)")
     ap.add_argument("--tokenizer", required=True)
@@ -266,8 +274,8 @@ def main():
         gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
 
     counts = collections.Counter({k: 0 for k in (
-        "conversations", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
-        "dropped_tool_name", "placeholder_args", "redacted_context", "duplicate", "too_long", "template_error",
+        "conversations", "outside_range", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
+        "dropped_tool_name", "placeholder_args", "masked_target", "redacted_context", "duplicate", "too_long", "template_error",
         "contaminated_evalplus", "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
@@ -281,9 +289,17 @@ def main():
     # Streamed in file order (a 565 MB file of agent sessions would take GBs as Python objects); only kept rows are
     # held. Train/val are shuffled at the end.
     wheres = [parse_where(w) for w in args.where]
+    lo, _, hi = (args.row_range or "").partition(":")
+    lo, hi = int(lo or 0), (int(hi) if hi.strip() else None)
+    drop_res = [re.compile(x) for x in args.drop_target_regex]
     for ci, (raw, cols) in enumerate(iter_rows(paths, args.messages_field, [c for c, _, _ in wheres])):
         if args.max_rows and counts["kept"] >= args.max_rows:
             break
+        if hi is not None and ci >= hi:
+            break
+        if ci < lo:
+            counts["outside_range"] += 1
+            continue
         counts["conversations"] += 1
         if wheres and not all(where_ok(cols.get(c), op, v) for c, op, v in wheres):
             counts["filtered_where"] += 1
@@ -328,6 +344,9 @@ def main():
             if has_call and has_placeholder_args(t):
                 counts["placeholder_args"] += 1
                 redacted_text.append(len((t.get("content") or "").strip()))
+                continue
+            if drop_res and any(r.search(text) for r in drop_res):
+                counts["masked_target"] += 1
                 continue
             ctx_redacted = first_bad < end
             if ctx_redacted and args.clean_context:
