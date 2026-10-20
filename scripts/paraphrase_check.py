@@ -26,7 +26,7 @@ Outputs (data/eval/paraphrase/, never committed: they hold row text)
   report.json, card.md   calibration, cut-offs, counts, speed, and the training-speed A/B; copied without any row
                     text to results/paraphrase_check/
   stops.jsonl       one line per stopped attempt (exit code, reason, training-speed A/B so far), also copied there
-  cache_<tag>.npz   embeddings (float16), so a stopped run resumes where it stopped
+  cache_<tag>.npz   embeddings (float16), so a stopped run resumes where it stopped (_b<N> when --max-bytes isn't 4000)
 
 Runs beside training, so it stops itself (state kept, rerun to resume):
   exit 3  free RAM under --min-free-gb (default 3)
@@ -205,15 +205,21 @@ def load_train(sources):
 class Embedder:
     """OpenAI-compatible POST /v1/embeddings. Returns L2-normalised float32 rows."""
 
-    def __init__(self, url, model, batch=16, timeout=900, max_chars=12000, retries=4):
+    def __init__(self, url, model, batch=16, timeout=900, max_bytes=4000, retries=4):
         url = url.rstrip("/")
         self.url = (url[:-3] if url.endswith("/v1") else url) + "/v1/embeddings"
-        self.model, self.batch, self.timeout, self.max_chars, self.retries = model, batch, timeout, max_chars, retries
+        self.model, self.batch, self.timeout, self.max_bytes, self.retries = model, batch, timeout, max_bytes, retries
         self.texts = self.chars = 0
         self.seconds = 0.0
 
+    def cut(self, text):
+        """At most max_bytes of UTF-8. Every token covers at least one byte (Gemma's tokenizer falls back to bytes), so
+        a server with a window of max_bytes + a few tokens can never get an input that is too long."""
+        b = text.encode("utf-8")
+        return text if len(b) <= self.max_bytes else b[:self.max_bytes].decode("utf-8", errors="ignore")
+
     def _post(self, texts):
-        body = json.dumps({"model": self.model, "input": [t[:self.max_chars] for t in texts]}).encode("utf-8")
+        body = json.dumps({"model": self.model, "input": [self.cut(t) for t in texts]}).encode("utf-8")
         req = urllib.request.Request(self.url, data=body, headers={"Content-Type": "application/json"})
         delay = 5
         for attempt in range(self.retries + 1):
@@ -225,7 +231,8 @@ class Embedder:
                 except ValueError:
                     raise Stop(EXIT_BAD_EMBEDDER, f"{self.url} returned something that isn't JSON: {raw[:200]!r}")
             except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as exc:
-                if isinstance(exc, urllib.error.HTTPError) and exc.code < 500:
+                http = isinstance(exc, urllib.error.HTTPError)
+                if http and (exc.code < 500 or attempt == self.retries):  # it answered, so it isn't unreachable
                     raise Stop(EXIT_BAD_EMBEDDER, f"{self.url}: HTTP {exc.code}: {exc.read()[:300]!r}")
                 if attempt == self.retries:
                     raise Stop(EXIT_NO_SERVER, f"{self.url} unreachable after {self.retries + 1} tries: {exc}")
@@ -251,7 +258,7 @@ class Embedder:
                 raise Stop(EXIT_BAD_EMBEDDER, "embeddings server returned empty, zero or non-finite vectors")
             out.append(vecs / norms)
             self.texts += len(chunk)
-            self.chars += sum(min(len(t), self.max_chars) for t in chunk)
+            self.chars += sum(len(self.cut(t)) for t in chunk)
         return np.concatenate(out) if out else np.zeros((0, 0), np.float32)
 
 
@@ -471,7 +478,8 @@ def run(args, emb=None, calib_pairs=None, test_sets=None, sources=None):
     os.makedirs(out_dir, exist_ok=True)
     started = time.time()
     report = {"started": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(started)), "tag": args.tag,
-              "url": args.url, "model": args.model, "k": args.k, "pos_percentile": POS_PERCENTILE,
+              "url": args.url, "model": args.model, "k": args.k, "max_bytes": args.max_bytes,
+              "pos_percentile": POS_PERCENTILE,
               "neg_percentile": NEG_PERCENTILE, "calibration": f"lm-sys/llm-decontaminator@{CALIB_COMMIT}"}
     ctx = {"emb": emb}
     try:
@@ -511,11 +519,13 @@ def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
     for n, items in test_sets.items():
         log(f"test set {n}: {len(items)} problems")
 
-    emb = ctx["emb"] = ctx["emb"] or Embedder(args.url, args.model, batch=args.batch)
+    emb = ctx["emb"] = ctx["emb"] or Embedder(args.url, args.model, batch=args.batch, max_bytes=args.max_bytes)
     slowdown = ctx["slowdown"] = SlowdownGuard(args.watch_metrics, args.max_slowdown) if args.watch_metrics else None
     guards = ctx["guards"] = Guards(args.min_free_gb, slowdown)
     guards.check()
-    cache = Cache(os.path.join(out_dir, f"cache_{args.tag}.npz"))
+    # the cut length is part of the cache's identity: a text cut differently embeds differently
+    cache = Cache(os.path.join(out_dir, f"cache_{args.tag}.npz" if args.max_bytes == 4000 else
+                               f"cache_{args.tag}_b{args.max_bytes}.npz"))
 
     try:
         # ---- self-check: same text twice, and against the probes this cache was built with
@@ -673,6 +683,9 @@ def parse_args(argv=None):
                     help="names the embedding cache: change it whenever the embedder or its version changes")
     ap.add_argument("--k", type=int, default=5, help="nearest training questions considered per test problem")
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--max-bytes", type=int, default=4000,
+                    help="each text is cut to this many bytes of UTF-8: about 1,000-1,600 tokens, inside EmbeddingGemma's "
+                         "2,048-token window, and never more than this many tokens; part of the cache's identity")
     ap.add_argument("--min-free-gb", type=float, default=3.0)
     ap.add_argument("--watch-metrics", default=None, help="a running training run's metrics.jsonl (the 2%% rule)")
     ap.add_argument("--max-slowdown", type=float, default=0.02)
