@@ -11,7 +11,7 @@ replay_fraction: 0.25      # a round that continues the best adapter also re-tra
                            # re-training on all data within 0.02 val loss at 405M and 10B; 25% for a strong shift
                            # (Ibrahim et al., TMLR 2024, arXiv 2403.08763). Recipes can override it.
 min_rows_per_round: 300    # fewer unused rows than this at the configured mix: the loop waits for new sources
-stack_max_new_rows: 3000   # rejected rows roll forward (docs/growing-data-rounds.md): a rejected round's new rows join
+stack_max_new_rows: 3000   # rejected rows roll forward (research/growing-data-rounds.md): a rejected round's new rows join
                            # the next default-source round (same best adapter + 1,000 fresh rows + 25% replay), up to
                            # 3,000 new rows; a reject at 3,000 drops them for good. On 495 problems a real 2-point gain
                            # is kept only 24-44% of the time, so a reject mostly means "too small to see". 0 = off.
@@ -27,7 +27,7 @@ rules: {alpha: 0.05, cc_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: fa
 # confirm_net_win (off: optional, not chosen yet): a kept round's fresh-seed confirm must also win more gate problems
 # than it loses against the best, or the round is rejected. Under no real gain that passes about 45% of the time, so it
 # more than halves false keeps, which rolling rows forward raises; a real 3-point gain passes 94-99%
-# (docs/growing-data-rounds.md, section 5).
+# (research/growing-data-rounds.md, section 5).
 
 train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); recipes override keys under their own train:
   base_model: C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299
@@ -133,7 +133,7 @@ recipes:
       rank 64 (alpha 128) on the attention, MLP and Gated DeltaNet projections, retrained from the base on every kept
       row + 1,000 fresh rows; after three kept rounds or a dropped stack. Rank orders code results (Biderman et al.,
       TMLR 2024) and low rank forgets most when trained in sequence (Shuttleworth et al., 2024); 3.9 vs 0.7 GiB of
-      adapter, gradient and optimiser memory (docs/training-memory-budget.md). Check tokens/s on its first steps.
+      adapter, gradient and optimiser memory (research/training-memory-budget.md). Check tokens/s on its first steps.
     after_kept: 3
     after_dropped_stacks: 1
     init: best                 # the shape change makes it retrain from the base on every kept row
@@ -141,7 +141,7 @@ recipes:
       lora_r: 64
       lora_alpha: 128
       target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj, in_proj_qkv, in_proj_z, out_proj]
-      expect_trainable_params: 435159040   # docs/growing-data-rounds.md section 4.1, from the model's config
+      expect_trainable_params: 435159040   # research/growing-data-rounds.md section 4.1, from the model's config
   - id: two-pass
     note: >-
       two passes over what is left when the pools can't fill a round (rows rolled forward + the last fresh rows +

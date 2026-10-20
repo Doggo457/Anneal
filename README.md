@@ -14,13 +14,15 @@ Honours dissertation project (University of Stirling): train a 4-bit QLoRA adapt
 | `tests/` | The check scripts behind each finding (parity with llama.cpp, short conv, MTP, sandbox, resume, LoRA serving) |
 | `results/` | `*_findings.md` write-ups and the summaries and metrics behind them. Weights, checkpoints and raw logs stay on the machine |
 | `docs/` | Project brief, plan, hardware notes, model and dataset shortlists, reading list, and the card for the held-out evaluation sets |
-| `setup/` | How the EVO-X2 is set up for training on Windows, and how the loop restarts itself (`loop-watchdog.md`). `superseded/` holds the pre-arrival Linux notes |
+| `setup/` | How the watchdog keeps the first run and the loop going after crashes and reboots (`loop-watchdog.md`). `superseded/` holds the pre-arrival Linux notes |
 | `dissertation/` | Dissertation outline (Word) and its figures |
 | `data/`, `models/` | Git-ignored except their READMEs |
 
 ## Where things run
 
-The repo mirrors `C:\AI\training` on the EVO-X2, which has its own `.venv`. Training loads `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`; testing uses the Ollama Q4_K_M GGUF in llama-server (Vulkan build) with the adapter converted to a GGUF LoRA. `setup/windows-training-setup.md` has versions, layout and the measured numbers.
+The repo mirrors `C:\AI\training` on the EVO-X2, which has its own `.venv`. Training loads `unsloth/Qwen3.8-27B-unsloth-bnb-4bit`; testing uses the Ollama Q4_K_M GGUF in llama-server (Vulkan build) with the adapter converted to a GGUF LoRA. The training environment's versions are in `torch-pins.txt` and the Decision-Log's "Training environment versions" row.
+
+Paths such as `research/…` and `setup/…` in code comments and the Decision-Log that are not in this repo point at notes kept in the project folder.
 
 `scripts/check_env.py`, `train_qlora.py`, `export_gguf.py`, `run_eval.sh`, `gen_samples.py`, `memory_estimate.py` and `cleanup_intermediates.py` are the scaffolding written before the machine arrived. They are not on the machine; the runs use `train_longrun.py`, `first_run.py` and `evalplus_win.py`.
 

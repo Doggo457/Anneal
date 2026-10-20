@@ -1,13 +1,13 @@
 """NOT USED YET (parked 20 Oct 2026). I decided not to pay for a teacher API, so the loop stays on the public
 AI-written sets and nothing imports this module. It is kept, smoke-tested but unfinished (no CLI, no teacher client,
-no build step, no unit tests yet), in case that changes. See docs/hf-dataset-search.md sections 3, 7 and 8.
+no build step, no unit tests yet), in case that changes. See research/hf-dataset-search.md sections 3, 7 and 8.
 
 Human-written answers with teacher-written reasoning: training rows whose final answer is always a person's work
 (an accepted contest solution, a merged patch, a JUnit test, a review comment, a commit message, a Stack Overflow
 answer) and whose <think> trace is written by an allowed teacher model. A driver script (collect -> teacher ->
 build) was planned but not written.
 
-Why this shape (docs/hf-dataset-search.md, sections 3 and 7):
+Why this shape (research/hf-dataset-search.md, sections 3 and 7):
   - LoRA training on answers without reasoning took Qwen3-8B's valid-reasoning rate on the trained task to 0% [E5],
     so every row carries a trace.
   - Reasoning written toward a known answer trains worse (78.9% against 95.1% on MATH-500); asking the teacher to
@@ -48,7 +48,7 @@ from anneal.evalsets import IO_CASE_TIMEOUT_S, MAX_CASE_BYTES, MAX_IO_CASES, cc_
 PROMPT_VERSION = "hr-1"            # bump when a teacher or judge prompt changes; traces are keyed by it
 HUMAN_CUTOFF = "2022-11-30"        # ChatGPT's release: content dated before it is very unlikely to be AI-written
 GATE_CF_CONTESTS = (1547, 1624)    # the gate's CodeContests problems are Codeforces contests 1548-1623, +-1 for
-                                   # parallel Div. 1 / Div. 2 rounds (docs/hf-dataset-search.md section 5)
+                                   # parallel Div. 1 / Div. 2 rounds (research/hf-dataset-search.md section 5)
 LCB_CUTOFF_UNIX = 1785542400       # 2026-08-01 00:00 UTC: LiveCodeBench problems we report start here
 EVAL_REPOS = frozenset({           # repositories of benchmarks we may report (SWE-bench Multilingual, Multi-SWE-bench)
     "apache/druid", "apache/lucene", "alibaba/fastjson2", "mockito/mockito", "elastic/logstash"})
