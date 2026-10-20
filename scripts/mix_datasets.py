@@ -100,13 +100,17 @@ def main():
 
     tok_stats = {}
     if args.tokenizer:
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        here = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(0, here)
+        sys.path.insert(0, os.path.dirname(here))
         from prepare_dataset import TokenCounter
+
+        from anneal.data import chat_messages  # tool-call arguments are stored as JSON strings
 
         count_tokens = TokenCounter(args.tokenizer)
         sums = collections.Counter()
         for r in train:
-            sums[r["source"]] += count_tokens(r["messages"])
+            sums[r["source"]] += count_tokens(chat_messages(r["messages"]))
         tok_stats = dict(sums)
 
     os.makedirs(args.out, exist_ok=True)

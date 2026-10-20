@@ -691,7 +691,11 @@ def fake_transformers():
                                          f'apply_chat_template.')
                 if "TEMPLATE_REFUSES" in (x.get("content") or ""):
                     raise RuntimeError("template refused this row")
-            return list(range(10 + sum(len(x.get("content") or "") for x in msgs) // 4))
+            n = 10 + sum(len(x.get("content") or "") for x in msgs) // 4
+            return list(range(n)) if tokenize else "t" * n
+
+        def __call__(self, text, add_special_tokens=True):
+            return {"input_ids": list(range(len(text)))}
 
     m.AutoTokenizer = types.SimpleNamespace(from_pretrained=lambda name: Tok())
     return m
@@ -793,10 +797,65 @@ def test_public_source_formats():
         assert sorted([len(tr), len(va)]) == [0, 2]  # both steps of the session on the same side
         steps = sorted(tr + va, key=lambda r: len(r["messages"]))
         assert len(steps[0]["messages"]) == 3 and steps[0]["messages"][-1]["tool_calls"][0]["function"] == {
-            "name": "bash", "arguments": {"cmd": "pytest -x"}}  # the JSON-string arguments are stored as an object
+            "name": "bash", "arguments": '{"cmd": "pytest -x"}'}  # stored as a JSON string, rendered as an object
         assert len(steps[1]["messages"]) == 7 and steps[1]["messages"][3] == {"role": "tool", "content": "FAILED "
                                                                               "test_parse - KeyError: 'id'",
                                                                               "tool_call_id": "c1"}
+
+
+def test_tool_call_rows():
+    """Agent rows keep tool-call arguments as JSON strings on disk; everything that renders them through Qwen3.8's
+    template (anneal/data.py template_ids / encode_chat, mix_datasets.py token counts) parses them first."""
+    from anneal.data import chat_messages, encode_chat
+    plain = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello there"}]
+    assert chat_messages(plain) is plain
+    call = {"id": "c1", "type": "function", "function": {"name": "list_dir", "arguments": '{"path": "src"}'}}
+    # the shape load_dataset gives a mixed file: missing optional keys come back as None
+    arrow = [{"role": "user", "content": "List src.", "tool_calls": None, "tool_call_id": None, "name": None},
+             {"role": "assistant", "content": "", "tool_calls": [call], "tool_call_id": None, "name": None},
+             {"role": "tool", "content": "a.py b.py", "tool_calls": None, "tool_call_id": "c1", "name": "list_dir"},
+             {"role": "assistant", "content": "src holds a.py and b.py.", "tool_calls": None, "tool_call_id": None,
+              "name": None}]
+    before = json.dumps(arrow)
+    got = chat_messages(arrow)
+    assert json.dumps(arrow) == before  # the input is not changed
+    assert got[0] == {"role": "user", "content": "List src."}
+    assert got[1]["tool_calls"][0] == {"id": "c1", "type": "function",
+                                       "function": {"name": "list_dir", "arguments": {"path": "src"}}}
+    assert got[2] == {"role": "tool", "content": "a.py b.py", "tool_call_id": "c1", "name": "list_dir"}
+    tok = fake_transformers().AutoTokenizer.from_pretrained("x")
+    enc = encode_chat(tok, arrow, max_len=1000)
+    assert enc is not None and enc["n_trained"] > 0
+    bad = [dict(arrow[1], tool_calls=[{"function": {"name": "f", "arguments": "{oops"}}]), arrow[3]]
+    try:
+        chat_messages(bad)
+        raise AssertionError("bad arguments accepted")
+    except ValueError as e:
+        assert "'f'" in str(e)
+
+    import mix_datasets
+    with tempfile.TemporaryDirectory() as d:
+        for name, rows in (("agent", [{"messages": arrow[:2]}, {"messages": arrow}]), ("code", [{"messages": plain}])):
+            os.makedirs(os.path.join(d, name))
+            E.write_jsonl(os.path.join(d, name, "train.jsonl"), rows)
+            E.write_jsonl(os.path.join(d, name, "val.jsonl"), [])
+        saved_argv, saved_tf = sys.argv, sys.modules.get("transformers")
+        sys.modules["transformers"] = fake_transformers()
+        sys.argv = ["mix_datasets.py", "--source", f"agent={os.path.join(d, 'agent')}:all", "--source",
+                    f"code={os.path.join(d, 'code')}:all", "--tokenizer", "x", "--out", os.path.join(d, "mix")]
+        try:
+            mix_datasets.main()
+        finally:
+            sys.argv = saved_argv
+            if saved_tf is None:
+                sys.modules.pop("transformers", None)
+            else:
+                sys.modules["transformers"] = saved_tf
+        mixed = E.read_jsonl(os.path.join(d, "mix", "train.jsonl"))
+        assert len(mixed) == 3
+        stored = [c["function"]["arguments"] for r in mixed for m in r["messages"] for c in m.get("tool_calls") or []]
+        assert stored == ['{"path": "src"}'] * 2, stored
+        assert "| agent |" in open(os.path.join(d, "mix", "data_card.md")).read()
 
 
 def test_staged_scripts():

@@ -23,7 +23,10 @@ Rows longer than max_len are dropped, never truncated: a truncated row loses the
 loss="full" gives labels = input_ids (every token scored), only for comparing with the old runs.
 """
 
+import json
+
 IGNORE_INDEX = -100
+OPTIONAL_KEYS = ("tool_calls", "tool_call_id", "name", "reasoning_content")
 
 
 def codealpaca_messages(row):
@@ -32,11 +35,41 @@ def codealpaca_messages(row):
     return [{"role": "user", "content": prompt}, {"role": "assistant", "content": row["output"]}]
 
 
+def chat_messages(messages):
+    """Messages as Qwen3.8's chat template takes them. Rows store tool-call arguments as JSON strings (the OpenAI wire
+    format; load_dataset's Arrow would merge every tool's argument names into one struct padded with nulls, and fails
+    when one name has two types), but the template only takes a mapping and raises a TemplateError on a string, so
+    they are parsed here. Optional keys that Arrow fills with None in rows that lack them are dropped. A conversation
+    that needs neither change is returned as it is (the same list)."""
+    out, changed = [], False
+    for m in messages:
+        new = m
+        if any(m.get(k, 0) is None for k in OPTIONAL_KEYS):
+            new = {k: v for k, v in m.items() if not (v is None and k in OPTIONAL_KEYS)}
+        calls = new.get("tool_calls")
+        if calls and any(isinstance(((c or {}).get("function") or {}).get("arguments"), str) for c in calls):
+            new = dict(new, tool_calls=[_parsed_call(c) for c in calls])
+        changed = changed or new is not m
+        out.append(new)
+    return out if changed else messages
+
+
+def _parsed_call(call):
+    fn = call.get("function") or {}
+    args = fn.get("arguments")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except ValueError as e:
+            raise ValueError(f"tool call {fn.get('name')!r}: arguments are not JSON ({e})") from None
+    return dict(call, function=dict(fn, arguments=args))
+
+
 def template_ids(tokenizer, messages, add_generation_prompt=False, **template_kwargs):
     """Token IDs of the chat template (transformers 5 returns a BatchEncoding here, Unsloth's patch a list).
-    template_kwargs go to the template, e.g. enable_thinking=False."""
-    out = tokenizer.apply_chat_template(messages, tokenize=True, add_generation_prompt=add_generation_prompt,
-                                        **template_kwargs)
+    template_kwargs go to the template, e.g. enable_thinking=False. Messages go through chat_messages() first."""
+    out = tokenizer.apply_chat_template(chat_messages(messages), tokenize=True,
+                                        add_generation_prompt=add_generation_prompt, **template_kwargs)
     if hasattr(out, "keys"):
         out = out["input_ids"]
     return list(out)
