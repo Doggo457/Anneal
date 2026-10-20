@@ -414,6 +414,10 @@ def setup_world(tmp):
     # data trained on before the loop (the first run's mix)
     E.write_jsonl(os.path.join(tmp, "data", "processed", "mix_first_2k", "train.jsonl"),
                   [{"messages": [{"role": "user", "content": "tachibana4_v4pro q0"}, {"role": "assistant", "content": "x"}]}])
+    # a row the reworded-copy check flagged (scripts/paraphrase_check.py): the loop must never hand it out
+    os.makedirs(os.path.join(ev, "paraphrase"))
+    with open(os.path.join(ev, "paraphrase", "blocked_keys.txt"), "w", encoding="utf-8") as fh:
+        fh.write(L.row_key({"messages": [{"role": "user", "content": "tachibana4_v4pro q5"}, {"role": "assistant", "content": "a"}]}) + "\n")
     # the first run, finished
     fdir = os.path.join(tmp, "results", "first-run")
     os.makedirs(os.path.join(fdir, "stages"))
@@ -608,6 +612,15 @@ def _simulated_loop(tmp):
     assert not os.path.exists(os.path.join(rd(12), "stages", "plan.done.json"))
     summary = open(os.path.join(run_dir, "summary.md")).read()
     assert summary.count("\n| ") >= 13 and "Rows waiting to roll into the next round" in summary
+    # the blocked row was skipped in every round and never recorded as trained on
+    trained = set()
+    for n in range(2, 12):
+        mixf = os.path.join(rd(n), "data", "mix", "train.jsonl")
+        if os.path.exists(mixf):
+            trained |= set(qs(n))
+    assert len(trained) > 300 and "tachibana4_v4pro q5" not in trained and "tachibana4_v4pro q6" in trained
+    used_keys = open(os.path.join(run_dir, "used_keys.txt")).read()
+    assert L.row_key({"messages": [{"role": "user", "content": "tachibana4_v4pro q5"}, {"role": "assistant", "content": "a"}]}) not in used_keys
     check_child_commands(w.calls)
 
 
