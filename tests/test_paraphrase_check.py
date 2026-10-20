@@ -346,6 +346,46 @@ def test_unreachable_server():
         assert s.code == P.EXIT_NO_SERVER
 
 
+def test_long_texts_cut_and_server_errors():
+    """Texts are cut to --max-bytes of UTF-8 (EmbeddingGemma reads 2,048 tokens); a server that keeps failing with HTTP 500
+    (llama-server's "input is too large") is a bad embedder, not an unreachable one."""
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.extend(len(t) for t in body["input"])
+            if any(len(t) > 50 for t in body["input"]):
+                out, code = b'{"error": {"message": "input is too large to process"}}', 500
+            else:
+                out, code = json.dumps({"data": [{"index": i, "embedding": [1.0, 0.0]} for i, _ in
+                                                  enumerate(body["input"])]}).encode(), 200
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        e = P.Embedder(url, "m", max_bytes=40)
+        e.embed(["x" * 500, "short"])
+        assert seen == [40, 5], seen
+        cut = e.cut("é" * 30)  # 2 bytes a character: 20 whole characters, never half of one
+        assert cut == "é" * 20 and len(cut.encode("utf-8")) == 40, cut
+        try:
+            P.Embedder(url, "m", max_bytes=500, retries=1).embed(["y" * 500])
+            raise AssertionError("should have stopped")
+        except P.Stop as s:
+            assert s.code == P.EXIT_BAD_EMBEDDER and "too large" in str(s), (s.code, str(s))
+        assert P.parse_args([]).max_bytes == 4000
+    finally:
+        httpd.shutdown()
+
+
 def test_calibration_file_pinned():
     with tempfile.TemporaryDirectory() as d:
         for _, (path, _) in P.CALIB_FILES.items():
