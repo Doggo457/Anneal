@@ -794,17 +794,21 @@ def test_public_source_formats():
                          {"id": "c8", "type": "function", "function": {"name": "list_dir", "arguments": "[1, 2]"}}]}]
         refused = [{"role": "user", "content": "TEMPLATE_REFUSES this one"},
                    {"role": "assistant", "content": "An answer long enough to pass the length filter."}]
+        redacted = [{"role": "user", "content": "Fix the failing build in this project please."},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "c7", "type": "function", "function": {"name": "bash", "arguments": json.dumps(
+                            {"command": "make test", "env": {"CI": "1", "dir": "<directory_path>"}})}}]}]
         src2 = os.path.join(d, "agent.jsonl")
         E.write_jsonl(src2, [{"messages": session}, {"messages": short}, {"messages": bad_args},
-                             {"messages": list_args}, {"messages": refused}])
+                             {"messages": list_args}, {"messages": refused}, {"messages": redacted}])
         out2 = os.path.join(d, "out2")
         assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src2, "--turns", "each",
                                   "--drop-tool-name", "unknown_tool", "--min-target-chars", "20", "--tokenizer", "x",
                                   "--val-fraction", "0.5", "--out", out2]) == 0
         m2 = json.load(open(os.path.join(out2, "measure.json")))
         c = m2["counts"]
-        assert (c["candidate_rows"], c["bad_format"], c["dropped_tool_name"], c["short_target"], c["template_error"],
-                c["kept"]) == (5, 2, 1, 1, 1, 2), c
+        assert (c["candidate_rows"], c["bad_format"], c["dropped_tool_name"], c["placeholder_args"], c["short_target"],
+                c["template_error"], c["kept"]) == (6, 2, 1, 1, 1, 1, 2), c
         assert m2["template_errors"] == [{"error": "RuntimeError: template refused this row", "first_conversation": 4}]
         tr, va = E.read_jsonl(os.path.join(out2, "train.jsonl")), E.read_jsonl(os.path.join(out2, "val.jsonl"))
         assert sorted([len(tr), len(va)]) == [0, 2]  # both steps of the session on the same side
