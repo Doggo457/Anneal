@@ -24,6 +24,9 @@ Filters, in order, each counted in measure.json and the card:
   short_target                  target text under --min-target-chars and no tool call
   dropped_tool_name             the target calls a tool named by --drop-tool-name (e.g. "unknown_tool": the name was
                                 lost, so the call teaches nothing)
+  placeholder_args              a tool-call argument of the target is a bare placeholder such as "<bash_command>" or
+                                "<file_path>" (redacted sessions): training on it teaches the model to emit the
+                                placeholder. Always on.
   duplicate                     the same target text was kept before
   too_long                      over --max-tokens through the model's chat template (rows over 6 chars per token
                                 are counted without tokenising; later turns of a session only get longer)
@@ -41,6 +44,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import sys
 import time
 
@@ -50,6 +54,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 HUB = os.path.join(ROOT, "models", "hf", "hub")
 REASONING_KEYS = ("reasoning_content", "reasoning", "thinking")
+PLACEHOLDER = re.compile(r"<[A-Za-z][A-Za-z0-9_ -]{0,40}>")
 ROLE_MAP = {"human": "user", "user": "user", "gpt": "assistant", "assistant": "assistant", "system": "system",
             "tool": "tool", "function": "tool", "observation": "tool", "ipython": "tool"}
 
@@ -166,6 +171,23 @@ def normalise(messages):
     return out
 
 
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _strings(v)
+
+
+def has_placeholder_args(msg):
+    """True if any tool-call argument value of msg is a bare placeholder ("<bash_command>", "<file_path>")."""
+    return any(PLACEHOLDER.fullmatch(v.strip()) for c in msg.get("tool_calls", [])
+               for v in _strings(json.loads(c["function"]["arguments"])))
+
+
 def targets(messages, mode):
     """Indices of the assistant turns that end a row."""
     idx = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
@@ -231,8 +253,8 @@ def main():
 
     counts = collections.Counter({k: 0 for k in (
         "conversations", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
-        "dropped_tool_name", "duplicate", "too_long", "template_error", "contaminated_evalplus", "contaminated_gate",
-        "kept")})
+        "dropped_tool_name", "placeholder_args", "duplicate", "too_long", "template_error", "contaminated_evalplus",
+        "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
     seen = set()
@@ -278,6 +300,9 @@ def main():
                 continue
             if any(c["function"]["name"] in args.drop_tool_name for c in t.get("tool_calls", [])):
                 counts["dropped_tool_name"] += 1
+                continue
+            if has_call and has_placeholder_args(t):
+                counts["placeholder_args"] += 1
                 continue
             key = hashlib.sha1(text.encode("utf-8")).hexdigest()
             if key in seen:
