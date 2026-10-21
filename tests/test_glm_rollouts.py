@@ -109,6 +109,7 @@ def make_dataset(d):
 def point_at(raw):
     G.RAW, G.SELECTION, G.PARTS = raw, os.path.join(raw, "selection.json"), os.path.join(raw, "parts")
     G.OUT, G.DONE = os.path.join(raw, "conversations.jsonl"), os.path.join(raw, "conversations.done.json")
+    G.DOWNLOADS = os.path.join(raw, "downloads.json")
     G._SHARD_CACHE.clear()
 
 
@@ -119,10 +120,12 @@ def test_select_and_local_convert():
         assert G.select(SimpleNamespace(per_task=2, revision="abc")) == 0
         sel = json.load(open(G.SELECTION))
         c = sel["counts"]
-        assert (c["reward_1"], c["missing_agent_files"], c["tasks"], c["selected"], c["over_per_task"]) == \
-            (6, 1, 3, 4, 1), c
-        assert sorted(sel["shards"][SHARD]) == ["rts_a__r0_1/", "rts_b__r0_2/", "rts_c__r0_3/"], sel["shards"]
-        assert "rts_x__r0_4/" not in sel["runs"]  # t1's attempt with the most turns is left out
+        assert (c["reward_1"], c["missing_agent_files"], c["tasks"], c["selected"], c["picked"], c["over_per_task"]) \
+            == (6, 1, 3, 5, 4, 1), c
+        assert sorted(sel["shards"][SHARD]) == ["rts_a__r0_1/", "rts_b__r0_2/", "rts_c__r0_3/", "rts_x__r0_4/"]
+        x = sel["runs"]["rts_x__r0_4/"]  # t1's attempt with the most turns is kept but not picked
+        assert (x["task_rank"], x["picked"]) == (3, False), x
+        assert [sel["runs"][p]["task_rank"] for p in ("rts_b__r0_2/", "rts_a__r0_1/")] == [1, 2]
         assert G.convert(SimpleNamespace(local_tar=tar_path, parallel=1, max_shards=0)) == 0
         rows = [json.loads(x) for x in open(os.path.join(G.PARTS, G.part_name(SHARD) + ".jsonl"))]
         by = {r["task_id"] + ":" + str(r["attempt"]): r for r in rows}
@@ -133,13 +136,16 @@ def test_select_and_local_convert():
         assert a[4]["loss_mask"] == 0  # the fenced reply Terminus-2 couldn't parse stays only as context
         assert a[6].get("loss_mask", 1) == 1 and a[8]["reasoning_content"] == "It passes."
         assert by["t1:1"]["uses_python"] is False and by["t1:1"]["task_group_id"] == "g1"
+        assert (by["t1:1"]["picked"], by["t1:2"]["picked"], by["t1:2"]["task_rank"]) == (True, False, 3)
         cc = by["t2:1"]
         assert cc["steps"] == 1 and len(cc["messages"]) == 2, cc  # cut where the sent context stops matching
         assert cc["uses_python"] is True
         done = json.load(open(os.path.join(G.PARTS, G.part_name(SHARD) + ".done.json")))
         k = done["counts"]
-        assert done["checked"] and (k["runs_written"], k["steps_written"], k["check_context_differs"],
-                                    k["check_reasoning_match"], k["check_reply_match"]) == (3, 6, 1, 6, 6), k
+        assert done["checked"] and done["from"] == "disk"
+        assert (k["runs_written"], k["steps_written"], k["picked_runs_written"], k["picked_steps_written"],
+                k["check_context_differs"], k["check_reasoning_match"], k["check_reply_match"]) == \
+            (4, 8, 3, 6, 1, 8, 8), k
         assert not os.path.exists(G.DONE)  # the other shard isn't in yet
 
 
@@ -182,6 +188,7 @@ def test_stream_resumes_and_checks():
         sel = json.load(open(G.SELECTION))
         sel["shards"] = {SHARD: sel["shards"][SHARD]}  # leave out the shard that only exists in the catalog
         json.dump(sel, open(G.SELECTION, "w"))
+        os.remove(tar_path)  # not on disk, so it is streamed
         srv = serve(blob, [len(blob) // 3])
         old_url, old_sleep = G.shard_url, G.time.sleep
         G.shard_url = lambda path, rev: f"http://127.0.0.1:{srv.server_address[1]}/{path}"
@@ -189,9 +196,11 @@ def test_stream_resumes_and_checks():
         try:
             assert G.convert(SimpleNamespace(local_tar=None, parallel=2, max_shards=0)) == 0
             done = json.load(open(G.DONE))
-            assert done["counts"]["runs_written"] == 3 and done["shards"] == 1, done
+            assert done["counts"]["runs_written"] == 4 and done["shards"] == 1, done
+            part = json.load(open(os.path.join(G.PARTS, G.part_name(SHARD) + ".done.json")))
+            assert part["from"] == "stream", part
             rows = [json.loads(x) for x in open(G.OUT)]
-            assert sorted(r["task_id"] for r in rows) == ["t1", "t1", "t2"]
+            assert sorted(r["task_id"] for r in rows) == ["t1", "t1", "t1", "t2"]
             # a second run finds every shard done and streams nothing
             assert G.convert(SimpleNamespace(local_tar=None, parallel=1, max_shards=0)) == 0
             # a shard whose bytes don't match the checksum writes nothing
@@ -203,6 +212,72 @@ def test_stream_resumes_and_checks():
         finally:
             G.shard_url, G.time.sleep = old_url, old_sleep
             srv.shutdown()
+
+
+def test_download_and_local_first():
+    """download fetches every file of the listing into the raw folder, checks size and sha256, fetches a bad file
+    again and skips what is already there; convert then reads shards from disk (never the network), and --local-only
+    leaves a shard that isn't on disk for later."""
+    with tempfile.TemporaryDirectory() as d:
+        raw, tar_path, blob = make_dataset(d)
+        point_at(raw)
+        G.select(SimpleNamespace(per_task=2, revision="abc"))
+        os.remove(tar_path)
+        sha = hashlib.sha256(blob).hexdigest()
+        other = b"second shard"
+        task_file = b'{"task": 1}\n'
+        hub = {SHARD: blob, "payload/s03/shards/trials-00003.tar": other, "tasks/a.jsonl": task_file}
+        listing = [(SHARD, len(blob), sha), ("payload/s03/shards/trials-00003.tar", len(other),
+                                             hashlib.sha256(other).hexdigest()), ("tasks/a.jsonl", len(task_file), None)]
+        fetched, corrupt_once = [], {"payload/s03/shards/trials-00003.tar"}
+
+        def fake_fetch(path, revision):
+            fetched.append(path)
+            dest = os.path.join(G.RAW, *path.split("/"))
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            data = hub[path]
+            if path in corrupt_once:
+                corrupt_once.discard(path)
+                data = data[:-1] + b"X"
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            return dest
+
+        saved = G.hub_files, G.hub_fetch, G.free_bytes, G.time.sleep, G.check_hub_version, G.shard_url
+        G.hub_files, G.hub_fetch, G.time.sleep = (lambda rev: listing), fake_fetch, (lambda s: None)
+        G.check_hub_version = lambda: None
+        G.shard_url = lambda path, rev: (_ for _ in ()).throw(AssertionError("no network for a shard on disk"))
+        try:
+            args = SimpleNamespace(revision="abc", parallel=1, min_free_gb=100, floor_gb=50, retries=2)
+            G.free_bytes = lambda p: 50e9  # 100 GB must stay free after everything: refuses, fetches nothing
+            try:
+                G.download(args)
+                raise AssertionError("download started without enough free space")
+            except SystemExit as e:
+                assert "nothing downloaded" in str(e), e
+            assert not fetched
+            G.free_bytes = lambda p: 500e9
+            assert G.download(args) == 0
+            # the shard with selected runs and the small files first; s03 (no selected run) last, fetched twice
+            assert fetched == [SHARD, "tasks/a.jsonl"] + ["payload/s03/shards/trials-00003.tar"] * 2, fetched
+            state = json.load(open(G.DOWNLOADS))
+            assert state["files"][SHARD]["checked"] and not state["files"]["tasks/a.jsonl"]["checked"], state
+            fetched.clear()
+            assert G.download(args) == 0 and not fetched  # all here already
+            # convert: the shard is read from disk; t6's shard (s02) isn't there, so --local-only leaves it. A part
+            # written for another selection (here: an older one without the unpicked run) is done again.
+            os.makedirs(G.PARTS, exist_ok=True)
+            G.write_json(os.path.join(G.PARTS, G.part_name(SHARD) + ".done.json"),
+                         {"shard": SHARD, "counts": {"runs_written": 3},
+                          "prefixes_sha": G.prefixes_sha(["rts_a__r0_1", "rts_b__r0_2", "rts_c__r0_3"])})
+            assert G.convert(SimpleNamespace(local_tar=None, local_only=True, parallel=1, max_shards=0)) == 0
+            part = json.load(open(os.path.join(G.PARTS, G.part_name(SHARD) + ".done.json")))
+            assert part["from"] == "disk" and part["counts"]["runs_written"] == 4, part
+            assert not os.path.exists(G.DONE)
+            assert not os.path.exists(os.path.join(G.PARTS, G.part_name("payload/s02/shards/trials-00002.tar")
+                                                   + ".done.json"))
+        finally:
+            G.hub_files, G.hub_fetch, G.free_bytes, G.time.sleep, G.check_hub_version, G.shard_url = saved
 
 
 def test_reply_rules():
