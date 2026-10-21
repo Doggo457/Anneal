@@ -1,0 +1,33 @@
+# 5-step memory test of the loop's trainer settings at 12288-token rows (21 Oct 2026): the twelve longest GLM-5.3
+# terminal steps that fit (scripts/longest_rows.py), the longest first as the warm-up row. A cap passes with a GPU peak
+# of at most 29 GB of 32 and at least 6 GB of system RAM free throughout.
+run_name: dryrun-27b-12k
+base_model: C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299
+train_file: C:/AI/training/data/processed/memtest/glm-longest-12k.jsonl
+seq_len: 12288
+batch_size: 1
+grad_accum: 2
+max_steps: 5
+lr: 1.0e-4
+optim: adamw_8bit
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.0
+target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+expect_trainable_params: 79691776
+completion_only: true
+chat_template_kwargs: {enable_thinking: true}
+schedule: wsd
+warmup_steps: 1
+decay_fraction: 0.2
+min_lr_ratio: 0.0
+save_steps: 1000
+save_total_limit: 1
+eval_steps: 0
+seed: 42
+gdn_heads: stock
+short_conv: shift
+mem_debug: true   # log HIP free / torch memory just before the loss in every forward
+ce_target_gb: 2
+empty_cache_between_microbatches: true
+pinned_offload: false
