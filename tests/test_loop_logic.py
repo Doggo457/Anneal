@@ -846,6 +846,20 @@ def test_public_source_formats():
                                   "--out", out6]) == 0
         c6 = json.load(open(os.path.join(out6, "measure.json")))["counts"]
         assert (c6["conversations"], c6["outside_range"], c6["template_error"], c6["placeholder_args"]) == (2, 4, 1, 1), c6
+        # where the kept steps sit in their session; a turn the set marks with loss_mask 0 is never a target
+        assert m2["kept_target_position"] == {"median_step": 3, "p90_step": 3, "median_share": 1.0, "p90_share": 1.0}, m2
+        lm = [{"role": "user", "content": "Fix the flaky test in the scheduler module please."},
+              {"role": "assistant", "content": "", "loss_mask": 0, "tool_calls": [call(1, "bash", {"cmd": "pytest -x"})]},
+              {"role": "tool", "content": "1 failed", "loss_mask": 0},
+              {"role": "assistant", "content": "", "loss_mask": 1, "tool_calls": [call(2, "bash", {"cmd": "git diff"})]}]
+        src4 = os.path.join(d, "lossmask.jsonl")
+        E.write_jsonl(src4, [{"messages": lm}])
+        out7 = os.path.join(d, "out7")
+        assert run_public_source(["--dataset", "t/agent", "--files", "*", "--from-local", src4, "--turns", "each",
+                                  "--respect-loss-mask", "--tokenizer", "x", "--measure-only", "--out", out7]) == 0
+        m7 = json.load(open(os.path.join(out7, "measure.json")))
+        assert (m7["counts"]["loss_masked"], m7["counts"]["kept"], m7["kept_target_position"]["median_step"]) == \
+            (1, 1, 2), m7
 
 
 def test_tool_call_rows():
