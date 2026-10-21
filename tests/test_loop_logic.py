@@ -350,7 +350,8 @@ class World:
         if script in ("prepare_dataset.py", "public_source.py"):
             out = arg("--out")
             name = os.path.basename(out)
-            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120}[name]
+            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120, "openswe_v4flash": 60,
+                 "tachibana4_v4pro_nopy": 60, "banaxi_v4pro_nopy": 60}[name]
             E.write_jsonl(os.path.join(out, "train.jsonl"),
                           [{"messages": [{"role": "user", "content": f"{name} q{i}"},
                                          {"role": "assistant", "content": f"<think>t</think> a{i}"}]} for i in range(n)])
@@ -442,7 +443,11 @@ def setup_world(tmp):
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
     cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
-    for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; banaxi keeps its minimum
+    # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
+    # command lines are checked (check_child_commands), but carry share 0 here
+    sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
+    for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; the rest keep their minimum
+        src["share"] = sim_shares.get(src["name"], 0)
         if src["name"] in ("tachibana4_v4pro", "math_v4_aops"):
             src["min_pool_rows"] = 10
     # a source whose rows may lack reasoning (require_think off): never prepared or used (21 Oct rule), so the
@@ -455,7 +460,8 @@ def setup_world(tmp):
 
     # the scripts the loop checks before using them (require_script): the versions the loop needs
     os.makedirs(os.path.join(tmp, "scripts"))
-    open(os.path.join(tmp, "scripts", "prepare_dataset.py"), "w").write('ap.add_argument("--decontaminate-gate")\n')
+    open(os.path.join(tmp, "scripts", "prepare_dataset.py"), "w").write('ap.add_argument("--decontaminate-gate")\n'
+                                                                       'p.add_argument("--drop-answer-lang")\n')
     open(os.path.join(tmp, "scripts", "train_longrun.py"), "w").write("def load_init_adapter(model, path, lora): ...\n")
     # patch the world into the modules
     L.ROOT = tmp
@@ -686,7 +692,7 @@ def parsed_args(script, argv):
 
 
 def check_child_commands(calls):
-    seen = set()
+    seen, live = set(), set()
     for script, cmd in calls:
         assert cmd[1] == "-u", cmd
         seen.add(script)
@@ -698,10 +704,19 @@ def check_child_commands(calls):
             assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == 8192, ns
         if script == "prepare_dataset.py":
             assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == 8192, ns
+        # the live mix (21 Oct): V4-Flash bug-fix steps outside Python; V4-Pro answers that don't write Python
+        if script == "public_source.py" and ns.out.endswith("openswe_v4flash"):
+            assert ns.where == ["resolved=1", "language!=python"] and ns.report_field == ["language"], ns
+            assert ns.turns == "each" and ns.require_think and ns.revision, ns
+            live.add(ns.out)
+        if script == "prepare_dataset.py" and ns.out.endswith("_nopy"):
+            assert ns.drop_answer_lang == ["python"] and ns.require_think, ns
+            live.add(ns.out)
         if script == "train_longrun.py":
             assert ns.config.endswith("train.yaml"), ns
     assert seen == {"prepare_dataset.py", "public_source.py", "mix_datasets.py", "train_longrun.py",
                     "convert_lora_to_gguf.py", "val_loss.py"}, seen
+    assert len(live) == 3, live
 
 
 def fake_transformers():
@@ -875,6 +890,59 @@ def test_public_source_formats():
         m7 = json.load(open(os.path.join(out7, "measure.json")))
         assert (m7["counts"]["loss_masked"], m7["counts"]["kept"], m7["kept_target_position"]["median_step"]) == \
             (1, 1, 2), m7
+        # Python lowest priority: a negated row filter, answers that write Python dropped, kept rows by language
+        def fix(lang, code_lang, q):
+            return {"language": lang, "messages": [
+                {"role": "user", "content": q},
+                {"role": "assistant", "content": f"Fixed:\n```{code_lang}\nreturn total\n```", "reasoning_content": "Off by one."}]}
+        src5 = os.path.join(d, "langs.jsonl")
+        E.write_jsonl(src5, [fix("python", "python", "Fix the Python sum bug."), fix("go", "go", "Fix the Go sum bug."),
+                             fix("rust", "rust", "Fix the Rust sum bug."), fix("go", "py", "Fix the Go build script bug.")])
+        out8 = os.path.join(d, "out8")
+        assert run_public_source(["--dataset", "t/swe", "--files", "*", "--from-local", src5, "--where", "language!=python",
+                                  "--report-field", "language", "--drop-answer-lang", "python", "--require-think",
+                                  "--tokenizer", "x", "--measure-only", "--out", out8]) == 0
+        m8 = json.load(open(os.path.join(out8, "measure.json")))
+        assert (m8["counts"]["filtered_where"], m8["counts"]["answer_lang"], m8["counts"]["kept"]) == (1, 1, 2), m8
+        assert m8["report_fields"] == {"language": {"read": {"go": 2, "rust": 1}, "kept": {"go": 1, "rust": 1}}}, m8
+        assert sorted(m8["kept_answer_languages"]) == [["go", 1], ["rust", 1]], m8
+
+
+def test_prepare_dataset_filters():
+    """--require-think needs a non-empty think block; --drop-answer-lang python drops answers that write Python (a
+    Python prompt ported to Go stays); the card counts both and lists the kept rows' languages."""
+    parsed_args("prepare_dataset.py", ["--dataset", "x", "--out", "y"])  # stubs `datasets` if it isn't installed
+    import prepare_dataset as pdm
+
+    class FakeDS(list):
+        column_names = ["prompt", "completion"]
+
+        def shuffle(self, seed=None):
+            return self
+    rust = "Write a Rust function that sums a slice of integers."
+    go = "Port this Python to Go: def s(v): return sum(v)"
+    rows = FakeDS([
+        {"prompt": rust, "completion": "<think>\nIterate and add.\n</think>\n\n```rust\nfn s(v: &[i32]) -> i32 { v.iter().sum() }\n```"},
+        {"prompt": "Write a Python function that sums a list of integers.",
+         "completion": "<think>\nUse sum.\n</think>\n\n```python\ndef s(v):\n    return sum(v)\n```"},
+        {"prompt": go, "completion": "<think>\nLoop over it.\n</think>\n\n```go\nfunc s(v []int) (t int) { for _, x := range v { t += x }; return }\n```"},
+        {"prompt": "Explain what an empty think block teaches here.", "completion": "<think>\n \n</think>\n\nOnly the answer text, nothing more."},
+    ])
+    saved_load, saved_argv = pdm.load_rows, sys.argv
+    pdm.load_rows = lambda *a, **k: rows
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            sys.argv = ["prepare_dataset.py", "--dataset", "t/x", "--prompt-field", "prompt", "--response-field",
+                        "completion", "--require-think", "--drop-answer-lang", "python", "--min-chars", "10",
+                        "--out", d]
+            pdm.main()
+        finally:
+            pdm.load_rows, sys.argv = saved_load, saved_argv
+        kept = E.read_jsonl(os.path.join(d, "train.jsonl")) + E.read_jsonl(os.path.join(d, "val.jsonl"))
+        assert {r["messages"][0]["content"] for r in kept} == {rust, go}, kept
+        card = open(os.path.join(d, "data_card.md"), encoding="utf-8").read()
+        assert "| answer_lang | 1 |" in card and "| no_think | 1 |" in card, card
+        assert "| rust | 1 |" in card and "| go | 1 |" in card and "| python |" not in card, card
 
 
 def test_tool_call_rows():

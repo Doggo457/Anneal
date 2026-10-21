@@ -59,3 +59,40 @@ def reasoning_text(row):
         if m.get("role") == "assistant":
             return message_reasoning(m)
     return ""
+
+
+LANG_ALIASES = {
+    "python": "python", "py": "python", "python3": "python", "py3": "python", "python2": "python", "py2": "python",
+    "ipython": "python", "pycon": "python",
+    "cpp": "cpp", "c++": "cpp", "cc": "cpp", "cxx": "cpp", "hpp": "cpp", "c": "c", "h": "c", "java": "java",
+    "javascript": "javascript", "js": "javascript", "jsx": "javascript", "node": "javascript", "mjs": "javascript",
+    "typescript": "typescript", "ts": "typescript", "tsx": "typescript", "go": "go", "golang": "go", "rust": "rust",
+    "rs": "rust", "csharp": "csharp", "cs": "csharp", "c#": "csharp", "kotlin": "kotlin", "kt": "kotlin",
+}
+
+
+def answer_text(content):
+    """The answer part of an assistant message: what follows a leading <think>...</think> block (all of it if none)."""
+    s = (content or "").lstrip()
+    if s.startswith("<think>") and "</think>" in s:
+        return s.split("</think>", 1)[1]
+    return content or ""
+
+
+def fence_languages(text):
+    """The languages of the fenced code blocks in text, in order, by their opening fence's tag (lowercase, aliases
+    folded: py/python3 -> python, c++/cpp -> cpp, js -> javascript, ...; "" for an untagged block). Opening and
+    closing fences alternate, so a closing fence is never read as a language."""
+    out, open_fence = [], None
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not (s.startswith("```") or s.startswith("~~~")):
+            continue
+        mark = s[:3]
+        if open_fence is None:
+            tag = s.lstrip(mark[0]).strip().split()[0].strip("{}.").lower() if s.lstrip(mark[0]).strip() else ""
+            out.append(LANG_ALIASES.get(tag, tag))
+            open_fence = mark
+        elif mark == open_fence and not s.lstrip(mark[0]).strip():
+            open_fence = None
+    return out
