@@ -7,8 +7,9 @@ This check runs one attention layer forward + backward at Qwen3.8's shapes for e
 peak GPU memory above the inputs, the lowest free system RAM (the GPU's shared memory comes out of RAM on this
 machine) and time; candidates whose answer differs from the math reference at 4,096 tokens are flagged.
 
-Candidates: SDPA restricted to each backend (flash, efficient, math; math only up to 8,192), with GQA by enable_gqa and
-by repeated key/value heads (what transformers does when enable_gqa isn't used); FLA's Triton parallel_attn (bundled
+Candidates: SDPA as PyTorch picks (default; with enable_gqa it is what transformers' training path calls, with no mask
+and head dim 256) and restricted to each backend (flash, efficient, math; math only up to 8,192), with GQA by
+enable_gqa and by repeated key/value heads (what transformers does when it can't use enable_gqa); FLA's Triton parallel_attn (bundled
 with Unsloth); and a chunked SDPA (1,024 query rows at a time, each chunk recomputed in backward). Every case runs in
 its own child process, so a GPU fault ends only that case. The SDPA cases run twice: as installed, and with
 TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1.
@@ -56,6 +57,22 @@ def chunked_sdpa(q, k, v, scale):
     return torch.cat(outs, dim=2)
 
 
+def find_parallel_attn():
+    """FLA's parallel_attn: from the fla package, or from wherever the Gated DeltaNet kernels the model uses come from
+    (a vendored copy has the same ops/ layout)."""
+    import importlib
+    try:
+        return importlib.import_module("fla.ops.attn").parallel_attn
+    except ImportError:
+        pass
+    import unsloth  # noqa: F401  (loads the patched model code)
+    from transformers.models.qwen3_5 import modeling_qwen3_5 as m
+    src = getattr(getattr(m, "chunk_gated_delta_rule", None), "__module__", None) or ""
+    if ".ops." not in src:
+        raise ImportError(f"no fla package, and chunk_gated_delta_rule comes from {src or 'nowhere'}")
+    return importlib.import_module(src.split(".ops.")[0] + ".ops.attn").parallel_attn
+
+
 def child(case, L):
     import torch
     import torch.nn.functional as F
@@ -69,26 +86,29 @@ def child(case, L):
     do = torch.randn(1, HQ, L, D, device=dev, dtype=torch.bfloat16)
 
     def run(kind, q, k, v):
+        n = q.shape[2]
         q, k, v = (t.detach().clone().requires_grad_(True) for t in (q, k, v))
         if kind.startswith("sdpa-"):
+            import contextlib
+
             from torch.nn.attention import SDPBackend, sdpa_kernel
             backend = {"flash": SDPBackend.FLASH_ATTENTION, "efficient": SDPBackend.EFFICIENT_ATTENTION,
-                       "math": SDPBackend.MATH}[kind.split("-")[1]]
-            with sdpa_kernel([backend]):
+                       "math": SDPBackend.MATH, "default": None}[kind.split("-")[1]]
+            with sdpa_kernel([backend]) if backend is not None else contextlib.nullcontext():
                 if kind.endswith("-gqa"):
                     o = F.scaled_dot_product_attention(q, k, v, is_causal=True, scale=scale, enable_gqa=True)
                 else:
                     kk, vv = (t.repeat_interleave(HQ // HKV, dim=1) for t in (k, v))
                     o = F.scaled_dot_product_attention(q, kk, vv, is_causal=True, scale=scale)
         elif kind == "fla-parallel":
-            from fla.ops.attn import parallel_attn
+            parallel_attn = find_parallel_attn()
             o = parallel_attn(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), scale=scale).transpose(1, 2)
         elif kind == "chunked":
             kk, vv = (t.repeat_interleave(HQ // HKV, dim=1) for t in (k, v))
             o = chunked_sdpa(q, kk, vv, scale)
         else:
             raise ValueError(kind)
-        o.backward(do)
+        o.backward(do[:, :, :n])
         return [t.float() for t in (o.detach(), q.grad, k.grad, v.grad)]
 
     res = {"case": case, "L": L, "torch": torch.__version__, "hip": torch.version.hip,
@@ -135,10 +155,11 @@ def main():
         return 0
     os.makedirs(args.out, exist_ok=True)
     lengths = [int(x) for x in args.lengths.split(",")]
-    sdpa = ["sdpa-efficient-gqa", "sdpa-efficient", "sdpa-flash-gqa", "sdpa-flash", "sdpa-math"]
+    sdpa = ["sdpa-default-gqa", "sdpa-default", "sdpa-efficient-gqa", "sdpa-efficient", "sdpa-flash-gqa",
+            "sdpa-flash", "sdpa-math"]
     plan = [(c, env) for env in ("", "1") for c in sdpa] + [("fla-parallel", ""), ("chunked", "")]
     path = os.path.join(args.out, "results.jsonl")
-    failed = set()
+    failed, last = set(), {}  # last: (case, env) -> (L, peak_extra_gib) of its previous length
     with open(path, "a", encoding="utf-8") as fh:
         for L in lengths:
             for case, env in plan:
@@ -146,6 +167,12 @@ def main():
                     continue  # needs the full score matrix: the failure this check is about
                 if (case, env) in failed:
                     continue  # failed at a shorter length already
+                prev = last.get((case, env))
+                if prev and prev[1] * (L / prev[0]) ** 2 > 14:
+                    print(json.dumps({"case": case, "aotriton_experimental": env or None, "L": L,
+                                      "skipped": f"its memory grew like L^2 up to {prev[0]}: about "
+                                                 f"{prev[1] * (L / prev[0]) ** 2:.1f} GiB at {L}"}), flush=True)
+                    continue
                 e = dict(os.environ)
                 e.pop("TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL", None)
                 if env:
@@ -161,6 +188,8 @@ def main():
                 res["wall_seconds"] = round(time.time() - t0, 1)
                 if not res.get("ok"):
                     failed.add((case, env))
+                elif res.get("peak_extra_gib") is not None:
+                    last[(case, env)] = (L, res["peak_extra_gib"])
                 fh.write(json.dumps(res) + "\n")
                 fh.flush()
                 print(json.dumps({k: res.get(k) for k in ("case", "aotriton_experimental", "L", "ok", "seconds",
