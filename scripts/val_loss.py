@@ -4,9 +4,12 @@ Rows are encoded exactly as for training (scripts/train_longrun.py tokenize_rows
 anneal/data.py encode_chat labels), so "trained tokens" are the tokens training scores: the reasoning, the answer
 and <|im_end|>. "answer" is the subset after </think> and before <|im_end|>. Base and adapter are scored on the same
 4-bit model (smoke-27b-stock setup), the base with the adapter disabled. The LM head is applied in chunks of
-positions, so a full 8,192 x 248k logit matrix is never held.
+positions, so a full 8,192 x 248k logit matrix is never held. Each row in summary.json's per_row carries its key
+(anneal/rowkeys.py row_key), so runs on the same file pair up row by row; --no-base scores only the adapter, for when
+the base's losses on the file are already known (the loop's held-out bug-fix steps).
 
   val_loss.py --adapter <run>\\train\\adapter --val-file data\\processed\\mix_first_2k\\val.jsonl [--run-dir DIR]
+              [--no-base]
 """
 
 import argparse
@@ -33,6 +36,7 @@ def main():
     ap.add_argument("--max-rows", type=int, default=0)
     ap.add_argument("--chunk", type=int, default=1024, help="positions per LM-head chunk")
     ap.add_argument("--run-dir", default=os.path.join(RESULTS_DIR, "val-loss"))
+    ap.add_argument("--no-base", action="store_true", help="score the adapter only (skip the base model)")
     ap.add_argument("--resume", action="store_true", help="accepted for the Training page; starts over")
     args = ap.parse_args()
     run = Run(args.run_dir)
@@ -59,6 +63,7 @@ def score(args, run):
     from peft import PeftModel
 
     from anneal.data import IGNORE_INDEX, MaskStats
+    from anneal.rowkeys import row_key
     from train_longrun import tokenize_rows
 
     t0 = time.time()
@@ -75,8 +80,17 @@ def score(args, run):
     if args.max_rows:
         raw = raw[:args.max_rows]
     stats = MaskStats()
-    rows, too_long, _ = tokenize_rows(raw, tok, {"enable_thinking": True}, args.seq_len, True, stats)
+    rows, too_long, no_trace = [], 0, 0
+    for i, ex in enumerate(raw):  # one at a time, so each kept row keeps its key
+        got, tl, _ = tokenize_rows([ex], tok, {"enable_thinking": True}, args.seq_len, True, stats)
+        too_long += tl
+        no_trace += stats.rows_without_trace
+        if got:
+            got[0]["key"] = row_key(ex) or f"#{i}"
+            rows.append(got[0])
+    stats.rows_without_trace = no_trace
     print(f"{len(rows)} rows ({too_long} over {args.seq_len} dropped); {stats.as_dict()}")
+    names = ("adapter",) if args.no_base else ("base", "adapter")
 
     # find the decoder (hidden states) and the LM head under the PEFT wrapper
     inner = model.get_base_model()
@@ -95,7 +109,7 @@ def score(args, run):
             return torch.cat(out)
 
     per_row = []
-    totals = {k: {"trained_nll": 0.0, "trained": 0, "answer_nll": 0.0, "answer": 0} for k in ("base", "adapter")}
+    totals = {k: {"trained_nll": 0.0, "trained": 0, "answer_nll": 0.0, "answer": 0} for k in names}
     run.write_status(state="running", step=0, max_steps=len(rows))
     for k, r in enumerate(rows):
         ids = torch.tensor([r["input_ids"]], device="cuda")
@@ -109,9 +123,9 @@ def score(args, run):
             answer[start + 1:end] = True
         else:
             answer[:end] = mask[:end]
-        row = {"row": k, "source": r.get("source"), "tokens": len(r["input_ids"]), "trained": int(mask.sum()),
-               "answer_tokens": int(answer.sum())}
-        for name in ("base", "adapter"):
+        row = {"row": k, "key": r["key"], "source": r.get("source"), "tokens": len(r["input_ids"]),
+               "trained": int(mask.sum()), "answer_tokens": int(answer.sum())}
+        for name in names:
             if name == "base":
                 with model.disable_adapter():
                     nll = nll_of(ids)
@@ -125,14 +139,14 @@ def score(args, run):
             t["answer_nll"] += float(nll[answer].sum())
             t["answer"] += int(answer.sum())
         per_row.append(row)
-        print(f"row {k} ({row['source']}, {row['tokens']} tokens): base {row['base_loss']:.4f} / adapter "
-              f"{row['adapter_loss']:.4f}; answer {row['base_answer_loss']} / {row['adapter_answer_loss']}")
+        print(f"row {k} ({row['source']}, {row['tokens']} tokens): " + " / ".join(
+            f"{n} {row[n + '_loss']:.4f} (answer {row[n + '_answer_loss']})" for n in names))
         run.write_status(state="running", step=k + 1, max_steps=len(rows))
-        run.metric(step=k + 1, **{x: row[x] for x in ("base_loss", "adapter_loss")})
+        run.metric(step=k + 1, **{f"{n}_loss": row[f"{n}_loss"] for n in names})
 
     def summarise(subset):
         out = {}
-        for name in ("base", "adapter"):
+        for name in names:
             tn = sum(r["trained"] for r in subset)
             an = sum(r["answer_tokens"] for r in subset)
             out[name] = {
@@ -143,16 +157,15 @@ def score(args, run):
         out["rows"], out["trained_tokens"] = len(subset), sum(r["trained"] for r in subset)
         return out
 
-    summary = {"adapter": args.adapter, "val_file": args.val_file, "rows": len(rows), "dropped_too_long": too_long,
-               "all": summarise(per_row)}
+    summary = {"adapter": args.adapter, "val_file": args.val_file, "seq_len": args.seq_len, "scored": list(names),
+               "rows": len(rows), "dropped_too_long": too_long, "all": summarise(per_row)}
     for src in sorted({r["source"] for r in per_row if r["source"]}):
         summary[f"source={src}"] = summarise([r for r in per_row if r["source"] == src])
     summary["per_row"] = per_row
     for key in [k for k in summary if k == "all" or k.startswith("source=")]:
         s = summary[key]
-        print(f"{key}: trained-token loss base {s['base']['trained_token_loss']:.4f} -> adapter "
-              f"{s['adapter']['trained_token_loss']:.4f}; answer-token loss {s['base']['answer_token_loss']:.4f} -> "
-              f"{s['adapter']['answer_token_loss']:.4f} ({s['rows']} rows)")
+        print(f"{key}: " + "; ".join(f"{n} trained-token loss {s[n]['trained_token_loss']:.4f}, answer-token loss "
+                                     f"{s[n]['answer_token_loss']}" for n in names) + f" ({s['rows']} rows)")
     with open(os.path.join(run.dir, "summary.json"), "w", encoding="utf-8") as fh:
         json.dump(summary, fh, indent=1)
     run.write_status(state="finished", step=len(rows), max_steps=len(rows))

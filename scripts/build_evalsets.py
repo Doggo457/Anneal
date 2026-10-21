@@ -1,5 +1,9 @@
 """Build the improvement loop's held-out sets once (CPU only; safe to run next to a training run).
 
+RETIRED for the gate (21 Oct 2026): the gate is now six languages, write and fix (scripts/build_gate.py), which archives
+this script's Python gate in data/eval/archive/python-gate/; this script then refuses to run. The non-coding check
+and the decontamination list it built stay in use.
+
   data/eval/gate.jsonl            CodeContests valid + test problems whose own Python 3 reference passes our sandboxed
                                   runner, plus 300 OpenCodeInstruct problems from shard train-00025 (no run reads it)
                                   whose reference passes its assert tests. Problems that overlap EvalPlus, any data
@@ -114,6 +118,9 @@ def main():
     ap.add_argument("--parallel", type=int, default=4)
     ap.add_argument("--force", action="store_true", help="rebuild even if gate.jsonl exists")
     args = ap.parse_args()
+    if os.path.isdir(os.path.join(E.EVAL_DIR, "archive", "python-gate")):
+        raise SystemExit("The Python gate was retired on 21 Oct 2026 (Python is the lowest priority) and is archived in "
+                         "data/eval/archive/python-gate/. The gate is built by scripts/build_gate.py.")
     if os.path.exists(E.GATE_PATH) and not args.force:
         raise SystemExit(f"{E.GATE_PATH} exists. The gate must not change once rounds are scored on it; use --force "
                          "only before the loop's round 0.")

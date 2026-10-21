@@ -25,6 +25,8 @@ Filters, in order, each counted in measure.json and the card:
   no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
                                 or tool-call arguments that aren't a JSON object (kept as a JSON string; the
                                 template gets them parsed, see anneal/data.py chat_messages)
+  holdout_split                 (--holdout-col/--holdout-mod) the conversation belongs to the other side of the
+                                held-out split (sha256 of e.g. its repo, mod M; bucket 0 is held out)
   require_think                 (--require-think) the target turn has no reasoning: no reasoning field and no
                                 "<think>" block opening its content, or an empty one (anneal/rowkeys.py
                                 message_reasoning, the trainer's own test)
@@ -49,6 +51,8 @@ Filters, in order, each counted in measure.json and the card:
   contaminated_evalplus / _gate EvalPlus 13-gram / Jaccard (prepare_dataset.Decontaminator) on the first user message
                                 + target; the loop's held-out problems (anneal/evalsets.OverlapIndex) on all user text
                                 + target
+  step_cap                      (--max-steps-per-conversation K) steps past K of one conversation, which keeps K
+                                evenly spaced ones (the other counts and statistics include them)
 measure.json also gives the kept targets' place in their session (kept_target_position: which assistant turn, and
 that turn's share of the session; long agent sessions only fit their early steps) and counts conversations by their tool calls (sessions_by_redaction: no_calls, clean, mixed,
 redacted) and the text of the redacted steps (redacted_step_text_chars), i.e. what masking the calls out could save.
@@ -112,6 +116,11 @@ def iter_rows(paths, field, where_cols=()):
                     if line.strip():
                         r = json.loads(line)
                         yield r.get(field), {c: r.get(c) for c in where_cols}
+
+
+def holdout_bucket(value, mod):
+    """sha256 of the value's text, mod M: bucket 0 is the held-out side (stable across runs and machines)."""
+    return int(hashlib.sha256(str(value).encode("utf-8")).hexdigest(), 16) % mod
 
 
 def parse_where(spec):
@@ -241,6 +250,14 @@ def main():
     ap.add_argument("--drop-answer-lang", action="append", default=[],
                     help="drop a step whose target answer (after its think block) has a code block in this language, "
                          "e.g. python (21 Oct 2026: Python is the lowest priority); repeatable")
+    ap.add_argument("--holdout-col", default=None,
+                    help="split conversations by a hash of this column (e.g. repo) into a pool side and a held-out "
+                         "side that never trains; with --holdout-mod")
+    ap.add_argument("--holdout-mod", type=int, default=0,
+                    help="held-out side = sha256(value) %% M == 0, i.e. about 1/M of the values")
+    ap.add_argument("--holdout-side", choices=["pool", "heldout"], default="pool")
+    ap.add_argument("--max-steps-per-conversation", type=int, default=0,
+                    help="with --turns each: keep at most K steps of a conversation, evenly spaced (0 = all)")
     ap.add_argument("--turns", choices=["last", "each"], default="last")
     ap.add_argument("--require-think", action="store_true")
     ap.add_argument("--min-target-chars", type=int, default=0)
@@ -292,7 +309,7 @@ def main():
         gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
 
     counts = collections.Counter({k: 0 for k in (
-        "conversations", "outside_range", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "loss_masked",
+        "conversations", "outside_range", "filtered_where", "holdout_split", "bad_format", "no_assistant", "candidate_rows", "loss_masked",
         "require_think", "short_target",
         "dropped_tool_name", "placeholder_args", "masked_target", "answer_lang", "redacted_context", "duplicate",
         "too_long", "template_error",
@@ -314,7 +331,11 @@ def main():
     lo, hi = int(lo or 0), (int(hi) if hi.strip() else None)
     drop_res = [re.compile(x) for x in args.drop_target_regex]
     drop_langs = {LANG_ALIASES.get(x.strip().lower(), x.strip().lower()) for x in args.drop_answer_lang}
-    read_cols = list(dict.fromkeys([c for c, _, _ in wheres] + args.report_field))
+    read_cols = list(dict.fromkeys([c for c, _, _ in wheres] + args.report_field
+                                   + ([args.holdout_col] if args.holdout_col else [])))
+    if bool(args.holdout_col) != bool(args.holdout_mod):
+        raise SystemExit("--holdout-col and --holdout-mod go together")
+    counts["step_cap"] = 0
     seen_by = {f: collections.Counter() for f in args.report_field}
     kept_by = {f: collections.Counter() for f in args.report_field}
     kept_langs = collections.Counter()  # kept steps per language of the target's code blocks
@@ -330,6 +351,11 @@ def main():
         if wheres and not all(where_ok(cols.get(c), op, v) for c, op, v in wheres):
             counts["filtered_where"] += 1
             continue
+        if args.holdout_col:  # the held-out side (bucket 0) never reaches a pool, and the pool side never the eval
+            heldout = holdout_bucket(cols.get(args.holdout_col), args.holdout_mod) == 0
+            if heldout != (args.holdout_side == "heldout"):
+                counts["holdout_split"] += 1
+                continue
         for f in args.report_field:
             seen_by[f][str(cols.get(f))] += 1
         if isinstance(raw, str):
@@ -357,6 +383,7 @@ def main():
         first_bad = bad[0] if bad else len(msgs)
         user_text = "\n".join(m["content"] for m in msgs if m["role"] == "user")
         first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
+        kept_before = counts["kept"]
         prefix_chars = 0
         cut = 0
         for k, end in enumerate(ends):
@@ -434,6 +461,13 @@ def main():
                 groups.setdefault(ci, []).append({"messages": row})
             if args.max_rows and counts["kept"] >= args.max_rows:
                 break
+        cap = args.max_steps_per_conversation
+        n_here = len(groups.get(ci, ())) if not args.measure_only else counts["kept"] - kept_before
+        if cap and n_here > cap:  # keep cap steps spread over the session (the counts above include all of them)
+            if not args.measure_only:
+                groups[ci] = [groups[ci][int((j + 0.5) * n_here / cap)] for j in range(cap)]
+            counts["step_cap"] += n_here - cap
+            counts["kept"] -= n_here - cap
 
     s, rt = sorted(lengths), sorted(redacted_text)
 

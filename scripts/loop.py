@@ -11,7 +11,8 @@ Rounds (results/loop/rounds/rNNN):
                     reference for every later round.
   r001 first-run    the first run's adapter on the same sets, for the record (it trained on self-generated rows, so it
                     never becomes the best).
-  r002 onwards      plan -> data -> train -> convert -> valloss -> evaluate -> decide [-> confirm -> milestone] -> finish
+  r002 onwards      plan -> data -> train -> convert -> valloss -> sweloss -> evaluate -> decide [-> confirm ->
+                    milestone] -> finish
     plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml whose condition holds (after_kept,
                after_dropped_stacks), else `default_recipe`. Init: the best adapter (training continues from it), or
                the base when the best is the base or the recipe changes the LoRA shape ("base_lineage": retrain from
@@ -31,14 +32,24 @@ Rounds (results/loop/rounds/rNNN):
     train      train_longrun.py (the `train` settings + the recipe's overrides, init_adapter for a continued adapter).
     convert    adapter -> GGUF LoRA (llama.cpp convert_lora_to_gguf.py).
     valloss    answer-token loss on the round's val rows, base vs adapter (scripts/val_loss.py); for the record.
+    sweloss    loss on the held-out bug-fix steps (data/eval/swe_heldout.jsonl, scripts/build_swe_heldout.py: Open-SWE
+               runs from repositories no round trains on), this adapter against the best so far: the base's losses
+               (scored once, in the first round) while the base is the best, then the kept round's own.
     evaluate   one llama-server with --lora: 3 sample generations, the gate (seed = the best's reference seed), the
-               non-coding check (seeds 1 and 2).
-    decide     anneal/evalsets.decide: gate higher with a one-sided sign test p <= alpha; the CodeContests part and the
-               non-coding check not worse beyond tolerance nor significantly worse; samples clean.
+               non-coding check (seeds 1 and 2). The gate (scripts/build_gate.py, 21 Oct 2026) asks for programs in
+               C++, Java, Go, Rust, JavaScript and TypeScript (write items) and for fixes of wrong C++ and Java
+               submissions (fix items), built and run in the sandbox (anneal/polyglot.py). Before each gate pass the
+               toolchains must be the ones every earlier round was judged with, and two smoke programs per language
+               must get their verdicts.
+    decide     anneal/evalsets.decide, two ways to keep: the gate path (gate higher, one-sided sign test p <= alpha) or
+               the loss path (rules.loss_rule, 21 Oct 2026: gate not lower, and the held-out bug-fix loss lower on more
+               steps than chance, p <= loss_alpha). Either way the write and fix parts and the non-coding check are
+               not worse beyond tolerance nor significantly worse, and the samples are clean.
     confirm    (kept) the gate again with a fresh seed; those rows become the best's reference, so the next round is
                compared against an unbiased score, not the lucky draw that got this one kept. With
-               rules.confirm_net_win the fresh-seed rows must also win more problems than they lose against the best's
-               reference, or the round is rejected (offsets the extra tries that rolling rows forward gives).
+               rules.confirm_net_win the fresh-seed rows of a round kept on the gate path must also win more problems
+               than they lose against the best's reference, or the round is rejected (offsets the extra tries that
+               rolling rows forward gives).
     milestone  (kept) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact scoring server, paired against the
                base's first-run EvalPlus answers: the numbers that get reported.
     finish     state.json updated (best, rejects in a row); a rejected round's adapter, checkpoints and GGUF are
@@ -81,7 +92,11 @@ from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 PY = sys.executable
 CONFIG = os.path.join(ROOT, "experiments", "loop.yaml")
 POOLS = os.path.join(ROOT, "data", "processed", "loop")
-ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "evaluate", "decide", "confirm", "milestone", "finish"]
+ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "evaluate", "decide", "confirm", "milestone",
+                "finish"]
+LANG_NAMES = {"cpp": "C++", "java": "Java", "go": "Go", "rust": "Rust", "javascript": "JavaScript",
+              "typescript": "TypeScript"}
+GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); the retired Python gate had cc and oci
 REF_STAGES = ["evaluate", "decide", "finish"]
 MAX_ROUND_FAILURES = 3
 
@@ -141,6 +156,51 @@ def reasoning_source(src):
 def spec_hash(src):
     keep = {k: v for k, v in src.items() if k not in ("share", "note", "group")}
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def public_source_args(src, side="pool"):
+    """scripts/public_source.py arguments for a "messages" source of experiments/loop.yaml, without the tokenizer, the
+    length cap, decontamination and --out (the caller adds those). A source with a `holdout` ({col, mod}) leaves out
+    every conversation whose col hashes to bucket 0; side "heldout" takes only those instead
+    (scripts/build_swe_heldout.py), with every other filter the same."""
+    args = ["--dataset", src["dataset"], "--files", src["files"], "--messages-field", src.get("messages_field", "messages"),
+            "--turns", src.get("turns", "last"), "--min-target-chars", str(src.get("min_target_chars", 0)),
+            "--max-rows", str(src["pool_rows"])]
+    if src.get("revision"):
+        args += ["--revision", src["revision"]]
+    for t in src.get("drop_tool_names") or []:
+        args += ["--drop-tool-name", t]
+    for w in src.get("where") or []:
+        args += ["--where", w]
+    if src.get("max_files"):
+        args += ["--max-files", str(src["max_files"])]
+    if src.get("require_think", True):
+        args.append("--require-think")
+    for key, flag in (("respect_loss_mask", "--respect-loss-mask"), ("clean_context", "--clean-context")):
+        if src.get(key):
+            args.append(flag)
+    if src.get("row_range"):
+        args += ["--row-range", str(src["row_range"])]
+    for rx in src.get("drop_target_regex") or []:
+        args += ["--drop-target-regex", rx]
+    for lang in src.get("drop_answer_langs") or []:
+        args += ["--drop-answer-lang", lang]
+    for f in src.get("report_fields") or []:
+        args += ["--report-field", f]
+    if src.get("holdout"):
+        h = src["holdout"]
+        args += ["--holdout-col", str(h["col"]), "--holdout-mod", str(int(h["mod"])), "--holdout-side", side]
+    elif side != "pool":
+        raise ValueError(f"source {src['name']} has no holdout")
+    return args
+
+
+def file_sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
 
 
 SHAPE_KEYS = ("lora_r", "lora_alpha", "target_modules", "expect_trainable_params")
@@ -489,31 +549,7 @@ class Loop(fr.Controller):
                 for f in src.get("report_fields") or []:
                     cmd += ["--report-field", f]
             elif src["kind"] == "messages":
-                cmd = [PY, "-u", os.path.join(ROOT, "scripts", "public_source.py"), "--dataset", src["dataset"],
-                       "--files", src["files"], "--messages-field", src.get("messages_field", "messages"),
-                       "--turns", src.get("turns", "last"), "--min-target-chars", str(src.get("min_target_chars", 0)),
-                       "--max-rows", str(src["pool_rows"])] + common
-                if src.get("revision"):
-                    cmd += ["--revision", src["revision"]]
-                for t in src.get("drop_tool_names") or []:
-                    cmd += ["--drop-tool-name", t]
-                for w in src.get("where") or []:
-                    cmd += ["--where", w]
-                if src.get("max_files"):
-                    cmd += ["--max-files", str(src["max_files"])]
-                if src.get("require_think", True):
-                    cmd.append("--require-think")
-                for key, flag in (("respect_loss_mask", "--respect-loss-mask"), ("clean_context", "--clean-context")):
-                    if src.get(key):
-                        cmd.append(flag)
-                if src.get("row_range"):
-                    cmd += ["--row-range", str(src["row_range"])]
-                for rx in src.get("drop_target_regex") or []:
-                    cmd += ["--drop-target-regex", rx]
-                for lang in src.get("drop_answer_langs") or []:
-                    cmd += ["--drop-answer-lang", lang]
-                for f in src.get("report_fields") or []:
-                    cmd += ["--report-field", f]
+                cmd = [PY, "-u", os.path.join(ROOT, "scripts", "public_source.py")] + public_source_args(src) + common
             else:
                 raise RuntimeError(f"source {src['name']}: unknown kind {src['kind']!r}")
             if not os.path.exists(E.DECONTAM_EXTRA):
@@ -540,7 +576,8 @@ class Loop(fr.Controller):
         gate = E.read_jsonl(E.GATE_PATH)
         nc = E.read_jsonl(E.NONCODING_PATH)
         if not gate or not nc:
-            raise RuntimeError("held-out sets missing: run scripts/build_evalsets.py")
+            raise RuntimeError("held-out sets missing: run scripts/build_gate.py")
+        out["toolchains"] = self.toolchain_check(gate)
         g = cfg["gate"]
         self.serve(self.gate_flags(cfg, lora=gguf), "evaluate")
         try:
@@ -562,7 +599,7 @@ class Loop(fr.Controller):
                                         and s["content_chars"] > 0 and not s["loop_suspect"] for s in ss)
                 out["samples"] = ss
             chat = lambda u, m, seed, mt: ew.chat_request(u, m, seed, mt)  # noqa: E731
-            check = E.gate_check(gt.run_io_tests, gt.run_assert_tests, gt.extract_code)
+            check = self.gate_checker()
             gpath = os.path.join(self.rdir, f"gate.seed{gate_seed}.jsonl")
             E.score(url, gate, gpath, gate_seed, g["max_tokens"], check, chat, ew.count_tokens, g["budget"],
                     concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
@@ -584,6 +621,61 @@ class Loop(fr.Controller):
                    gate_budget_hits=sum(r["budget_hit"] for r in gate_rows),
                    gate_finish=dict(_count(r["finish_reason"] for r in gate_rows)))
         return out
+
+    def gate_checker(self):
+        return E.gate_check(gt.run_io_tests, gt.run_assert_tests, gt.extract_code, E.polyglot_check())
+
+    def require_gate(self):
+        """The loop scores rounds on the six-language gate only (21 Oct 2026), and on one gate for its whole life:
+        the retired Python gate never scores a round, and a gate that changes after round 0 would make every later
+        comparison meaningless. Raises Waiting otherwise."""
+        if not os.path.exists(E.GATE_PATH):
+            raise Waiting("the gate is not built: run scripts/setup_toolchains.py, --check, then scripts/build_gate.py")
+        kinds = {it.get("kind") for it in E.read_jsonl(E.GATE_PATH)}
+        if not kinds or not kinds <= set(GATE_KINDS):
+            raise Waiting(f"data/eval/gate.jsonl holds {sorted(map(str, kinds))} items, not the six-language gate: run "
+                          "scripts/build_gate.py (it archives the Python gate)")
+        sha = file_sha(E.GATE_PATH)
+        known = self.state.get("gate_sha")
+        if known is None:
+            self.state["gate_sha"] = sha
+            self.save()
+        elif known != sha:
+            raise Waiting(f"data/eval/gate.jsonl changed since the rounds were scored on it ({known} -> {sha}); "
+                          "restore it (rounds compare against scores on the old one)")
+
+    def toolchain_check(self, gate):
+        """Before a gate pass with write or fix items: the toolchains are the ones every earlier round was judged with
+        (anneal/polyglot.py toolchain_fingerprint), and two smoke programs per language (one right, one wrong) get
+        their verdicts in the sandbox, and one program that tries to leave the sandbox is stopped. CPU only, under a
+        minute. Returns the fingerprint (None for the old gate)."""
+        langs = sorted({it["lang"] for it in gate if it.get("kind") in GATE_KINDS})
+        if not langs:
+            return None
+        from anneal import polyglot as P
+        from anneal import polyglot_smoke as S
+        fp = P.toolchain_fingerprint()
+        if fp is None:
+            raise Waiting("sandbox/toolchains/lock.json is missing: run scripts/setup_toolchains.py")
+        known = self.state.get("toolchains")
+        if known is None:
+            self.state["toolchains"] = fp
+            self.save()
+        elif known != fp:
+            raise Waiting(f"the toolchains changed since the rounds were judged ({known} -> {fp}); restore them "
+                          "(sandbox/toolchains/lock.json)")
+        ex, tc, bad = P.SandboxExecutor(), P.Toolchain.windows(), []
+        for lang in langs:
+            for prog in S.programs(lang):
+                if not (prog["name"] in ("sum64", "wrong") or (prog["name"] == "isolation" and lang == langs[0])):
+                    continue
+                v = P.judge(lang, prog["code"], prog["cases"], ex, tc, case_timeout_s=prog.get("timeout", 10.0),
+                            all_cases=True)
+                if v.stage != prog["expect"]:
+                    bad.append(f"{lang} {prog['name']}: {v.stage} (want {prog['expect']}) {v.detail[-200:]}")
+        if bad:
+            raise RuntimeError("toolchain smoke check failed: " + "; ".join(bad))
+        return fp
 
     # ----------------------------------------------------------------------------------------- reference rounds
 
@@ -636,13 +728,14 @@ class Loop(fr.Controller):
         cand_rows = [r for r in E.read_jsonl(ev["gate_rows"]) if r["seed"] == ev["gate_seed"]]
         base_nc = E.read_jsonl(self.state["base"]["noncoding_rows"])
         cand_nc = E.read_jsonl(ev["noncoding_rows"])
-        d = E.decide(best_rows, cand_rows, base_nc, cand_nc, cfg["rules"], ev.get("samples_ok", True))
+        loss = (self.done("sweloss") or {}).get("vs_best") if self.rnum >= 2 else None
+        d = E.decide(best_rows, cand_rows, base_nc, cand_nc, cfg["rules"], ev.get("samples_ok", True), loss=loss)
         d["best_round"] = self.state["best"]["round"]
         if not d["gate"]["n"]:
             raise RuntimeError("no gate problems in common between the best and this round")
-        self.log(f"round {self.rnum}: {'KEEP' if d['keep'] else 'reject'} - gate {d['gate']['best']:.4f} -> "
-                 f"{d['gate']['candidate']:.4f} ({d['gate']['wins']} wins / {d['gate']['losses']} losses, p "
-                 f"{d['gate']['p_one_sided']:.4f}); reasons: {d['reasons']}")
+        self.log(f"round {self.rnum}: {'KEEP (' + d['path'] + ' path)' if d['keep'] else 'reject'} - gate "
+                 f"{d['gate']['best']:.4f} -> {d['gate']['candidate']:.4f} ({d['gate']['wins']} wins / "
+                 f"{d['gate']['losses']} losses, p {d['gate']['p_one_sided']:.4f}); reasons: {d['reasons']}")
         return d
 
     # ----------------------------------------------------------------------------------------- training rounds
@@ -686,6 +779,8 @@ class Loop(fr.Controller):
         self.run_stage("convert", self.convert_round)
         if cfg.get("valloss", True):
             self.run_stage("valloss", self.valloss)
+        if cfg.get("swe_loss"):
+            self.run_stage("sweloss", self.sweloss, cfg)
         ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
             cfg, self.round_gguf(), self.state["best"]["gate_seed"])))
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
@@ -899,15 +994,74 @@ class Loop(fr.Controller):
         val = self.read_json(os.path.join(vdir, "summary.json")) or {}
         return self.mark_done("valloss", {k: v for k, v in val.items() if k != "per_row"})
 
+    def swe_file(self, cfg):
+        return os.path.join(ROOT, (cfg.get("swe_loss") or {}).get("file") or os.path.join("data", "eval", "swe_heldout.jsonl"))
+
+    def swe_reference(self, sha):
+        """The best's per-step losses on the held-out bug-fix steps ({path, field, sha, round}), or None. While the
+        base is the best they are the base's (scored once, by the first training round's sweloss)."""
+        best = self.state["best"]
+        ref = best.get("swe_loss") if best["round"] != 0 else (self.state.get("base") or {}).get("swe_loss")
+        if ref and ref.get("sha") != sha:
+            self.log(f"the held-out bug-fix steps changed since round {ref.get('round')} was scored on them: no reference")
+            return None
+        return ref
+
+    def sweloss(self, cfg):
+        """Loss on the held-out bug-fix steps: this round's adapter (and the base, the first time), compared step by
+        step with the best so far (anneal/evalsets.compare_loss). For the loss path of the keep rule."""
+        sc = cfg.get("swe_loss") or {}
+        path = self.swe_file(cfg)
+        if not os.path.exists(path):
+            raise Waiting("the held-out bug-fix steps are not built: run scripts/build_swe_heldout.py")
+        sha = file_sha(path)
+        ref = self.swe_reference(sha)
+        need_base = ref is None and self.state["best"]["round"] == 0
+        vdir = os.path.join(self.rdir, "sweloss")
+        summ = os.path.join(vdir, "summary.json")
+        val = self.read_json(summ)
+        if val is None or (need_base and "base" not in (val.get("scored") or [])):
+            cmd = [PY, "-u", os.path.join(ROOT, "scripts", "val_loss.py"), "--adapter",
+                   os.path.join(self.rdir, "train", "adapter"), "--val-file", path,
+                   "--seq-len", str(int(sc.get("seq_len", 8192))), "--max-rows", str(int(sc.get("max_rows", 200))),
+                   "--run-dir", vdir]
+            if not need_base:
+                cmd.append("--no-base")
+            rc = self.run_child(cmd, "swe_loss.log")
+            self.check_stop()
+            if rc != 0:
+                raise RuntimeError(f"val_loss.py (held-out bug-fix steps) exited with {rc}")
+            val = self.read_json(summ) or {}
+        per = val.get("per_row") or []
+        if not per:
+            raise RuntimeError(f"{summ}: no rows scored")
+        if need_base:
+            ref = {"path": summ, "field": "base_loss", "sha": sha, "round": 0}
+            self.state["base"]["swe_loss"] = ref
+            self.save()
+        mine = {r["key"]: r["adapter_loss"] for r in per}
+        vs = None
+        if ref:
+            theirs = {r["key"]: r[ref["field"]] for r in (self.read_json(ref["path"]) or {}).get("per_row") or []
+                      if r.get(ref["field"]) is not None}
+            vs = E.compare_loss(theirs, mine, {r["key"]: r["trained"] for r in per})
+            vs["reference_round"] = ref["round"]
+            self.log(f"round {self.rnum}: held-out bug-fix loss {vs['best']} (round {ref['round']}) -> {vs['candidate']}; "
+                     f"{vs['wins']} steps lower / {vs['losses']} higher, p {vs['p_one_sided']:.4f}")
+        return self.mark_done("sweloss", {"summary": summ, "rows": len(per), "sha": sha,
+                                          "own": {"path": summ, "field": "adapter_loss", "sha": sha, "round": self.rnum},
+                                          "all": val.get("all"), "vs_best": vs})
+
     def confirm(self, cfg, d):
         """The kept adapter on the gate again with a fresh seed: its unbiased reference for later rounds."""
         seed = 1000 + self.rnum
         g = cfg["gate"]
+        gate = E.read_jsonl(E.GATE_PATH)
+        self.toolchain_check(gate)
         self.serve(self.gate_flags(cfg, lora=self.round_gguf()), "confirm")
         try:
             path = os.path.join(self.rdir, f"gate.seed{seed}.jsonl")
-            rows = E.score(self.server.url, E.read_jsonl(E.GATE_PATH), path, seed, g["max_tokens"],
-                           E.gate_check(gt.run_io_tests, gt.run_assert_tests, gt.extract_code),
+            rows = E.score(self.server.url, gate, path, seed, g["max_tokens"], self.gate_checker(),
                            lambda u, m, s, mt: ew.chat_request(u, m, s, mt), ew.count_tokens, g["budget"],
                            concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
                            on_row=lambda r, n, tot, tps: self.status("confirm", f"gate {n}/{tot}"))
@@ -915,7 +1069,8 @@ class Loop(fr.Controller):
             self.unserve()
         best_old = [r for r in E.read_jsonl(self.state["best"]["gate_rows"]) if r["seed"] == self.state["best"]["gate_seed"]]
         vs = E.compare(best_old, rows)
-        need = bool(cfg["rules"].get("confirm_net_win"))
+        # the net win guards a gate keep against a lucky draw; a loss-path keep held level on the gate by definition
+        need = bool(cfg["rules"].get("confirm_net_win")) and d.get("path") != "loss"
         return self.mark_done("confirm", {"gate_rows": path, "gate_seed": seed, "pass": sum(r["pass"] for r in rows),
                                           "n": len(rows), "vs_previous_best": vs, "net_win_required": need,
                                           "confirmed": (not need) or vs["wins"] > vs["losses"]})
@@ -971,7 +1126,8 @@ class Loop(fr.Controller):
                                   + new_rows,
                                   "lora_shape": lora_shape(plan["train"]), "init": plan["init"],
                                   "train_shape": {k: plan["train"][k] for k in SHAPE_KEYS if plan["train"].get(k) is not None},
-                                  "recipe": plan["recipe"]["id"]}
+                                  "recipe": plan["recipe"]["id"],
+                                  "swe_loss": (self.done("sweloss") or {}).get("own")}
             self.state["rejects_in_row"] = 0
             if plan.get("rolled"):
                 self.state["stack"] = None  # its rows are in the best's lineage now
@@ -995,7 +1151,10 @@ class Loop(fr.Controller):
                 self.log(f"round {self.rnum}: {rec['stack']}")
         if plan["recipe"]["id"] != "default" and plan["recipe"]["id"] not in self.state["recipes_done"]:
             self.state["recipes_done"].append(plan["recipe"]["id"])
+        lo = d.get("loss") or {}
         rec.update(gate=f"{ev['gate_pass']}/{ev['gate_n']}", gate_diff=d["gate"]["diff"], p=d["gate"]["p_one_sided"],
+                   path=d.get("path") if kept else None,
+                   swe_loss={k: lo.get(k) for k in ("best", "candidate", "wins", "losses", "p_one_sided")} if lo else None,
                    noncoding=ev["noncoding_accuracy"], reasons=reasons, best_before=d["best_round"],
                    evalplus=(mile or {}).get("datasets"), finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.save()
@@ -1006,21 +1165,41 @@ class Loop(fr.Controller):
     # ----------------------------------------------------------------------------------------- reports
 
     def write_report(self, cfg, rec, ev, d, plan=None, conf=None, mile=None):
-        g, cc, oci, nc = d["gate"], d["gate_cc"], d["gate_oci"], d["noncoding"]
+        g, nc = d["gate"], d["noncoding"]
         L = [f"# Loop round {self.rnum} ({rec.get('name') or 'r%03d' % self.rnum}): {rec['status'].upper()}", "",
              f"Compared with round {d['best_round']} (the best so far). Rules: {json.dumps(d['rules'])}.", ""]
         reasons = rec.get("reasons") if rec.get("reasons") is not None else d["reasons"]
         if reasons:
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
                   + "; ".join(reasons) + ".", ""]
+        elif rec["status"] == "kept":
+            L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
+                   "loss": "Kept on the bug-fix loss: its gate score held level and its loss on the held-out bug-fix "
+                           "steps fell, by a one-sided sign test."}.get(rec.get("path") or d.get("path"), "Kept."), ""]
+        part_label = {"write": "write a program", "fix": "fix a wrong submission", "cc": "CodeContests",
+                      "oci": "OpenCodeInstruct held-out"}
+        rows = [("gate (all)", g)] + [(f"part: {part_label.get(k, k)}", c) for k, c in (d.get("parts") or {}).items()]
+        if not d.get("parts"):  # reports from before the six-language gate
+            rows += [(n, d[k]) for n, k in (("CodeContests", "gate_cc"), ("OpenCodeInstruct held-out", "gate_oci"))
+                     if d.get(k)]
+        rows += [(f"language: {LANG_NAMES.get(lg, lg)}", c) for lg, c in (d.get("langs") or {}).items()]
         L += ["| set | n | best | this round | diff | wins / losses | one-sided p |", "|---|---|---|---|---|---|---|"]
-        for name, c in (("gate (all)", g), ("CodeContests", cc), ("OpenCodeInstruct held-out", oci)):
+        for name, c in rows:
             if c["n"]:
                 L.append(f"| {name} | {c['n']} | {c['best']:.4f} | {c['candidate']:.4f} | {c['diff']:+.4f} | "
                          f"{c['wins']} / {c['losses']} | {c['p_one_sided']:.4f} |")
         if nc["n"]:
             L.append(f"| non-coding (vs base, mean of seeds) | {nc['n']} | {nc['best']:.4f} | {nc['candidate']:.4f} | "
                      f"{nc['diff']:+.4f} | {nc['wins']} / {nc['losses']} | - |")
+        lo = d.get("loss")
+        if lo and lo.get("n"):
+            L.append(f"| held-out bug-fix steps: loss (lower is better; vs round {lo.get('reference_round')}) | "
+                     f"{lo['n']} | {lo['best']:.4f} | {lo['candidate']:.4f} | {lo['diff']:+.4f} | "
+                     f"{lo['wins']} lower / {lo['losses']} higher | {lo['p_one_sided']:.4f} |")
+        verdicts = _count(r.get("verdict") or ("ok" if r["pass"] else "no finished answer") for r in E.read_jsonl(ev["gate_rows"])
+                          if r["seed"] == ev["gate_seed"]) if ev.get("gate_rows") else {}
+        if verdicts:
+            L += ["", "Gate verdicts: " + ", ".join(f"{k} {v}" for k, v in sorted(verdicts.items())) + "."]
         L += ["", f"Gate answers: finish reasons {ev.get('gate_finish')}, reasoning budget hit {ev.get('gate_budget_hits')}."]
         for s in ev.get("samples") or []:
             L.append(f"- sample {s['name']}: {s['finish_reason']}, {s['completion_tokens']} tokens, loop suspected "
@@ -1069,16 +1248,21 @@ class Loop(fr.Controller):
              + (f" Rows waiting to roll into the next round: {self.state['stack']['rows']} from rounds "
                 f"{self.state['stack']['rounds']}." if self.state.get("stack") else "")
              + (f" Rolled-forward stacks dropped: {len(self.state['stacks_dropped'])}." if self.state.get("stacks_dropped") else ""), "",
-             "| round | recipe | init | rows | gate | diff vs best | p | non-coding | result | EvalPlus+ HE / MBPP |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+             "| round | recipe | init | rows | gate | diff vs best | p | bug-fix loss vs best (p) | non-coding | result | "
+             "EvalPlus+ HE / MBPP |",
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in self.state["rounds"]:
             ep = r.get("evalplus") or {}
             eps = " / ".join(f"{ep[ds]['plus']:.3f}" for ds in ew.DATASETS if ds in ep) or "-"
             diff = f"{r['gate_diff']:+.4f}" if isinstance(r.get("gate_diff"), (int, float)) else "-"
             p = f"{r['p']:.4f}" if isinstance(r.get("p"), (int, float)) else "-"
             ncs = f"{r['noncoding']:.3f}" if isinstance(r.get("noncoding"), (int, float)) else "-"
+            sl = r.get("swe_loss") or {}
+            sls = (f"{sl['best']:.4f} -> {sl['candidate']:.4f} ({sl['p_one_sided']:.4f})"
+                   if isinstance(sl.get("best"), (int, float)) and isinstance(sl.get("candidate"), (int, float)) else "-")
+            result = r["status"] + (f" ({r['path']} path)" if r.get("path") else "")
             L.append(f"| {r['round']} | {r.get('recipe', r.get('name', '-'))} | {r.get('init', '-')} | {r.get('rows', '-')} | "
-                     f"{r.get('gate', '-')} | {diff} | {p} | {ncs} | {r['status']} | {eps} |")
+                     f"{r.get('gate', '-')} | {diff} | {p} | {sls} | {ncs} | {result} | {eps} |")
         with open(os.path.join(self.dir, "summary.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(L) + "\n")
 
@@ -1129,9 +1313,13 @@ def main():
             c.prepare_pools(cfg)
             run.write_status(state="finished", detail="pools prepared")
             return 0
+        c.require_gate()
         c.reference_rounds(cfg)
         while not args.max_rounds or rounds_run < args.max_rounds:
             cfg = load_config(args.config)  # re-read every round: check-ins append recipes and sources
+            c.require_gate()
+            if cfg.get("swe_loss") and not os.path.exists(c.swe_file(cfg)):
+                raise Waiting("the held-out bug-fix steps are not built: run scripts/build_swe_heldout.py")
             pause_after = int(cfg.get("pause_after_rejects_in_row") or 0)
             if pause_after and c.state["rejects_in_row"] >= pause_after:
                 raise Waiting(f"{c.state['rejects_in_row']} rejects in a row: paused for a new recipe")
