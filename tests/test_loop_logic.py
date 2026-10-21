@@ -566,7 +566,7 @@ class World:
                 k = PASSING[m]
                 if m in CONFIRM_PASSING and seed // 100000 == 1000 + int(m[1:]):
                     k = CONFIRM_PASSING[m]
-                ok = i < k
+                ok = (i in k) if isinstance(k, (set, frozenset)) else i < k
                 return {"content": f"```python\n# {'PASS' if ok else 'FAIL'}\n```", "reasoning": "r",
                         "finish_reason": "stop", "completion_tokens": 50, "seconds": 0.0}
             return {"content": f"The answer is ({'A' if i < 7 else 'B'})", "reasoning": "r", "finish_reason": "stop",
@@ -1420,6 +1420,50 @@ def _gate_slots(tmp):
             assert "x/2 failed: ZeroDivisionError" in str(exc), exc
 
 
+def test_second_early_look():
+    """21 Oct 2026: a second early look at two thirds of the gate. A round ahead of the best on the first third but not
+    on the first two thirds stops at the second look, rejected, with no more gate answers and no non-coding check."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING)
+    before = world_patches()
+    try:
+        import yaml
+        w, cpath = setup_world(tmp)
+        w.pause_train_once = set()
+        cfg = L.load_config(cpath)
+        cfg["score_first_run"] = False
+        cfg["gate"]["early_reject"] = {"looks": [0.3334, 0.6667], "max_diff": 0}
+        yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+        run_dir = os.path.join(tmp, "results", "loop")
+        rd2 = os.path.join(run_dir, "rounds", "r002")
+        done = lambda stage: json.load(open(os.path.join(rd2, "stages", f"{stage}.done.json")))  # noqa: E731
+        gate = E.read_jsonl(E.GATE_PATH)
+        order = E.shuffled_order(gate, "early-reject:r2")
+        first, second = order[:14], order[14:27]
+        base = set(range(PASSING[None]))  # the base passes gate items 0..19
+        gain = [i for i in first if i not in base][:1]
+        drop = [i for i in second if i in base][:2]
+        assert len(gain) == 1 and len(drop) == 2, (first, second)
+        # r002: one more than the base on the first third, then two fewer on the second: +1, then -1 overall
+        PASSING["r002"] = (base | set(gain)) - set(drop)
+        assert run_main(["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]) == 0
+        ev, d = done("evaluate"), done("decide")
+        assert [(c["n"], c["diff"], c["stop"]) for c in ev["early_checks"]] == [(14, 1, False), (27, -1, True)], ev
+        assert ev["early_reject"] is True and ev["early_check"]["n"] == 27 and ev["gate_n"] == 27, ev
+        rows = E.read_jsonl(os.path.join(rd2, "gate.seed1.jsonl"))
+        assert sorted(r["id"] for r in rows) == sorted(gate[i]["id"] for i in order[:27])
+        assert not E.read_jsonl(os.path.join(rd2, "noncoding.jsonl"))
+        assert not d["keep"] and d["reasons"][0].startswith("stopped early: -1 vs the best after 27 of 40"), d
+        st = json.load(open(os.path.join(run_dir, "state.json")))
+        assert [(r["round"], r["status"]) for r in st["rounds"]] == [(0, "reference"), (2, "rejected")], st["rounds"]
+    finally:
+        PASSING.clear()
+        PASSING.update(saved)
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_early_reject():
     """The early look (loop.yaml gate early_reject): a round behind the best on the shuffled first third of the gate
     stops there, rejected, with no more gate answers and no non-coding check; a round ahead there answers the whole
@@ -1448,7 +1492,7 @@ def _early_reject(tmp):
     w.pause_train_once = set()
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
-    cfg["gate"]["early_reject"] = {"fraction": 0.3334, "max_diff": 0}
+    cfg["gate"]["early_reject"] = {"looks": [0.6667, 0.3334], "max_diff": 0}
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     run_dir = os.path.join(tmp, "results", "loop")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
@@ -1456,6 +1500,8 @@ def _early_reject(tmp):
     done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     gate = E.read_jsonl(E.GATE_PATH)
+    assert L.early_looks(cfg["gate"]["early_reject"]) == [0.3334, 0.6667]
+    assert L.early_looks({"fraction": 0.3334, "max_diff": 0}) == [0.3334]  # the older single-look form
     asked = []
 
     def chat(url, message, seed, max_tokens=None, sampling=None):
@@ -1474,14 +1520,16 @@ def _early_reject(tmp):
     assert not E.read_jsonl(os.path.join(rd(2), "noncoding.jsonl"))
     ev2, d2 = done(2, "evaluate"), done(2, "decide")
     assert ev2["early_reject"] is True and ev2["early_check"]["stop"] and ev2["early_check"]["n"] == 14, ev2
+    assert len(ev2["early_checks"]) == 1  # stopped at the first look
     assert ev2["early_check"]["diff"] <= 0 and ev2["gate_n"] == 14
     assert not d2["keep"] and d2["early_reject"]["stop"] and d2["reasons"][0].startswith("stopped early"), d2
     assert "stopped early" in open(os.path.join(rd(2), "report.md")).read()
-    # r003 is ahead (40 of 40): the first third shows it, so it answers the whole gate and the non-coding check
+    # r003 is ahead (40 of 40): both looks show it, so it answers the whole gate and the non-coding check
     PASSING["r003"] = 40
     assert run_main(args) == 0
     ev3, d3 = done(3, "evaluate"), done(3, "decide")
     assert ev3["early_reject"] is False and ev3["early_check"]["diff"] > 0 and ev3["gate_n"] == len(gate), ev3
+    assert [c["n"] for c in ev3["early_checks"]] == [14, 27] and not any(c["stop"] for c in ev3["early_checks"])
     assert E.read_jsonl(os.path.join(rd(3), "noncoding.jsonl")) and d3["keep"] and d3["path"] == "gate", d3
     assert state()["best"]["round"] == 3
     # r004 is behind r003 but its bug-fix loss falls: the loss path is open, so there is no early look
