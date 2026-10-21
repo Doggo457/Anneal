@@ -247,12 +247,14 @@ class Stopped(Exception):
 
 
 def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, budget, concurrency=4,
-          stop_check=None, log=print, on_row=None, request_retries=1, order=None):
+          stop_check=None, log=print, on_row=None, request_retries=1, order=None, request=None, judge=None):
     """One answer per item for this seed, checked by check(item, content) -> bool. Resumable: items already in
     out_path for this seed are skipped. chat(url, message, seed, max_tokens) -> evalplus_win.chat_request dict.
     order: indexes into items to answer, in that order (default all, in list order); an item's request seed comes
     from its index in items either way, so it gets the same seed whatever the order. Returns the rows of this seed
-    (old and new)."""
+    (old and new). For items that are not one user message (a tool-calling check, anneal/bfcl.py):
+    request(url, item, seed, max_tokens) stands in for chat and judge(item, response) -> (passed, verdict) for
+    check, and sees the whole response (finish reason, tool calls)."""
     done = {(r["id"], r["seed"]) for r in read_jsonl(out_path)}
     want = range(len(items)) if order is None else order
     todo = [(i, items[i]) for i in want if (items[i]["id"], seed) not in done]
@@ -265,10 +267,11 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
     def one(i, it):
         if stop_check and stop_check():
             raise Stopped()
-        message = it["prompt"] if "prompt" in it else mc_message(it)
+        message = None if request else it["prompt"] if "prompt" in it else mc_message(it)
         for attempt in range(1 + request_retries):
             try:
-                r = chat(url, message, 100000 * seed + i, max_tokens)
+                r = (request(url, it, 100000 * seed + i, max_tokens) if request
+                     else chat(url, message, 100000 * seed + i, max_tokens))
                 break
             except Exception as exc:  # noqa: BLE001
                 if (stop_check and stop_check()) or attempt == request_retries:
@@ -276,7 +279,10 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
                 time.sleep(5)
         n_reason = count_tokens(url, r["reasoning"]) if r["reasoning"] else 0
         verdict = None
-        if r["finish_reason"] == "stop" and r["content"]:
+        if judge:
+            ok, verdict = judge(it, r)
+            ok = bool(ok)
+        elif r["finish_reason"] == "stop" and r["content"]:
             res = check(it, r["content"])
             ok, verdict = (bool(res[0]), res[1]) if isinstance(res, tuple) else (bool(res), None)
         else:
@@ -284,7 +290,7 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
         row = {"id": it["id"], "seed": seed, "pass": ok, "finish_reason": r["finish_reason"],
                 "completion_tokens": r["completion_tokens"], "reasoning_tokens": n_reason,
                 "budget_hit": bool(budget) and n_reason >= 0.97 * budget, "seconds": r["seconds"],
-                "answer": (r["content"] or "")[:20000]}
+                "answer": (r.get("answer", r["content"]) or "")[:20000]}
         if verdict is not None:
             row["verdict"] = verdict
         return row

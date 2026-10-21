@@ -1,7 +1,8 @@
 # Held-out sets for the improvement loop
 
-The loop keeps a round only if it does better on these sets. They are built once and never change while rounds are
-scored on them. The data files stay on the training machine and are not in this repository.
+The loop keeps a round only if it does better on these sets, and not worse on the no-worse checks. They are built
+once and never change while rounds are scored on them. The data files stay on the training machine and are not in
+this repository.
 
 ## The gate: six languages, write and fix
 
@@ -76,6 +77,36 @@ Built 2026-10-19 by scripts/build_evalsets.py and unchanged: `TIGER-Lab/MMLU-Pro
 `b189ec765aa7ed75c8acfea42df31fdae71f97be` test (12032 rows), 100 questions outside computer science,
 random.Random(42). Categories: {"philosophy": 7, "law": 12, "business": 7, "chemistry": 15, "psychology": 6,
 "engineering": 10, "physics": 12, "economics": 5, "math": 5, "biology": 3, "history": 5, "other": 5, "health": 8}.
+
+## BFCL Java and JavaScript tool calls (no-worse check)
+
+Built by scripts/build_guards.py --bfcl from the Berkeley Function Calling Leaderboard's own package, bfcl-eval
+2026.3.23 on PyPI (wheel sha256 `3bb6dfa5f0c68ad403c9ec50b00db2bb3b4cc9b38ab1ff33f48fe30d853d3a0a`; the same code as
+`ShishirPatil/gorilla` @ `6ea57973c7a6097fd7c5915698c54c17c5b1b6c8`). Code and data are Apache-2.0. Not the Hugging Face
+copy: it holds only the V3 files, which still expect `queue` in `simple_javascript_41`, fixed to `queue_1` on 12 Dec
+2025.
+
+| Category | Items |
+|---|---|
+| simple_java (BFCL V4) | 100 |
+| simple_javascript (BFCL V4) | 50 |
+
+Each item is one question, one function and one expected call. These two are BFCL's only Java and JavaScript
+categories. The request is the question as the only message and the function as a tool, built as BFCL builds it for
+OpenAI-compatible servers: BFCL's language hint on every description, every parameter a string, and dots in names
+turned into underscores. The rebuilt requests match BFCL's own convert_to_tool output for all 150 items; the file's
+sha256 is `f69b618c3639563895c25942b16c101ca941ee5a10e48e567dd23452f09537ea`.
+
+Answers come from the six-language test's server settings with thinking on, one per item (seed 1). llama-server
+parses the call, and BFCL's own AST checker judges it against the raw function doc (anneal/bfcl.py). An answer with no
+call, a cut-off answer or arguments that aren't JSON fail.
+
+Known checker limits apply to the base and every round alike. A Java `String[]` with quoted elements fails (java 35,
+78, 83, 85, 86, 89, 90, 91), and an ArrayList of mixed types can't pass (java 36, 65). Scores are not comparable with
+the public leaderboard, which uses other quantisation, sampling and limits, and averages in Python items.
+
+The loop's pools were prepared before this check, so they were not decontaminated against it. scripts/build_guards.py
+reports how many pool rows have a first user message that overlaps a BFCL question by the rule below.
 
 ## Overlap rules
 
