@@ -29,11 +29,6 @@ Long-run config keys (defaults in brackets):
   warm_up_longest_row: [true]  one forward + backward on the longest row before step 1 (gradients dropped)
   ce_target_gb: []             fixed memory budget for Unsloth's fused cross entropy (UNSLOTH_CE_LOSS_TARGET_GB)
   mem_debug: [false]           log memory just before the loss in every forward
-  attention: [sdpa] | chunked | fla   full-attention layers on rows over attention_min_len tokens
-                               (anneal/long_attention.py): chunked = exact causal attention attention_chunk [1024]
-                               query rows at a time, each chunk recomputed in backward, so the 24 x L^2 score
-                               matrix never exists at once (16,384-token rows crashed without it, 21 Oct 2026)
-  attention_chunk: [1024]      attention_min_len: [0]
   init_adapter: []             start the LoRA from a saved adapter folder instead of fresh weights (the improvement
                                loop continues its best adapter). Same r, lora_alpha and target modules required; every
                                tensor is checked equal after loading. Ignored once a checkpoint exists (resume wins).
@@ -388,12 +383,6 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         model = get_peft_model(model, LoraConfig(task_type="CAUSAL_LM", **lora))
     model.print_trainable_parameters()
     init_report = load_init_adapter(model, cfg["init_adapter"], lora) if cfg.get("init_adapter") else None
-    from anneal import long_attention  # noqa: E402
-    print(long_attention.apply(cfg.get("attention", "sdpa"), int(cfg.get("attention_chunk", 1024)),
-                               int(cfg.get("attention_min_len", 0))))
-    attention_layers = long_attention.check_model(model) if cfg.get("attention", "sdpa") != "sdpa" else None
-    if attention_layers:
-        print(f"attention layers: {attention_layers}")
     if cfg.get("mem_debug"):
         install_mem_probe(run, model)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -496,11 +485,9 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             if on_gpu and cfg.get("warm_up_longest_row", True) and not warm:
                 longest = max(range(len(rows)), key=lambda i: len(rows[i]["input_ids"]))
                 warm.update(warm_up(trainer, counter.collator, train_ds, longest, run))
-                long_attention.verify(len(rows[longest]["input_ids"]))
 
         def on_step_end(self, a, state, control, **kw):
             release_cache()
-            long_attention.verify()
             if on_gpu:
                 free, total = torch.cuda.mem_get_info()
                 run.metric(event="mem", step=state.global_step, hip_free_gib=gib(free), hip_total_gib=gib(total),
@@ -618,7 +605,6 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     if engine == "unsloth":
         summary["gdn_heads"] = gdn_heads.report()
         summary["short_conv"] = short_conv.report()
-    summary["attention"] = dict(long_attention.report(), layers=attention_layers)
     with open(os.path.join(run_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=1, default=str)
     print("Stopped early; re-run the same command to resume." if stopped_early
