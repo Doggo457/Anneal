@@ -8,6 +8,7 @@ later rounds inherit, the two-pass round when the pools run short, and the wait 
 """
 
 import collections
+import hashlib
 import json
 import os
 import shutil
@@ -391,6 +392,37 @@ def test_safe_delete_stays_inside():
     assert L.pid_alive(os.getpid()) and not L.pid_alive(0)
 
 
+def test_reworded_check_guard():
+    """A round waits until the reworded-copy check (scripts/paraphrase_check.py covered.json) has seen the current
+    gate and every usable pool as it is now."""
+    saved = E.EVAL_DIR, E.GATE_PATH, L.POOLS
+    with tempfile.TemporaryDirectory() as d:
+        try:
+            E.EVAL_DIR, E.GATE_PATH, L.POOLS = d, os.path.join(d, "gate.jsonl"), os.path.join(d, "pools")
+            E.write_jsonl(E.GATE_PATH, [{"id": "write/cpp/cc/test/1", "kind": "write", "prompt": "p"}])
+            for n, rows in (("openswe_v4flash", 3), ("glm53_terminal_nopy", 2)):
+                E.write_jsonl(os.path.join(L.POOLS, n, "train.jsonl"), [{"messages": [], "i": i} for i in range(rows)])
+            pools = ["openswe_v4flash", "glm53_terminal_nopy", "not_prepared_yet"]
+            assert L.reworded_check_gaps(pools) == ["the gate", "glm53_terminal_nopy", "openswe_v4flash"]
+            size = lambda n: os.path.getsize(os.path.join(L.POOLS, n, "train.jsonl"))  # noqa: E731
+            cov = {"gate_sha256": hashlib.sha256(open(E.GATE_PATH, "rb").read()).hexdigest(),
+                   "sources": {"mix_first_2k": 10, "loop/openswe_v4flash": size("openswe_v4flash"),
+                               "loop/glm53_terminal_nopy": size("glm53_terminal_nopy")}}
+            os.makedirs(os.path.join(d, "paraphrase"))
+            json.dump(cov, open(os.path.join(d, "paraphrase", "covered.json"), "w"))
+            assert L.reworded_check_gaps(pools) == [], L.reworded_check_gaps(pools)
+            # a pool prepared again after the check, and a new gate
+            E.write_jsonl(os.path.join(L.POOLS, "glm53_terminal_nopy", "train.jsonl"), [{"messages": [], "i": 9}] * 5)
+            assert L.reworded_check_gaps(pools) == ["glm53_terminal_nopy"]
+            E.write_jsonl(E.GATE_PATH, [{"id": "write/go/cc/test/2", "kind": "write", "prompt": "q"}])
+            assert L.reworded_check_gaps(["openswe_v4flash"]) == ["the gate"]
+            # the check ran on test sets passed in (no gate): never counts as covering the gate
+            json.dump(dict(cov, gate_sha256=None), open(os.path.join(d, "paraphrase", "covered.json"), "w"))
+            assert L.reworded_check_gaps([]) == ["the gate"]
+        finally:
+            E.EVAL_DIR, E.GATE_PATH, L.POOLS = saved
+
+
 def test_watchdog_decide():
     now = 1_000_000.0
     st = {"restarts": []}
@@ -639,6 +671,7 @@ def setup_world(tmp):
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
     cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
+    cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}

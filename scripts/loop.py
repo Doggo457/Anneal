@@ -355,6 +355,27 @@ def blocked_keys():
         return {line.strip() for line in fh if line.strip()}
 
 
+def reworded_check_gaps(pool_names):
+    """What the last finished reworded-copy check did not cover (data/eval/paraphrase/covered.json, written by
+    scripts/paraphrase_check.py): "the gate" if gate.jsonl changed since, and each pool whose train.jsonl was prepared
+    or changed after it (its size differs from the one the check read). Empty when everything is covered."""
+    cov_path = os.path.join(E.EVAL_DIR, "paraphrase", "covered.json")
+    try:
+        with open(cov_path, encoding="utf-8") as fh:
+            cov = json.load(fh)
+    except (OSError, ValueError):
+        cov = {}
+    gaps = []
+    if not cov.get("gate_sha256") or cov["gate_sha256"][:16] != file_sha(E.GATE_PATH):
+        gaps.append("the gate")
+    seen = cov.get("sources") or {}
+    for n in sorted(pool_names):
+        f = os.path.join(POOLS, n, "train.jsonl")
+        if os.path.exists(f) and seen.get("loop/" + n) != os.path.getsize(f):
+            gaps.append(n)
+    return gaps
+
+
 def rows_at(path, indices):
     """The rows at these indices of a JSONL file (indices count non-empty lines), in the order given."""
     want = set(indices)
@@ -813,6 +834,11 @@ class Loop(fr.Controller):
         best = self.state["best"]
         usable = {n: c for n, c in self.pool_rows(cfg).items()
                   if (self.read_json(os.path.join(POOLS, n, "pool.json")) or {}).get("usable", True)}
+        if cfg.get("reworded_check_required"):
+            gaps = reworded_check_gaps(usable)
+            if gaps:
+                raise Waiting("the reworded-copy check (scripts/paraphrase_check.py) has not covered "
+                              + ", ".join(gaps) + "; no round trains on rows it hasn't checked against the gate")
         used = self.used_keys()
         blocked = blocked_keys() - used
         self.log(f"reworded-copy check: {len(blocked)} unused rows blocked" if blocked else
