@@ -292,10 +292,14 @@ def main():
     tok = getattr(tok, "tokenizer", tok)
 
     from anneal.data import template_ids
+    from train_longrun import split_trace
 
-    def n_tokens(msgs):  # thinking mode exactly when the trainer uses it (train_longrun.py tokenize_rows)
-        thinking = any(m["role"] == "assistant" and message_reasoning(m) for m in msgs)
-        return len(template_ids(tok, msgs, add_generation_prompt=False, enable_thinking=thinking))
+    def n_tokens(msgs):
+        """Tokens as the trainer renders the row (train_longrun.py tokenize_rows): each reasoning moved out of the
+        content into reasoning_content, which Qwen3.8's template renders itself (it doesn't split "<think>" out of
+        content), and thinking mode on exactly when the row has a trace."""
+        split, thinking = split_trace(msgs)
+        return len(template_ids(tok, split, add_generation_prompt=False, enable_thinking=thinking))
 
     deco = None
     if args.decontaminate:
@@ -384,12 +388,22 @@ def main():
         user_text = "\n".join(m["content"] for m in msgs if m["role"] == "user")
         first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
         kept_before = counts["kept"]
-        prefix_chars = 0
-        cut = 0
+        # Cheap length check before tokenising: a row's characters, leaving out the reasoning of assistant turns that
+        # come before the row's last user turn. Chat templates of this family can drop that reasoning (in sessions
+        # where each step is answered by a user turn, e.g. terminal output), so counting it could drop a row the
+        # token count would keep; counting less only means tokenising more (the token count always decides).
+        full_c, hidden_c, last_user = [0], [0], []
+        lu = -1
+        for i, m in enumerate(msgs):
+            full_c.append(full_c[-1] + len(target_text(m)))
+            hidden_c.append(hidden_c[-1] + (len(m["content"]) - len(answer_text(m["content"]))
+                                            if m["role"] == "assistant" else 0))
+            last_user.append(lu)
+            if m["role"] == "user":
+                lu = i
         for k, end in enumerate(ends):
             counts["candidate_rows"] += 1
-            prefix_chars += sum(len(target_text(m)) for m in msgs[cut:end + 1])
-            cut = end + 1
+            prefix_chars = full_c[end + 1] - (hidden_c[last_user[end]] if last_user[end] > 0 else 0)
             t = msgs[end]
             text = target_text(t)
             has_call = bool(t.get("tool_calls"))
