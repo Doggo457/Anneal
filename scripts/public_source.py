@@ -20,6 +20,8 @@ Filters, in order, each counted in measure.json and the card:
   outside_range                 (--row-range START:END) conversations before START; reading stops at END. Indices count
                                 every conversation of the matched files in order, so a range can pick one block of a
                                 file (e.g. the only unaltered sessions of a set whose other blocks were rewritten)
+  loss_masked                   (--respect-loss-mask) the target turn carries "loss_mask": 0 or false: the set itself
+                                marks it as not to be trained on
   no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
                                 or tool-call arguments that aren't a JSON object (kept as a JSON string; the
                                 template gets them parsed, see anneal/data.py chat_messages)
@@ -43,7 +45,8 @@ Filters, in order, each counted in measure.json and the card:
   contaminated_evalplus / _gate EvalPlus 13-gram / Jaccard (prepare_dataset.Decontaminator) on the first user message
                                 + target; the loop's held-out problems (anneal/evalsets.OverlapIndex) on all user text
                                 + target
-measure.json also counts conversations by their tool calls (sessions_by_redaction: no_calls, clean, mixed,
+measure.json also gives the kept targets' place in their session (kept_target_position: which assistant turn, and
+that turn's share of the session; long agent sessions only fit their early steps) and counts conversations by their tool calls (sessions_by_redaction: no_calls, clean, mixed,
 redacted) and the text of the redacted steps (redacted_step_text_chars), i.e. what masking the calls out could save.
 Validation is split by conversation, so no session has steps in both train and val. Conversations are read in
 file order; --max-rows stops at that many kept rows.
@@ -229,6 +232,8 @@ def main():
     ap.add_argument("--require-think", action="store_true")
     ap.add_argument("--min-target-chars", type=int, default=0)
     ap.add_argument("--drop-tool-name", action="append", default=[])
+    ap.add_argument("--respect-loss-mask", action="store_true",
+                    help='skip a target turn whose "loss_mask" is 0 or false (sets that mark turns not to train on)')
     ap.add_argument("--row-range", default=None, help="START:END (END optional): only these conversations, see above")
     ap.add_argument("--drop-target-regex", action="append", default=[],
                     help="drop a step whose target text matches this regular expression; repeatable")
@@ -274,7 +279,8 @@ def main():
         gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
 
     counts = collections.Counter({k: 0 for k in (
-        "conversations", "outside_range", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "require_think", "short_target",
+        "conversations", "outside_range", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "loss_masked",
+        "require_think", "short_target",
         "dropped_tool_name", "placeholder_args", "masked_target", "redacted_context", "duplicate", "too_long", "template_error",
         "contaminated_evalplus", "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
@@ -282,6 +288,7 @@ def main():
     sessions = collections.Counter({k: 0 for k in ("no_calls", "clean", "mixed", "redacted")})
     redacted_text = []  # stripped content length of each redacted target step
     kept_ctx_redacted = 0
+    kept_steps, kept_shares = [], []  # assistant-turn number of each kept target, and its share of the session
     kept_tools, kept_sessions = collections.Counter(), set()  # what the kept steps do, and how many sessions they span
     seen = set()
     groups = collections.OrderedDict()  # conversation index -> rows
@@ -304,6 +311,13 @@ def main():
         if wheres and not all(where_ok(cols.get(c), op, v) for c, op, v in wheres):
             counts["filtered_where"] += 1
             continue
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                pass
+        no_loss = {i for i, m in enumerate(raw) if isinstance(m, dict) and m.get("loss_mask") in (0, False)} \
+            if args.respect_loss_mask and isinstance(raw, list) else set()
         msgs = normalise(raw)
         if msgs is None:
             counts["bad_format"] += 1
@@ -324,13 +338,16 @@ def main():
         first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
         prefix_chars = 0
         cut = 0
-        for end in ends:
+        for k, end in enumerate(ends):
             counts["candidate_rows"] += 1
             prefix_chars += sum(len(target_text(m)) for m in msgs[cut:end + 1])
             cut = end + 1
             t = msgs[end]
             text = target_text(t)
             has_call = bool(t.get("tool_calls"))
+            if end in no_loss:
+                counts["loss_masked"] += 1
+                continue
             if args.require_think and "<think>" not in (t.get("content") or ""):
                 counts["require_think"] += 1
                 continue
@@ -379,6 +396,8 @@ def main():
             counts["kept"] += 1
             kept_ctx_redacted += ctx_redacted
             kept_sessions.add(ci)
+            kept_steps.append(k + 1)
+            kept_shares.append((k + 1) / len(ends))
             for c in t.get("tool_calls", []):
                 kept_tools[c["function"]["name"]] += 1
             lengths.append(n)
@@ -389,11 +408,17 @@ def main():
                 break
 
     s, rt = sorted(lengths), sorted(redacted_text)
+
+    def med(xs, f=0.5):
+        xs = sorted(xs)
+        return round(xs[min(len(xs) - 1, int(f * len(xs)))], 3) if xs else None
     q = (lambda x: s[min(len(s) - 1, int(x * len(s)))]) if s else (lambda x: None)
     measure = {"dataset": args.dataset, "revision": sha, "files": paths, "turns": args.turns, "counts": dict(counts),
                "kept_by_target_kind": dict(kept_by_kind), "tool_names_top": tool_names.most_common(20),
                "sessions_by_redaction": dict(sessions), "kept_with_redacted_context": kept_ctx_redacted,
                "kept_sessions": len(kept_sessions), "kept_target_tools": kept_tools.most_common(20),
+               "kept_target_position": {"median_step": med(kept_steps), "p90_step": med(kept_steps, 0.9),
+                                        "median_share": med(kept_shares), "p90_share": med(kept_shares, 0.9)},
                "redacted_step_text_chars": {"steps": len(rt), "with_200_plus": sum(x >= 200 for x in rt),
                                             "median": rt[len(rt) // 2] if rt else None, "total": sum(rt)},
                "template_errors": [{"error": k, "first_conversation": v} for k, v in list(template_errors.items())[:10]],
