@@ -22,8 +22,19 @@ milestone_evalplus: true   # EvalPlus on kept adapters only (the reported number
 pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead
 
 gate: {seed: 1, budget: 16384, max_tokens: 20480, concurrency: 4}
+# The gate (21 Oct 2026, scripts/build_gate.py): 495 CodeContests items, no Python. Write items ask for a program in
+# C++, Java, Go, Rust, JavaScript or TypeScript (one language per problem, in turn); fix items show a wrong C++ or Java
+# submission and ask for the fixed program. Built and run in the sandbox (anneal/polyglot.py,
+# scripts/setup_toolchains.py).
 noncoding: {seeds: [1, 2], max_tokens: 20480}
-rules: {alpha: 0.05, cc_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false}
+rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false, loss_rule: true, loss_alpha: 0.05}
+# Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
+# 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) lower on more steps than chance,
+# p <= loss_alpha. Either way the write and fix parts may not drop by more than part_tolerance or significantly, and
+# the non-coding check (vs the base) by more than nc_tolerance or significantly.
+swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}
+# 200 single steps from Open-SWE runs in repositories the openswe_v4flash pool leaves out (its holdout below),
+# built once by scripts/build_swe_heldout.py.
 # confirm_net_win (off: optional, not chosen yet): a kept round's fresh-seed confirm must also win more gate problems
 # than it loses against the best, or the round is rejected. Under no real gain that passes about 45% of the time, so it
 # more than halves false keeps, which rolling rows forward raises; a real 3-point gain passes 94-99%
@@ -78,6 +89,8 @@ sources:
                                                        # 1,618, Go 1,590, JavaScript 901, PHP 397, Rust 91, Java 63)
     turns: each                                        # each step with reasoning is a row; steps without it are dropped
     report_fields: [language]
+    holdout: {col: repo, mod: 20}                      # repositories hashing to bucket 0 of 20 never train: they are
+                                                       # the held-out bug-fix steps (swe_loss)
     pool_rows: 40000
     share: 0.55
     group: swe

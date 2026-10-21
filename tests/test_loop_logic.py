@@ -78,6 +78,128 @@ def test_compare_and_decide():
     assert not E.decide(base, better, nc, nc, rules, sanity_ok=False)["keep"]
 
 
+def test_six_language_decide_and_loss():
+    ids = [f"write/{LANGS[i % 6]}/cc/valid/{i}" for i in range(30)] + [f"fix/{LANGS[i % 2]}/cc/test/{i}" for i in range(20)]
+    nc_ids = [f"mmlupro/{i}" for i in range(10)]
+    nc = rows(nc_ids, set(nc_ids[:7])) + rows(nc_ids, set(nc_ids[:7]), seed=2)
+    rules = {"alpha": 0.05, "part_tolerance": 0.05, "nc_tolerance": 0.05, "loss_rule": True, "loss_alpha": 0.05}
+    base = rows(ids, set(ids[:20]) | set(ids[30:40]))           # write 20/30, fix 10/20
+    # gate path: 10 more write items pass
+    better = rows(ids, set(ids[:30]) | set(ids[30:40]))
+    d = E.decide(base, better, nc, nc, rules)
+    assert d["keep"] and d["path"] == "gate" and d["gate"]["wins"] == 10, d
+    assert set(d["parts"]) == {"write", "fix"} and d["parts"]["fix"]["diff"] == 0 and len(d["langs"]) == 6
+    assert d["langs"]["typescript"]["n"] == 5 and d["langs"]["cpp"]["n"] == 15  # 5 write + 10 fix
+    assert "gate_cc" not in d
+    # per-step losses: lower on all 20 steps is clear; 12 lower / 8 higher is not
+    down = E.compare_loss({f"s{i}": 1.0 for i in range(20)}, {f"s{i}": 0.9 for i in range(20)},
+                          {f"s{i}": 1 + (i == 0) * 19 for i in range(20)})
+    assert down["wins"] == 20 and down["p_one_sided"] < 1e-5 and abs(down["diff"] + 0.1) < 1e-9, down
+    mixed = E.compare_loss({f"s{i}": 1.0 for i in range(20)}, {f"s{i}": 0.8 if i < 12 else 1.1 for i in range(20)})
+    assert (mixed["wins"], mixed["losses"]) == (12, 8) and mixed["p_one_sided"] > 0.05 and mixed["diff"] < 0
+    weighted = E.compare_loss({"a": 1.0, "b": 1.0}, {"a": 0.0, "b": 2.0}, {"a": 1, "b": 3})
+    assert weighted["candidate"] == 1.5 and weighted["best"] == 1.0
+    # loss path: the gate level, the loss clearly lower
+    d = E.decide(base, base, nc, nc, rules, loss=down)
+    assert d["keep"] and d["path"] == "loss" and d["loss"]["wins"] == 20, d
+    assert not E.decide(base, base, nc, nc, dict(rules, loss_rule=False), loss=down)["keep"]
+    d = E.decide(base, base, nc, nc, rules, loss=mixed)
+    assert not d["keep"] and any("not clearly lower" in r for r in d["reasons"]), d
+    d = E.decide(base, base, nc, nc, rules, loss=None)
+    assert not d["keep"] and any("no held-out loss" in r for r in d["reasons"]), d
+    lower = rows(ids, (set(ids[:20]) | set(ids[30:40])) - {ids[0]})
+    d = E.decide(base, lower, nc, nc, rules, loss=down)
+    assert not d["keep"] and any("path closed" in r for r in d["reasons"]), d
+    # level overall but the fix part drops 0.10 (> 0.05): rejected on either path
+    trade = rows(ids, set(ids[:22]) | set(ids[30:38]))
+    d = E.decide(base, trade, nc, nc, rules, loss=down)
+    assert not d["keep"] and d["path"] is None and any("fix part dropped" in r for r in d["reasons"]), d
+    # the non-coding guard holds on the loss path too
+    worse_nc = rows(nc_ids, set(nc_ids[:5])) + rows(nc_ids, set(nc_ids[:5]), seed=2)
+    assert not E.decide(base, base, nc, worse_nc, rules, loss=down)["keep"]
+    # the scorer keeps the judge's verdict
+    check = E.gate_check(None, None, None, lambda item, content: (False, "compile_error"))
+    assert check({"kind": "fix", "id": "fix/cpp/x", "lang": "cpp"}, "x") == (False, "compile_error")
+    try:
+        E.gate_check(None, None, None)({"kind": "write", "id": "write/go/x", "lang": "go"}, "x")
+        raise AssertionError("a write item was judged without the six-language judge")
+    except RuntimeError:
+        pass
+
+
+def test_holdout_and_step_cap():
+    """public_source.py --holdout-*: the pool and the held-out side split the repositories with nothing shared;
+    --max-steps-per-conversation keeps K evenly spaced steps of a session."""
+    import public_source as ps
+    with tempfile.TemporaryDirectory() as d:
+        def session(repo, n):
+            msgs = [{"role": "user", "content": f"Fix the failing test in {repo}, issue {n}."}]
+            for k in range(6):
+                msgs += [{"role": "assistant", "content": f"step {k} of {repo} {n}", "reasoning_content": f"why {k}"},
+                         {"role": "user", "content": f"output {k}"}]
+            return {"repo": repo, "messages": msgs[:-1]}
+        repos = [f"org/repo{i}" for i in range(40)]
+        held = {r for r in repos if ps.holdout_bucket(r, 20) == 0}
+        assert held and len(held) < len(repos)
+        src = os.path.join(d, "swe.jsonl")
+        E.write_jsonl(src, [session(r, n) for r in repos for n in range(2)])
+        common = ["--dataset", "t/swe", "--files", "*", "--from-local", src, "--turns", "each", "--require-think",
+                  "--tokenizer", "x", "--max-tokens", "4000", "--val-fraction", "0", "--holdout-col", "repo",
+                  "--holdout-mod", "20"]
+        kept = {}
+        for side in ("pool", "heldout"):
+            out = os.path.join(d, side)
+            extra = ["--max-steps-per-conversation", "2"] if side == "heldout" else []
+            assert run_public_source(common + ["--holdout-side", side, "--out", out] + extra) == 0
+            kept[side] = E.read_jsonl(os.path.join(out, "train.jsonl")) + E.read_jsonl(os.path.join(out, "val.jsonl"))
+            c = json.load(open(os.path.join(out, "measure.json")))["counts"]
+            n_held = 2 * len(held)
+            assert c["holdout_split"] == (n_held if side == "pool" else 80 - n_held), c
+            if side == "heldout":
+                assert c["step_cap"] == n_held * 4 and c["kept"] == n_held * 2 == len(kept[side]), c
+        first = lambda r: r["messages"][0]["content"]  # noqa: E731
+        pool_repos = {first(r).split(" in ")[1].split(",")[0] for r in kept["pool"]}
+        held_repos = {first(r).split(" in ")[1].split(",")[0] for r in kept["heldout"]}
+        assert held_repos == held and not (pool_repos & held_repos) and len(kept["pool"]) == (80 - 2 * len(held)) * 6
+        # two of six steps per session, evenly spaced: steps 1 and 4
+        last = sorted(r["messages"][-1]["content"].split("</think>")[-1].strip()[:6] for r in kept["heldout"]
+                      if first(r) == f"Fix the failing test in {sorted(held)[0]}, issue 0.")
+        assert last == ["step 1", "step 4"], last
+        # build_swe_heldout.py reads the same source with every pool filter, on the held-out side
+        import build_swe_heldout as B
+        import yaml
+        cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
+        args, srcd = B.source_args(cfg)
+        ns = parsed_args("public_source.py", args + ["--tokenizer", "x", "--out", d])
+        assert (ns.holdout_col, ns.holdout_mod, ns.holdout_side, ns.max_steps_per_conversation) == ("repo", 20, "heldout", 1)
+        assert ns.where == srcd["where"] and ns.require_think and ns.turns == "each" and ns.max_tokens == 8192
+        pool_args = L.public_source_args(srcd)
+        assert [a for a in args if a not in ("heldout", "pool")][:len(pool_args) - 1] == \
+            [a for a in pool_args if a not in ("heldout", "pool")], (args, pool_args)
+
+
+def test_gate_ready_and_retired_builder():
+    with tempfile.TemporaryDirectory() as d:
+        g = os.path.join(d, "gate.jsonl")
+        assert not W.gate_ready(g)
+        E.write_jsonl(g, [{"id": "cc/valid/0", "kind": "cc"}])
+        assert not W.gate_ready(g)  # the retired Python gate: the watchdog doesn't start the loop on it
+        E.write_jsonl(g, [{"id": "write/go/cc/valid/0", "kind": "write", "lang": "go"}])
+        assert W.gate_ready(g)
+        import build_evalsets as BE
+        saved = E.EVAL_DIR
+        E.EVAL_DIR = d
+        os.makedirs(os.path.join(d, "archive", "python-gate"))
+        try:
+            sys.argv, argv = ["build_evalsets.py"], sys.argv
+            BE.main()
+            raise AssertionError("build_evalsets.py rebuilt the retired Python gate")
+        except SystemExit as exc:
+            assert "build_gate.py" in str(exc)
+        finally:
+            sys.argv, E.EVAL_DIR = argv, saved
+
+
 def test_mc_extract_and_mmlu():
     assert E.mc_extract("so... The answer is (C).") == "C"
     assert E.mc_extract("the answer is B, wait, The answer is (D)") == "D"
@@ -293,6 +415,8 @@ GATE_N, NC_N = 40, 10
 PASSING = {None: 20, "first-run": 22, "r002": 30, "r003": 18, "r004": 35, "r005": 36, "r006": 33, "r007": 40,
            "r008": 30, "r009": 40, "r010": 40, "r011": 40}  # gate items 0..k-1 pass
 CONFIRM_PASSING = {"r007": 34}  # on its fresh-seed confirm (seed 1000 + round) r007 does worse than when it was kept
+SWE_LOSS = {}  # round -> its loss on every held-out bug-fix step (default: 1 + 0.01 x round, never lower than the best)
+LANGS = ("cpp", "java", "go", "rust", "javascript", "typescript")
 
 
 class FakeServer:
@@ -318,6 +442,8 @@ class World:
         self.calls = []
         self.pause_train_once = {"loop-r003"}
         self.prompt_to_idx = {}
+        self.swe_calls = []  # (round, --no-base) for each val_loss.py run on the held-out bug-fix steps
+        self.fingerprint = "tc-1"  # the toolchains (anneal/polyglot.py toolchain_fingerprint)
 
     def model(self):
         lora = self.server.lora if self.server else None
@@ -395,11 +521,57 @@ class World:
         if script == "val_loss.py":
             rd = arg("--run-dir")
             os.makedirs(rd, exist_ok=True)
+            if arg("--val-file").endswith("swe_heldout.jsonl"):  # the held-out bug-fix steps (the loss rule)
+                rnd = [x for x in arg("--adapter").replace("\\", "/").split("/") if x.startswith("r") and x[1:].isdigit()][0]
+                self.swe_calls.append((rnd, "--no-base" in cmd))
+                keys = [r["messages"][0]["content"] for r in E.read_jsonl(arg("--val-file"))][:int(arg("--max-rows"))]
+                own = SWE_LOSS.get(rnd, 1.0 + 0.01 * int(rnd[1:]))  # by default each round is a little higher
+                per = [dict({"row": i, "key": k, "trained": 100 + i, "adapter_loss": own},
+                            **({} if "--no-base" in cmd else {"base_loss": 1.0})) for i, k in enumerate(keys)]
+                names = ["adapter"] if "--no-base" in cmd else ["base", "adapter"]
+                json.dump({"scored": names, "rows": len(per), "per_row": per,
+                           "all": {n: {"trained_token_loss": own if n == "adapter" else 1.0} for n in names}},
+                          open(os.path.join(rd, "summary.json"), "w"))
+                return 0
             json.dump({"all": {"rows": 4, "base": {"answer_token_loss": 1.0, "trained_token_loss": 1.0},
                                "adapter": {"answer_token_loss": 0.9, "trained_token_loss": 0.9}}},
                       open(os.path.join(rd, "summary.json"), "w"))
             return 0
         raise AssertionError(f"unexpected child {cmd}")
+
+
+_POLYGLOT_SAVED = {}
+
+
+def fake_polyglot(fingerprint, broken=()):
+    """Stand-ins for the sandbox parts of anneal/polyglot.py that Loop.toolchain_check uses: the fingerprint, and a
+    judge that gives each smoke program its expected verdict (or compile_error for the (lang, program) pairs in
+    broken). restore_polyglot puts the real ones back (tests/test_polyglot.py needs them)."""
+    from anneal import polyglot as P
+    from anneal import polyglot_smoke as S
+    if not _POLYGLOT_SAVED:
+        _POLYGLOT_SAVED.update(fingerprint=P.toolchain_fingerprint, executor=P.SandboxExecutor,
+                               windows=P.Toolchain.__dict__["windows"], judge=P.judge, check=E.polyglot_check)
+    want = {(lang, p["code"]): (p["name"], p["expect"]) for lang in LANGS for p in S.programs(lang)}
+
+    def judge(lang, code, cases, ex, tc, case_timeout_s=10.0, all_cases=False):
+        name, expect = want[(lang, code)]
+        stage = "compile_error" if (lang, name) in broken else expect
+        return P.Verdict(stage == "ok", stage, [], "fake", 0.0, 0.0)
+    P.toolchain_fingerprint = lambda root=None: fingerprint()
+    P.SandboxExecutor = lambda *a, **k: None
+    P.Toolchain.windows = classmethod(lambda cls, root=None: None)
+    P.judge = judge
+
+
+def restore_polyglot():
+    from anneal import polyglot as P
+    if _POLYGLOT_SAVED:
+        P.toolchain_fingerprint, P.SandboxExecutor, P.judge = (_POLYGLOT_SAVED[k] for k in ("fingerprint", "executor",
+                                                                                            "judge"))
+        P.Toolchain.windows = _POLYGLOT_SAVED["windows"]
+        E.polyglot_check = _POLYGLOT_SAVED["check"]
+        _POLYGLOT_SAVED.clear()
 
 
 def setup_world(tmp):
@@ -408,13 +580,19 @@ def setup_world(tmp):
     E.EVAL_DIR = ev
     E.GATE_PATH, E.NONCODING_PATH, E.DECONTAM_EXTRA = (os.path.join(ev, f) for f in
                                                         ("gate.jsonl", "noncoding_100.jsonl", "decontam_extra.jsonl"))
-    gate = [{"id": f"cc/valid/{i}", "kind": "cc", "prompt": f"gate prompt {i}", "cases": [["1\n", "1\n"]]} for i in range(20)]
-    gate += [{"id": f"oci/{i}", "kind": "oci", "prompt": f"gate prompt {i + 20}", "tests": "assert True"} for i in range(20)]
+    # the six-language gate: 20 write items (one language each, in turn) and 20 fix items (C++ and Java)
+    gate = [{"id": f"write/{LANGS[i % 6]}/cc/valid/{i}", "kind": "write", "lang": LANGS[i % 6],
+             "prompt": f"gate prompt {i}", "cases": [["1\n", "1\n"]]} for i in range(20)]
+    gate += [{"id": f"fix/{LANGS[i % 2]}/cc/test/{i}", "kind": "fix", "lang": LANGS[i % 2],
+              "prompt": f"gate prompt {i + 20}", "cases": [["1\n", "1\n"]]} for i in range(20)]
     nc = [{"id": f"mmlupro/{i}", "category": "law", "question": f"nc question {i}", "options": ["x", "y"], "answer": "A"}
           for i in range(NC_N)]
     E.write_jsonl(E.GATE_PATH, gate)
     E.write_jsonl(E.NONCODING_PATH, nc)
     E.write_jsonl(E.DECONTAM_EXTRA, [{"id": g["id"], "prompt": g["prompt"]} for g in gate])
+    E.write_jsonl(os.path.join(ev, "swe_heldout.jsonl"),  # held-out bug-fix steps (scripts/build_swe_heldout.py)
+                  [{"messages": [{"role": "user", "content": f"held-out issue {i}"},
+                                 {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(12)])
     for i, g in enumerate(gate):
         w.prompt_to_idx[g["prompt"]] = ("gate", i)
     for i, q in enumerate(nc):
@@ -485,6 +663,10 @@ def setup_world(tmp):
     ew.count_tokens = lambda url, text: len(text) // 4
     gt.run_io_tests = lambda code, cases, timeout: "PASS" in code
     gt.run_assert_tests = lambda code, tests, timeout: "PASS" in code
+    # the sandboxed six-language judge and its toolchain check, faked (restored by restore_polyglot)
+    E.polyglot_check = lambda *a, **k: (lambda item, content: ("PASS" in content,
+                                                                "ok" if "PASS" in content else "wrong_answer"))
+    fake_polyglot(lambda: w.fingerprint)
     ew.load_problems = lambda ds: {f"{ds}/{i}": {} for i in range(10)}
     ew.generate_tasks = lambda *a, **k: {"rows": [], "wall_s": 1, "generated_tokens": 0}
     ew.sanitize_file = lambda ds, raw, out=None: raw
@@ -508,6 +690,7 @@ def test_simulated_loop():
     try:
         _simulated_loop(tmp)
     finally:
+        restore_polyglot()
         shutil.rmtree(tmp, ignore_errors=True)
 
 
@@ -640,7 +823,99 @@ def _simulated_loop(tmp):
     assert len(trained) > 300 and "tachibana4_v4pro q5" not in trained and "tachibana4_v4pro q6" in trained
     used_keys = open(os.path.join(run_dir, "used_keys.txt")).read()
     assert L.row_key({"messages": [{"role": "user", "content": "tachibana4_v4pro q5"}, {"role": "assistant", "content": "a"}]}) not in used_keys
+    # the held-out bug-fix loss: the base scored once (round 2, while the base was the best), every later round only
+    # its adapter, each compared with the best of its time; no round here gets lower, so none is kept on it
+    assert w.swe_calls[0] == ("r002", False) and all(nb for _, nb in w.swe_calls[1:]), w.swe_calls
+    assert sorted({r for r, _ in w.swe_calls}) == [f"r{n:03d}" for n in range(2, 12)], w.swe_calls
+    assert state["base"]["swe_loss"]["field"] == "base_loss" and state["base"]["swe_loss"]["round"] == 0
+    assert state["best"]["swe_loss"]["round"] == 9 and state["best"]["swe_loss"]["field"] == "adapter_loss"
+    assert done(3, "sweloss")["vs_best"]["reference_round"] == 2 and done(2, "sweloss")["vs_best"]["reference_round"] == 0
+    assert done(10, "sweloss")["vs_best"]["reference_round"] == 9 and done(10, "sweloss")["vs_best"]["losses"] == 12
+    assert all(r.get("path") in (None, "gate") for r in state["rounds"]), state["rounds"]
+    rep4 = open(os.path.join(rd(4), "report.md")).read()
+    assert "Kept on the gate" in rep4 and "part: fix a wrong submission" in rep4 and "language: TypeScript" in rep4
+    assert "held-out bug-fix steps: loss" in rep4 and "Gate verdicts: ok 35, wrong_answer 5." in rep4, rep4
+    assert d4["parts"]["write"]["n"] == 20 and d4["parts"]["fix"]["n"] == 20 and len(d4["langs"]) == 6
+    assert "bug-fix loss vs best" in summary
+    assert state["toolchains"] == "tc-1" and state["gate_sha"] == L.file_sha(E.GATE_PATH)
     check_child_commands(w.calls)
+
+
+def test_loss_path_and_guards():
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(SWE_LOSS)
+    try:
+        _loss_path_and_guards(tmp)
+    finally:
+        PASSING.clear()
+        PASSING.update(saved[0])
+        SWE_LOSS.clear()
+        SWE_LOSS.update(saved[1])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _loss_path_and_guards(tmp):
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    six = E.read_jsonl(E.GATE_PATH)
+    # the retired Python gate never scores a round: the loop waits until build_gate.py has replaced it
+    E.write_jsonl(E.GATE_PATH, [{"id": "cc/valid/0", "kind": "cc", "prompt": "p", "cases": []}])
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "not the six-language gate" in status()["detail"], status()
+    assert not os.path.exists(rd(0))
+    E.write_jsonl(E.GATE_PATH, six)
+    # r002 scores the same as the base on the gate (20/40) but its loss on every held-out bug-fix step falls: kept on
+    # the loss path (rules.loss_rule)
+    PASSING["r002"], SWE_LOSS["r002"] = 20, 0.8
+    assert run_main(args) == 0, status()
+    state = json.load(open(os.path.join(run_dir, "state.json")))
+    r2 = [r for r in state["rounds"] if r["round"] == 2][0]
+    d2 = done(2, "decide")
+    assert r2["status"] == "kept" and r2["path"] == "loss" and d2["path"] == "loss" and d2["gate"]["diff"] == 0, d2
+    assert d2["loss"]["wins"] == 12 and d2["loss"]["losses"] == 0 and r2["swe_loss"]["candidate"] == 0.8
+    assert state["best"]["round"] == 2 and state["best"]["swe_loss"]["round"] == 2
+    assert "Kept on the bug-fix loss" in open(os.path.join(rd(2), "report.md")).read()
+    assert "kept (loss path)" in open(os.path.join(run_dir, "summary.md")).read()
+    # with the loss rule off, the same round would have been rejected
+    cfg = L.load_config(cpath)
+    off = E.decide(E.read_jsonl(state["base"]["gate_rows"]), E.read_jsonl(os.path.join(rd(2), "gate.seed1.jsonl")),
+                   E.read_jsonl(state["base"]["noncoding_rows"]), E.read_jsonl(os.path.join(rd(2), "noncoding.jsonl")),
+                   dict(cfg["rules"], loss_rule=False), loss=d2["loss"])
+    assert not off["keep"] and off["path"] is None
+    # the toolchains changed after rounds were judged: r003 trains, then waits before its gate pass
+    w.fingerprint = "tc-2"
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "toolchains changed" in status()["detail"], status()
+    assert os.path.exists(os.path.join(rd(3), "stages", "sweloss.done.json"))
+    assert not os.path.exists(os.path.join(rd(3), "stages", "evaluate.done.json"))
+    # back as they were: r003 resumes at its gate pass; compared with r002's own losses (adapter only)
+    w.fingerprint = "tc-1"
+    assert run_main(args) == 0, status()
+    assert done(3, "sweloss")["vs_best"]["reference_round"] == 2 and w.swe_calls == [("r002", False), ("r003", True)]
+    assert [r["status"] for r in json.load(open(os.path.join(run_dir, "state.json")))["rounds"]][-1] == "rejected"
+    # the gate changed after rounds were scored on it: the loop waits
+    E.write_jsonl(E.GATE_PATH, six[:-1])
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "gate.jsonl changed" in status()["detail"], status()
+    E.write_jsonl(E.GATE_PATH, six)
+    # a broken toolchain fails the gate pass instead of scoring every answer as a compile error
+    fake_polyglot(lambda: w.fingerprint, broken={("rust", "sum64")})
+    st = json.load(open(os.path.join(run_dir, "state.json")))
+    fake = types.SimpleNamespace(state=st, save=lambda: None)
+    try:
+        L.Loop.toolchain_check(fake, six)
+        raise AssertionError("a broken toolchain passed the smoke check")
+    except RuntimeError as exc:
+        assert "rust sum64: compile_error" in str(exc), exc
+    fake_polyglot(lambda: w.fingerprint)
+    assert L.Loop.toolchain_check(fake, six) == "tc-1"
+    assert L.Loop.toolchain_check(fake, [{"kind": "cc", "id": "cc/valid/0"}]) is None  # the old gate: nothing to build
 
 
 # ============================================================================================ command lines and sources
@@ -708,7 +983,11 @@ def check_child_commands(calls):
         if script == "public_source.py" and ns.out.endswith("openswe_v4flash"):
             assert ns.where == ["resolved=1", "language!=python"] and ns.report_field == ["language"], ns
             assert ns.turns == "each" and ns.require_think and ns.revision, ns
+            # repositories in bucket 0 of 20 never train: they are the held-out bug-fix steps
+            assert (ns.holdout_col, ns.holdout_mod, ns.holdout_side) == ("repo", 20, "pool"), ns
             live.add(ns.out)
+        if script == "val_loss.py" and ns.val_file.endswith("swe_heldout.jsonl"):
+            assert ns.seq_len == 8192 and ns.max_rows == 200, ns
         if script == "prepare_dataset.py" and ns.out.endswith("_nopy"):
             assert ns.drop_answer_lang == ["python"] and ns.require_think, ns
             live.add(ns.out)

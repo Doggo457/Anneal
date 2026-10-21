@@ -1,22 +1,29 @@
 """Held-out sets for the keep-if-better loop: the gate and the non-coding check, how they are built and scored.
 
 The gate decides whether a new adapter is kept. It is never trained on and never reported, so choosing adapters on
-it doesn't inflate the reported numbers (EvalPlus, LiveCodeBench):
-  cc   DeepMind CodeContests valid (117) + test (165): stdin/stdout problems. A problem stays only if one of its own
-       Python 3 reference solutions passes our sandboxed runner on the chosen cases (so a fail means the answer, not
-       the harness) and it has no input/output files. Prompt = description + the stdin/stdout instruction
-       generate_traces.py uses.
-  oci  300 OpenCodeInstruct prompts from a shard no training run reads (train-00025), average_test_score 1.0, assert
-       tests, reference solution passing in the sandbox, decontaminated against EvalPlus.
-Problems that overlap any training data used so far (13-gram or Jaccard > 0.8, prepare_dataset.Decontaminator) are
-left out, and every later training source is decontaminated against the gate (decontam_extra.jsonl).
+it doesn't inflate the reported numbers (EvalPlus, LiveCodeBench). Since 21 Oct 2026 it has no Python
+(scripts/build_gate.py, anneal/polyglot.py):
+  write  a DeepMind CodeContests valid/test stdin/stdout problem to solve in C++, Java, Go, Rust, JavaScript or
+         TypeScript (one language per problem, in rotation);
+  fix    a real wrong C++ or Java submission to the same problems to debug (passes the examples, fails another case).
+A problem stays only if one of its own C++ or Java reference solutions passes our sandboxed runner on the chosen
+cases, so a fail means the answer, not the harness. The earlier Python gate (kinds cc and oci: CodeContests with
+Python 3 references, and 300 OpenCodeInstruct assert problems) is archived in data/eval/archive/python-gate/; its
+kinds are still scored here for old results. Problems that overlap any training data used so far (13-gram or
+Jaccard > 0.8) are left out, and every later training source is decontaminated against the gate
+(decontam_extra.jsonl).
 
 The non-coding check: 100 MMLU-Pro test questions outside computer science (random.Random(42)), multiple choice
 with up to 10 options, scored by the letter after "The answer is".
 
 Scoring: one chat request per problem with thinking on (temperature 0.6, top_p 0.95, top_k 20, min_p 0, request seed
-100000 * seed + problem index), the answer's first Python block run in the sandbox. Results are JSONL, one row per
-problem and seed, resumable.
+100000 * seed + problem index). A write or fix answer's program (anneal/polyglot.py extract_code) is built and run in
+the sandbox; an old cc/oci answer's first Python block runs in the sandbox. Results are JSONL, one row per problem
+and seed (with the verdict: ok, no_code, compile_error, runtime_error, timeout, wrong_answer), resumable.
+
+The keep rule (decide) also has a second path (chosen 21 Oct 2026): a round whose gate score holds level
+(not lower) is kept when its loss on held-out bug-fix steps (data/eval/swe_heldout.jsonl, repositories no round
+trains on) falls, by a one-sided sign test over the steps.
 """
 
 import bisect
@@ -263,11 +270,19 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
                     raise RuntimeError(f"request for {it['id']} failed: {type(exc).__name__}: {exc}") from exc
                 time.sleep(5)
         n_reason = count_tokens(url, r["reasoning"]) if r["reasoning"] else 0
-        ok = bool(check(it, r["content"])) if r["finish_reason"] == "stop" and r["content"] else False
-        return {"id": it["id"], "seed": seed, "pass": ok, "finish_reason": r["finish_reason"],
+        verdict = None
+        if r["finish_reason"] == "stop" and r["content"]:
+            res = check(it, r["content"])
+            ok, verdict = (bool(res[0]), res[1]) if isinstance(res, tuple) else (bool(res), None)
+        else:
+            ok = False
+        row = {"id": it["id"], "seed": seed, "pass": ok, "finish_reason": r["finish_reason"],
                 "completion_tokens": r["completion_tokens"], "reasoning_tokens": n_reason,
                 "budget_hit": bool(budget) and n_reason >= 0.97 * budget, "seconds": r["seconds"],
                 "answer": (r["content"] or "")[:20000]}
+        if verdict is not None:
+            row["verdict"] = verdict
+        return row
 
     with ThreadPoolExecutor(max(1, concurrency)) as pool, open(out_path, "a", encoding="utf-8") as fh:
         pending = {}
@@ -307,13 +322,39 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
     return [r for r in read_jsonl(out_path) if r["seed"] == seed]
 
 
-def gate_check(run_io_tests, run_assert_tests, extract_code):
+def gate_check(run_io_tests, run_assert_tests, extract_code, polyglot_judge=None):
+    """check(item, content) for the gate's items: write and fix items through polyglot_judge(item, content) ->
+    (ok, verdict) (polyglot_check), the old Python kinds through the generate_traces.py runners."""
     def check(item, content):
+        if item["kind"] in ("write", "fix"):
+            if polyglot_judge is None:
+                raise RuntimeError(f"{item['id']}: a six-language gate item needs a polyglot judge")
+            return polyglot_judge(item, content)
         code = extract_code(content)
         if item["kind"] == "cc":
             return run_io_tests(code, item["cases"], IO_CASE_TIMEOUT_S)
         return run_assert_tests(code, item["tests"], ASSERT_TIMEOUT_S)
     return check
+
+
+def polyglot_check(make_executor=None, make_toolchain=None, max_parallel=2):
+    """(item, content) -> (ok, verdict) for write and fix items: the answer's program in the item's language, built
+    and run in the sandbox (anneal/polyglot.py). The executor and toolchain are made on first use. At most
+    max_parallel programs build or run at once: judging takes seconds against minutes of generation, and it keeps a
+    few JVMs or compilers from stacking up in RAM next to the model server."""
+    from anneal import polyglot as P
+    state, lock, slots = {}, threading.Lock(), threading.BoundedSemaphore(max(1, max_parallel))
+
+    def judge(item, content):
+        with lock:
+            if not state:
+                state["ex"] = (make_executor or P.SandboxExecutor)()
+                state["tc"] = (make_toolchain or P.Toolchain.windows)()
+        code = P.extract_code(content, item["lang"])
+        with slots:
+            v = P.judge(item["lang"], code, item["cases"], state["ex"], state["tc"], case_timeout_s=IO_CASE_TIMEOUT_S)
+        return v.ok, v.stage
+    return judge
 
 
 def mc_check(item, content):
@@ -338,13 +379,15 @@ def per_problem(rows):
     return {k: sum(v) / len(v) for k, v in acc.items()}
 
 
-def compare(best_rows, cand_rows, kinds=None):
+def compare(best_rows, cand_rows, kinds=None, langs=None):
     """Paired comparison on the problems both have. With one seed a problem is a win, a loss or a tie; with several,
-    the per-problem mean decides the sign."""
+    the per-problem mean decides the sign. kinds / langs keep ids whose first / second part (write/cpp/...) match."""
     b, c = per_problem(best_rows), per_problem(cand_rows)
     ids = sorted(set(b) & set(c))
     if kinds is not None:
         ids = [i for i in ids if i.split("/")[0] in kinds]
+    if langs is not None:
+        ids = [i for i in ids if i.split("/")[0] in ("write", "fix") and i.split("/")[1] in langs]
     wins = sum(1 for i in ids if c[i] > b[i])
     losses = sum(1 for i in ids if c[i] < b[i])
     n = len(ids)
@@ -358,36 +401,85 @@ def mc_accuracy(rows):
     return sum(1 for r in rows if r["pass"]) / len(rows) if rows else None
 
 
-def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True):
-    """The keep rule. Keep the candidate only if all hold:
-      - its gate score (CodeContests + OpenCodeInstruct, paired per problem against the best so far) is higher, and
-        a one-sided exact sign test on the problems that changed gives p <= alpha;
-      - the CodeContests part alone is not worse than the best by more than cc_tolerance, and not significantly
-        worse (one-sided sign test on its losses, p <= alpha);
+def compare_loss(best, cand, weights=None):
+    """Paired comparison of per-row losses on the same held-out rows ({row: loss}; lower is better), weighted by
+    weights ({row: trained tokens}) for the means. A row is a win if the candidate's loss is lower. One-sided sign
+    test: is the candidate lower on more rows than chance?"""
+    rows = sorted(set(best) & set(cand))
+    w = {r: (weights or {}).get(r, 1) for r in rows}
+    tw = sum(w.values())
+    b = sum(best[r] * w[r] for r in rows) / tw if tw else None
+    c = sum(cand[r] * w[r] for r in rows) / tw if tw else None
+    wins = sum(1 for r in rows if cand[r] < best[r])
+    losses = sum(1 for r in rows if cand[r] > best[r])
+    return {"n": len(rows), "best": b, "candidate": c, "diff": (c - b) if rows else None,
+            "rel_diff": ((c - b) / b) if rows and b else None, "wins": wins, "losses": losses,
+            "p_one_sided": sign_test_greater(wins, losses)}
+
+
+PART_NAMES = {"write": "write part", "fix": "fix part", "cc": "CodeContests part"}
+
+
+def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=None):
+    """The keep rule. Keep the candidate only if
+      EITHER its gate score (paired per problem against the best so far) is higher and a one-sided exact sign test on
+        the problems that changed gives p <= alpha,
+      OR (rules loss_rule, 21 Oct 2026) its gate score is not lower AND its loss on the held-out bug-fix steps
+        (loss: compare_loss against the best) is lower on more steps than chance, p <= loss_alpha;
+    and in both cases all hold:
+      - each guarded part (write, fix; cc in the old Python gate) is not worse than the best by more than
+        part_tolerance (cc_tolerance in older configs), and not significantly worse (one-sided sign test on its
+        losses, p <= alpha);
       - the non-coding check (per question, mean over seeds, paired against the BASE model so drift can't build
         up over rounds) is not worse by more than nc_tolerance, and not significantly worse;
       - the sample generations thought, answered and stopped cleanly.
-    rules: alpha, cc_tolerance, nc_tolerance. Returns a dict with keep, the reasons for a reject, and every number."""
+    Returns a dict with keep, path ("gate" / "loss" / None), the reasons for a reject, and every number: per part
+    and, for write and fix items, per language (for the record)."""
     allp = compare(best_gate, cand_gate)
-    cc = compare(best_gate, cand_gate, kinds={"cc"})
-    oci = compare(best_gate, cand_gate, kinds={"oci"})
+    ids = set(per_problem(best_gate)) & set(per_problem(cand_gate))
+    kinds = sorted({i.split("/")[0] for i in ids})
+    parts = {k: compare(best_gate, cand_gate, kinds={k}) for k in kinds}
+    langs = sorted({i.split("/")[1] for i in ids if i.split("/")[0] in ("write", "fix")})
+    by_lang = {lg: compare(best_gate, cand_gate, langs={lg}) for lg in langs}
     nc = compare(base_nc, cand_nc)
     alpha = rules["alpha"]
+    tol = rules.get("part_tolerance", rules.get("cc_tolerance", 0.05))
     reasons = []
     if not sanity_ok:
         reasons.append("sample generations did not think, answer and stop cleanly")
-    if allp["n"] == 0 or allp["diff"] is None or allp["diff"] <= 0:
-        reasons.append(f"gate not higher (diff {allp['diff']})")
-    elif allp["p_one_sided"] > alpha:
-        reasons.append(f"gate gain not clear: one-sided sign test p {allp['p_one_sided']:.4f} > {alpha}")
-    for name, c, tol in (("CodeContests part", cc, rules["cc_tolerance"]), ("non-coding check", nc, rules["nc_tolerance"])):
+    gate_gain = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] > 0 and allp["p_one_sided"] <= alpha
+    gate_level = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] >= 0
+    loss_alpha = rules.get("loss_alpha", alpha)
+    loss_fall = bool(loss and loss.get("n")) and loss["diff"] is not None and loss["diff"] < 0 \
+        and loss["p_one_sided"] <= loss_alpha
+    path = "gate" if gate_gain else ("loss" if rules.get("loss_rule") and gate_level and loss_fall else None)
+    if path is None:
+        if allp["n"] == 0 or allp["diff"] is None or allp["diff"] <= 0:
+            reasons.append(f"gate not higher (diff {allp['diff']})")
+        else:
+            reasons.append(f"gate gain not clear: one-sided sign test p {allp['p_one_sided']:.4f} > {alpha}")
+        if rules.get("loss_rule"):
+            if not gate_level:
+                reasons.append("bug-fix loss path closed: the gate score is lower")
+            elif not (loss and loss.get("n")):
+                reasons.append("bug-fix loss path: no held-out loss for this round")
+            else:
+                reasons.append(f"bug-fix loss not clearly lower: {loss['best']:.4f} -> {loss['candidate']:.4f}, "
+                               f"{loss['wins']} steps lower / {loss['losses']} higher, p {loss['p_one_sided']:.4f} "
+                               f"(needs <= {loss_alpha})")
+    guarded = [(PART_NAMES[k], parts[k], tol) for k in kinds if k in PART_NAMES]
+    for name, c, t in guarded + [("non-coding check", nc, rules["nc_tolerance"])]:
         if not c["n"]:
             continue
         p_worse = sign_test_greater(c["losses"], c["wins"])
         c["p_worse"] = p_worse
-        if c["diff"] < -tol:
-            reasons.append(f"{name} dropped {c['diff']:+.4f} (tolerance {tol})")
+        if c["diff"] < -t:
+            reasons.append(f"{name} dropped {c['diff']:+.4f} (tolerance {t})")
         elif p_worse <= alpha:
             reasons.append(f"{name} significantly worse: {c['losses']} losses vs {c['wins']} wins, p {p_worse:.4f}")
-    return {"keep": not reasons, "reasons": reasons, "gate": allp, "gate_cc": cc, "gate_oci": oci,
-            "noncoding": nc, "rules": dict(rules)}
+    out = {"keep": not reasons, "path": path if not reasons else None, "reasons": reasons, "gate": allp,
+           "parts": parts, "langs": by_lang, "noncoding": nc, "loss": loss, "rules": dict(rules)}
+    for k in ("cc", "oci"):  # the old Python gate's report fields
+        if k in parts:
+            out[f"gate_{k}"] = parts[k]
+    return out

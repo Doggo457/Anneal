@@ -3,7 +3,8 @@
 Run hourly by a user-level scheduled task and once at sign-in from the Startup folder (setup/loop-watchdog.md). Each run
 asks the portal (http://127.0.0.1:8080/api/training) what state the runs are in and does at most one thing:
   - first-run ended by a crash or reboot ("ended" / "failed")    -> resume it through the portal (at most 3 times a day)
-  - first-run finished, no "loop" run yet, held-out sets built  -> start scripts/loop.py as the Training page run "loop"
+  - first-run finished, no "loop" run yet, six-language gate built -> start scripts/loop.py as the Training page run
+                                                                   "loop" (not on the retired Python gate)
   - loop ended by a crash or reboot                             -> resume it
   - loop failed                                                 -> resume it, at most 3 times in 24 hours
   - loop waiting (no unused rows / low disk / old scripts)      -> resume it once experiments/loop.yaml has changed or
@@ -121,6 +122,17 @@ def install_staged(root, first_dir, dry_run=False):
     return done
 
 
+def gate_ready(path=GATE):
+    """The six-language gate is built (scripts/build_gate.py): its first item is a write or fix item. The retired Python
+    gate (cc and oci items) does not count, so the loop never starts on it."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            first = json.loads(fh.readline() or "{}")
+    except (OSError, ValueError):
+        return False
+    return first.get("kind") in ("write", "fix")
+
+
 def decide(training, now, st, first_status, loop_status, gate_exists, config_mtime, scripts_installed=False):
     """-> (action, tag, reason) with action in None / "resume" / "start". Pure, so it can be tested."""
     if training.get("active"):
@@ -142,7 +154,8 @@ def decide(training, now, st, first_status, loop_status, gate_exists, config_mti
         return None, None, "first run not finished"
     if lp is None:
         if not gate_exists:
-            return None, "loop", "first run finished but the held-out sets are not built (scripts/build_evalsets.py)"
+            return None, "loop", ("first run finished but the six-language gate is not built "
+                                  "(scripts/setup_toolchains.py, then scripts/build_gate.py)")
         return "start", "loop", "first run finished: starting the improvement loop"
     state = lp.get("state")
     if state in BUSY or state in ("paused", "stopped"):
@@ -176,7 +189,7 @@ def check(dry_run=False):
     now = time.time()
     st = load_state()
     action, tag, reason = decide(training, now, st, read_json(os.path.join(RESULTS, "first-run", "status.json")),
-                                 read_json(os.path.join(RESULTS, "loop", "status.json")), os.path.exists(GATE),
+                                 read_json(os.path.join(RESULTS, "loop", "status.json")), gate_ready(),
                                  os.path.getmtime(LOOP_CONFIG) if os.path.exists(LOOP_CONFIG) else None,
                                  bool(installed))
     if action is None:
