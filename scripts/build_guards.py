@@ -2,6 +2,7 @@
 scoring or training.
 
   python scripts/build_guards.py --bfcl
+  python scripts/build_guards.py --smoke    (only while the loop is paused: it needs the GPU)
 
 --bfcl  data/eval/bfcl_java_js.jsonl: BFCL V4's 100 simple_java and 50 simple_javascript items as tool-call requests
         (anneal/bfcl.py), from the pinned bfcl-eval 2026.3.23 wheel (downloaded to data/raw/bfcl and sha256-checked;
@@ -11,6 +12,10 @@ scoring or training.
         loop's prepared pools (data/processed/loop/*/train.jsonl) have a first user message that overlaps a BFCL
         question by the decontamination rule (anneal/evalsets.py OverlapIndex). The pools were built before this
         check, so BFCL is not among the sets they were decontaminated against.
+--smoke Only while the loop is paused (nothing on port 18090, the GPU free): starts the scoring server the loop uses
+        (the base model, the gate's flags and loop.yaml's thinking budget), asks the first Java and the first
+        JavaScript item exactly as a pass does, prints each answer's verdict, calls and tokens, and stops the server.
+        Exit code 0 when both answers made a tool call (right or wrong), 1 otherwise.
 """
 
 import argparse
@@ -21,6 +26,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
 from anneal import bfcl  # noqa: E402
 from anneal import evalsets as E  # noqa: E402
 
@@ -118,14 +124,51 @@ def build_bfcl():
         json.dump({k: dict(v, overlapping=v["overlapping"][:200]) for k, v in rep.items()}, fh, indent=1)
 
 
+def smoke_bfcl(port=18090):
+    """Two real requests on the loop's scoring server settings (see --smoke). Returns the exit code."""
+    import yaml
+    import evalplus_win as ew
+    import first_run as fr
+    from anneal import llama
+    try:
+        llama.http(f"http://127.0.0.1:{port}/health", timeout=5)
+        print(f"something answers on port {port} (the loop's scoring server?): pause the loop first")
+        return 2
+    except Exception:  # noqa: BLE001 - nothing there, as wanted
+        pass
+    cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
+    g, seed = cfg["gate"], int(cfg["guards"]["bfcl"].get("seed", 1))
+    items = [json.loads(line) for line in open(BFCL_OUT, encoding="utf-8") if line.strip()]
+    picks = [next(i for i, it in enumerate(items) if it["language"] == lg) for lg in ("java", "javascript")]
+    flags = llama.scoring_flags(extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS)
+    bfcl.prepare()
+    called = 0
+    log = os.path.join(ROOT, "logs", "bfcl_smoke_server.log")
+    with llama.Server(flags, log, port=port) as srv:
+        print(f"server up in {srv.load_s} s: {srv.describe()}")
+        for i in picks:
+            r = bfcl.request(srv.url, items[i], 100000 * seed + i, g["max_tokens"], ew.SAMPLING)
+            ok, verdict = bfcl.judge(items[i], r)
+            called += bool(r["tool_calls"])
+            print(json.dumps({"id": items[i]["id"], "finish_reason": r["finish_reason"], "pass": ok, "verdict": verdict,
+                              "tool_calls": r["tool_calls"], "completion_tokens": r["completion_tokens"],
+                              "reasoning_chars": len(r["reasoning"]), "seconds": r["seconds"],
+                              "content_head": r["content"][:300]}, ensure_ascii=False))
+    print(f"{called} of {len(picks)} answers made a tool call")
+    return 0 if called == len(picks) else 1
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--bfcl", action="store_true", help="build data/eval/bfcl_java_js.jsonl")
+    ap.add_argument("--smoke", action="store_true", help="two BFCL requests on the scoring server (loop paused)")
     args = ap.parse_args()
-    if not args.bfcl:
-        ap.error("name a check to build (--bfcl)")
+    if not (args.bfcl or args.smoke):
+        ap.error("name a check to build (--bfcl) or --smoke")
     if args.bfcl:
         build_bfcl()
+    if args.smoke:
+        return smoke_bfcl()
     return 0
 
 
