@@ -134,6 +134,31 @@ the public leaderboard, which uses other quantisation, sampling and limits, and 
 The loop's pools were prepared before this check, so they were not decontaminated against it. scripts/build_guards.py
 reports how many pool rows have a first user message that overlaps a BFCL question by the rule below.
 
+## CWEval Go and JavaScript secure coding (no-worse check)
+
+Built by scripts/build_guards.py --cweval from CWEval (`Co1lin/CWEval` @ `e9a2a124c8c53679b6d8d27adfd2f6c40e7576d7`,
+Apache-2.0; Peng et al., "CWEval: Outcome-driven Evaluation on Functionality and Security of LLM Code Generation",
+LLM4Code 2025). Every file it uses (CWEval's own files, the Go modules, npm packages, the recheck binary and the
+test-side Python wheels) is pinned by sha256 in anneal/cweval_lock.json and fetched once; nothing is fetched while
+judging. The rows file's sha256 is `d628c154b6d45f84d07ac49dde4b7c966a55c3649b27446f5d7c92277fa1aa05`.
+
+| Language | Tasks | Left out |
+|---|---|---|
+| Go | 16 | 078_0 (runs `ls`), 732_2 (POSIX permission bits), 943_0 (sqlite needs cgo) |
+| JavaScript | 18 | 078_0, 732_2, 943_0 (native sqlite addon), 326_0 (reference too slow for the 3 s limit), 502_0 (its security test can't fail with the js-yaml CWEval installs) |
+
+Each task asks for one function with CWEval's own "direct" prompt. The answer's first code block (or the whole answer)
+gets the task's entry point appended, as CWEval does; Go code goes through goimports. The answer passes only if every
+functionality test and every security test of the task passes, each within 3 s (CWEval's func-sec@1). An answer that
+didn't finish fails. Go is built in the build container and every program the tests start runs in the code sandbox;
+CWEval's pinned pytest files run in a separate Python with only the pinned test libraries, and may start only the
+task's own program (or recheck, for the ReDoS task). Before it is used, the check passes its self-test on the
+training PC: every reference passes and every insecure solution fails security.
+
+Answers come from the six-language test's server settings with thinking on, one per task (seed 1), like BFCL. With
+34 tasks it only catches large drops: a round is blocked when it is more than 12 points (about 4 tasks) below the base,
+or significantly below by a sign test.
+
 ## Overlap rules
 
 Exact and near copies (anneal/evalsets.py OverlapIndex): a text overlaps a problem if it holds at least 30% of the

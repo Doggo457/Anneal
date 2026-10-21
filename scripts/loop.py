@@ -106,8 +106,14 @@ from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 PY = sys.executable
 CONFIG = os.path.join(ROOT, "experiments", "loop.yaml")
 POOLS = os.path.join(ROOT, "data", "processed", "loop")
-ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate", "decide", "milestone",
-                "bfcl", "confirm", "finish"]
+# No-worse checks after EvalPlus (loop.yaml guards, 21 Oct 2026), in the order they run. Each module gives
+# HARNESS, prepare(), request(url, item, seed, max_tokens, sampling), judge(item, response) -> (passed, verdict),
+# language(item), and optionally probe(first rows) -> error or None. Each check is a stage of its own.
+GUARDS = {
+    "bfcl": {"label": "BFCL Java and JavaScript tool calls", "module": bfcl, "build": "scripts/build_guards.py --bfcl"},
+}
+ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate", "decide",
+                "milestone"] + list(GUARDS) + ["confirm", "finish"]
 # Held-out loss sets (sweloss, termloss): the loop.yaml key, the stage, the default file, what a report calls it.
 HELDOUT = {"swe": {"key": "swe_loss", "stage": "sweloss", "file": os.path.join("data", "eval", "swe_heldout.jsonl"),
                    "label": "held-out bug-fix steps", "build": "scripts/build_swe_heldout.py"},
@@ -117,12 +123,7 @@ HELDOUT = {"swe": {"key": "swe_loss", "stage": "sweloss", "file": os.path.join("
 LANG_NAMES = {"cpp": "C++", "java": "Java", "go": "Go", "rust": "Rust", "javascript": "JavaScript",
               "typescript": "TypeScript"}
 GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); the retired Python gate had cc and oci
-REF_STAGES = ["evaluate", "decide", "bfcl", "finish"]
-# No-worse checks after EvalPlus (loop.yaml guards, 21 Oct 2026), in the order they run. Each module gives
-# HARNESS, prepare(), request(url, item, seed, max_tokens, sampling), judge(item, response) -> (passed, verdict),
-# language(item), and optionally probe(first rows) -> error or None.
-GUARDS = {"bfcl": {"label": "BFCL Java and JavaScript tool calls", "module": bfcl,
-                   "build": "scripts/build_guards.py --bfcl"}}
+REF_STAGES = ["evaluate", "decide"] + list(GUARDS) + ["finish"]
 GUARD_PROBE_ROWS = 8
 MAX_ROUND_FAILURES = 3
 # The gate server's slots (answers decoded side by side, loop.yaml gate.slots; 21 Oct 2026). Rows scored before the

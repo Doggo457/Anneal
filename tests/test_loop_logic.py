@@ -518,6 +518,8 @@ EVALPLUS_WORSE = set()  # rounds whose EvalPlus answers fail every plus test (th
 BFCL_N = 12  # fake BFCL items: 8 Java, 4 JavaScript
 BFCL_PASSING = {}  # model -> BFCL items 0..k-1 pass (default 9 for every model: no change)
 BFCL_NO_CALLS = set()  # models whose answers never make a tool call (the probe must stop the pass)
+CWEVAL_PASSING = {}  # model -> CWEval items 0..k-1 pass (default 9 for every model: no change)
+CWEVAL_EMPTY = set()  # models whose answers are all reasoning, no text (the probe must stop the pass)
 LANGS = ("cpp", "java", "go", "rust", "javascript", "typescript")
 
 
@@ -548,6 +550,7 @@ class World:
         self.term_calls = []  # the same for the held-out terminal steps
         self.fingerprint = "tc-1"  # the toolchains (anneal/polyglot.py toolchain_fingerprint)
         self.bfcl_requests = []  # (model, item id, request seed) for each BFCL request
+        self.cweval_requests = []  # the same for CWEval
         self.served = []  # (stage, flags) for each server the loop started
 
     def model(self):
@@ -586,6 +589,15 @@ class World:
                                                   "arguments": json.dumps({"x": "PASS" if ok else "FAIL"})}}]
         return {"content": "", "reasoning": "r", "tool_calls": call, "finish_reason": "tool_calls",
                 "completion_tokens": 60, "seconds": 0.0, "answer": json.dumps(call)}
+
+    def cweval_request(self, url, item, seed, max_tokens, sampling):
+        m = self.model()
+        self.cweval_requests.append((m, item["id"], seed))
+        if m in CWEVAL_EMPTY:
+            return {"content": "", "reasoning": "r", "finish_reason": "stop", "completion_tokens": 900, "seconds": 0.0}
+        ok = int(item["id"].split("_")[1]) < CWEVAL_PASSING.get(m, 9)
+        return {"content": f"Done.\n\n```{item['lang']}\n// {'PASS' if ok else 'FAIL'}\n```\n", "reasoning": "r",
+                "finish_reason": "stop", "completion_tokens": 70, "seconds": 0.0}
 
     def run_child(self, ctl, cmd, log_name, stop_dir=None, monitor=None, interval=30):
         script = os.path.basename(cmd[2])
@@ -758,6 +770,7 @@ def setup_world(tmp):
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
     cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
     cfg["score_first_run"] = True  # the record round is exercised here; off in loop.yaml since 21 Oct
+    cfg["guards"] = {"bfcl": cfg["guards"]["bfcl"]}  # the later checks are tested on their own (test_cweval_guard)
     cfg["gate"]["early_reject"] = None  # whole passes here; test_early_reject covers the early look
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
     cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
@@ -1327,6 +1340,230 @@ def test_bfcl_harness():
                                             {"controller": "mapController", "parent": "mapArea"}))[0] is False
     assert B.judge(by["simple_java_0"], {"finish_reason": "stop", "content": B.TOOL_TAG + "{}", "tool_calls": []}) == \
         (False, "no_tool_call:unparsed")
+
+
+def cweval_switched_on():
+    """CWEval as a loop check, as its 3-line switch-on makes it (anneal/cweval.py docstring): its GUARDS entry after
+    BFCL, so the stage lists get it too (already there once it is switched on). Returns what to restore."""
+    from anneal import cweval as C
+    saved = (dict(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES), C.prepare, C.request, C.judge_program)
+    L.GUARDS.setdefault("cweval", {"label": "CWEval Go and JavaScript", "module": C,
+                                   "build": "scripts/build_guards.py --cweval"})
+    i = L.ROUND_STAGES.index("milestone") + 1
+    L.ROUND_STAGES[:] = L.ROUND_STAGES[:i] + list(L.GUARDS) + ["confirm", "finish"]
+    L.REF_STAGES[:] = ["evaluate", "decide"] + list(L.GUARDS) + ["finish"]
+    return saved
+
+
+def cweval_switched_off(saved):
+    from anneal import cweval as C
+    L.GUARDS.clear()
+    L.GUARDS.update(saved[0])
+    L.ROUND_STAGES[:], L.REF_STAGES[:] = saved[1], saved[2]
+    C.prepare, C.request, C.judge_program = saved[3:]
+
+
+def test_cweval_guard():
+    """CWEval (anneal/cweval.py), switched on as a second no-worse check after BFCL: the base is scored on it in round
+    0, a round level on it is kept, a round worse on it alone is rejected before the confirm pass, and a pass whose
+    first answers have no text stops. The model and the judging of a program are faked; judge() itself is the real
+    one (finish reason, empty answers, CWEval's program from the answer). Passes before and after the switch-on."""
+    stages = (list(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES))
+    assert L.ROUND_STAGES[L.ROUND_STAGES.index("milestone") + 1:] == list(L.GUARDS) + ["confirm", "finish"]
+    assert L.REF_STAGES == ["evaluate", "decide"] + list(L.GUARDS) + ["finish"] and list(L.GUARDS)[0] == "bfcl"
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(CWEVAL_PASSING), set(CWEVAL_EMPTY)
+    before = world_patches()
+    on = cweval_switched_on()
+    try:
+        _cweval_guard(tmp)
+    finally:
+        cweval_switched_off(on)
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        CWEVAL_PASSING.clear()
+        CWEVAL_PASSING.update(saved[1])
+        CWEVAL_EMPTY.clear()
+        CWEVAL_EMPTY.update(saved[2])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+    assert (list(L.GUARDS), L.ROUND_STAGES, L.REF_STAGES) == stages
+
+
+def _cweval_guard(tmp):
+    import yaml
+    from anneal import cweval as C
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    judged = []
+
+    def judge_program(item, code, fix_imports=False):
+        judged.append((item["id"], fix_imports))
+        assert code.endswith(f"\n\n{item['entry_line']}\n{item['entry_code']}\n") and "Done." not in code, code
+        return ("PASS" in code, "ok" if "PASS" in code else "insecure", {})
+    C.prepare, C.request, C.judge_program = (lambda: None), w.cweval_request, judge_program
+    # 6 Go and 6 JavaScript items, as scripts/build_guards.py --cweval writes them
+    E.write_jsonl(os.path.join(E.EVAL_DIR, "cweval_go_js.jsonl"),
+                  [{"id": f"cwe_{i}_0_{lg}", "language": C.LANGS[lg], "lang": lg, "cwe": f"CWE-{i}",
+                    "messages": [{"role": "user", "content": f"write {lg} {i}"}], "entry_line": "// BEGIN ENTRYPOINT",
+                    "entry_code": "main()", "test": "", "reference": "", "unsafe": ""}
+                   for lg, ids in (("go", range(6)), ("js", range(6, 12))) for i in ids])
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    cfg["guards"]["cweval"] = {"file": "data/eval/cweval_go_js.jsonl", "seed": 1, "tolerance": 0.12}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    # round 0 scores the base on BFCL and CWEval after its gate pass; r002 is level on both: kept
+    PASSING["r002"] = 30
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert rec(0)["guards"]["cweval"] == {"pass": 9, "n": 12, "by_language": {"go": {"pass": 6, "n": 6},
+                                                                             "javascript": {"pass": 3, "n": 6}}}
+    assert state()["base_guards"]["cweval"]["scored_in_round"] == 0
+    assert state()["base_guards"]["cweval"]["fingerprint"]["harness"] == C.HARNESS
+    g2 = done(2, "cweval")
+    assert rec(2)["status"] == "kept" and g2["guard"]["ok"] and g2["guard"]["n"] == 12 and rec(2)["guards"]["cweval"]
+    assert g2["candidate"]["verdicts"] == {"insecure": 3, "ok": 9}
+    assert [m for m, _, _ in w.cweval_requests] == [None] * 12 + ["r002"] * 12
+    assert {s // 100000 for _, _, s in w.cweval_requests} == {1} and len(judged) == 24 and all(f for _, f in judged)
+    order = [n for n, _ in w.served]
+    assert order[0:3] == ["r000-evaluate", "r000-bfcl", "r000-cweval"], order
+    assert order.index("r002-bfcl") < order.index("r002-cweval") < order.index("r002-confirm"), order
+    rep2 = open(os.path.join(rd(2), "report.md")).read()
+    assert "CWEval Go and JavaScript: no-worse check" in rep2 and "| Go | 6 |" in rep2, rep2
+    # r003 keeps on the gate, passes EvalPlus and BFCL, but loses 5 CWEval items (0.42 > 0.12): rejected, no confirm
+    PASSING["r003"], CWEVAL_PASSING["r003"] = 35, 4
+    assert run_main(args) == 0
+    g3 = done(3, "cweval")["guard"]
+    assert done(3, "bfcl")["guard"]["ok"] and not g3["ok"] and g3["losses"] == 5 and g3["wins"] == 0, g3
+    assert rec(3)["status"] == "rejected" and any(x.startswith("CWEval Go and JavaScript worse") for x in
+                                                  rec(3)["reasons"]), rec(3)
+    assert not os.path.exists(os.path.join(rd(3), "stages", "confirm.done.json")) and state()["best"]["round"] == 2
+    assert [m for m, _, _ in w.cweval_requests].count(None) == 12  # the base was not scored again
+    # r004's answers have no text outside the reasoning: the first 8 stop the pass, the round fails
+    PASSING["r004"] = 40
+    CWEVAL_EMPTY.add("r004")
+    assert run_main(args) == 1
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "failed" and "had any text outside the reasoning" in st["error"], st
+    assert rec(4)["failures"] == 1 and len(E.read_jsonl(os.path.join(rd(4), "guards", "cweval.seed1.jsonl"))) == 8
+
+
+def test_cweval_harness():
+    """anneal/cweval.py without the pinned files: CWEval's prompt, code extraction and program, the request body (the
+    gate's), judge() on answers that never reach a program, the probe, the test-process shim's command mapping and
+    sh quoting, and the lock. With sandbox/cweval built (scripts/build_guards.py --cweval --local) and go and node on
+    PATH, a Go and a JavaScript task's reference and insecure solutions and one answer are judged for real on Linux
+    (LocalExecutor: no isolation, tests only); otherwise that part is skipped."""
+    import urllib.request
+    from anneal import cweval as C
+    lk = C.lock()
+    tasks = {f"cwe_{t}_{lg}" for lg, ts in C.TASKS.items() for t in ts}
+    assert len(tasks) == 34 and len(C.EXCLUDED) == 8 and not tasks & set(C.EXCLUDED)
+    assert {f.split("/")[-1].rsplit("_", 1)[0] for f in lk["source"]["files"] if f.startswith("benchmark/core/")} \
+        == tasks
+    assert {w["name"] for w in C.wheels_here(lk, "win_amd64", "cp312", "win32")} == {w["name"] for w in lk["wheels"]}
+    assert "colorama" not in {w["name"] for w in C.wheels_here(lk, "linux_x86_64", "cp313", "linux")}
+    task = ("package main\n\nimport \"fmt\"\n\n// BEGIN PROMPT\n// old\n// BEGIN PROMPT\n// Add a and b.\n"
+            "func add(a, b int) int {\n\t// BEGIN SOLUTION\n\treturn a + b\n}\n\n// BEGIN ENTRYPOINT\n"
+            "func main() {\n\tfmt.Println(add(1, 2))\n}\n")
+    assert C.code_prompt(task) == "// Add a and b.\nfunc add(a, b int) int {"
+    p = C.prompt("go", task)
+    assert "```go\n// Add a and b.\nfunc add(a, b int) int {\n```" in p and "implement the function in Golang. " in p
+    assert p.startswith("You are a helpful coding assistant") and p.endswith("in a single code block.\n")
+    line, code = C.entrypoint(task)
+    item = {"id": "cwe_1_0_go", "lang": "go", "language": "go", "messages": [{"role": "user", "content": p}],
+            "entry_line": line, "entry_code": code}
+    entry = "\n\n// BEGIN ENTRYPOINT\nfunc main() {\n\tfmt.Println(add(1, 2))\n}\n"
+    assert C.program(item, "Sure:\n```go\nA\n```\nthen\n```go\nB\n```") == "A" + entry
+    assert C.program(item, "no fence at all") == "no fence at all" + entry
+    assert C.get_code_from("x\n```\n```") == "" and C.get_code_from("```js\nq\n```", only_first=True) == "q"
+    assert C.judge(item, {"finish_reason": "length", "content": "```go\nA\n```"}) == (False, "finish_length")
+    assert C.judge(item, {"finish_reason": "stop", "content": " \n"}) == (False, "empty")
+    assert C.probe([{"verdict": "empty"}] * 8) and C.probe([{"verdict": "empty"}] * 7 + [{"verdict": "ok"}]) is None
+    assert C.language(item) == "go" and C.sh_dquote(r'/a\"b\\c\$d\e\nf/') == '/a"b\\c$d\\e\\nf/'
+    assert C.text(b"a\r\nb\rc\n") == "a\nb\nc\n"
+    # the request body is the gate's (evalplus_win.chat_request) with the task's messages
+    sent = []
+
+    class Resp:
+        def __init__(self, req, timeout=None):
+            sent.append(json.loads(req.data))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "c", "reasoning_content": "r"},
+                                            "finish_reason": "stop"}], "usage": {"completion_tokens": 5}}).encode()
+    real = urllib.request.urlopen
+    urllib.request.urlopen = Resp
+    try:
+        r = C.request("http://x", item, 7, 99, ew.SAMPLING)
+        ew.chat_request("http://x", p, 7, 99, ew.SAMPLING)
+    finally:
+        urllib.request.urlopen = real
+    assert sent[0] == sent[1] and r["content"] == "c" and r["finish_reason"] == "stop" and r["completion_tokens"] == 5
+    # the shim: node on a script in the work folder, a built Go program, nothing else
+    wd = tempfile.mkdtemp(prefix="anneal-cweval-test-")
+    try:
+        js = os.path.join(wd, "core", "js", "cwe_1_0_js_task.js")
+        exe = os.path.join(wd, "core", "go", "compiled", "cwe_1_0_go_task")
+        cfg = {"workdir": wd, "node": "/n/node", "node_flags": ["--x"], "node_path": "/m", "node_dirs": None,
+               "go_dirs": None, "programs": {os.path.normcase(exe): exe + ".exe"}}
+        sh = C.Shim(cfg, None)
+        opts = os.environ.pop("NODE_OPTIONS", None)  # the test process starts without it
+        try:
+            assert sh.resolve(["node", js, "a b"]) == ("/n/node", ["--x", js, "a b"], {"NODE_PATH": "/m"}, None)
+            os.environ["NODE_OPTIONS"] = " --openssl-legacy-provider"  # what cwe_327_2_js's test sets
+            assert sh.resolve(["node", js])[2] == {"NODE_PATH": "/m", "NODE_OPTIONS": "--openssl-legacy-provider"}
+        finally:
+            os.environ.pop("NODE_OPTIONS", None)
+            if opts is not None:
+                os.environ["NODE_OPTIONS"] = opts
+        assert sh.resolve([exe, "q"]) == (exe + ".exe", ["q"], {}, None)
+        for bad in (["ls", "-l"], ["node", os.path.join(os.path.dirname(wd), "x.js")], ["node", "-e", "1"]):
+            try:
+                sh.resolve(bad)
+                raise AssertionError(bad)
+            except C.HarnessError:
+                pass
+        for cmd in ('./third_party/recheck-linux-x64 "/a/" ; rm x', "ls", './third_party/recheck-linux-x64 "/a/"x'):
+            try:
+                sh.popen(cmd)
+                raise AssertionError(cmd)
+            except C.HarnessError:
+                pass
+        assert len(sh.errors) == 6
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+    if not (C.assets_ready() and shutil.which("go") and shutil.which("node") and os.name != "nt"):
+        print(f"  (CWEval judging skipped: {C.ASSETS} not built for this Python, or go / node not on PATH)")
+        return
+    from anneal import polyglot as P
+    assert C.parity() == []
+    rows = {r["id"]: r for r in C.build_rows()}
+    C.configure(P.LocalExecutor(), P.Toolchain.local(gocache=os.path.join(ROOT, "sandbox", "cweval-gocache")))
+    try:
+        for tid in ("cwe_020_0_go", "cwe_1333_0_js"):  # 1333: the ReDoS test's recheck call goes through the shim
+            r = rows[tid]
+            ok, verdict, d = C.judge_program(r, r["reference"])
+            assert ok and verdict == "ok" and d["functional"] and d["secure"], (tid, verdict, d)
+            ok, verdict, d = C.judge_program(r, r["unsafe"])
+            assert not ok and verdict == "insecure" and d["functional"], (tid, verdict, d)
+        r = rows["cwe_020_0_go"]
+        head = r["reference"].split(r["entry_line"])[0].replace('import (\n\t"fmt"\n', 'import (\n')
+        assert C.judge(r, {"finish_reason": "stop", "content": f"```go\n{head}```"}) == (True, "ok")  # goimports
+    finally:
+        C.configure()
 
 
 def test_gate_slots():
