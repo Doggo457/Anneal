@@ -61,6 +61,9 @@ import sys
 
 from datasets import load_dataset
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from anneal.rowkeys import message_reasoning  # noqa: E402  (standard library only)
+
 DEFAULT_SYSTEM = None  # e.g. "You are a careful, concise coding assistant." Leave None to train without one.
 
 
@@ -190,7 +193,8 @@ def main():
     p.add_argument("--reasoning-field", default=None,
                    help="column holding the reasoning trace; joined into the response as a <think> block")
     p.add_argument("--require-think", action="store_true",
-                   help="drop rows whose response has no <think> block (use this: thinking mode is ON)")
+                   help="drop rows whose response doesn't open with a non-empty <think> block (use this: thinking "
+                        "mode is ON, and every training row carries the teacher's reasoning)")
     p.add_argument("--max-samples", type=int, default=None, help="rows to keep (after all filters)")
     p.add_argument("--max-per-prompt", type=int, default=1,
                    help="responses kept per question (OpenCodeReasoning has ~25 per question)")
@@ -256,7 +260,6 @@ def main():
         print("  evalplus not installed; skipping decontamination (pip install evalplus)")
     gate = None
     if args.decontaminate_gate:
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         from anneal.evalsets import OverlapIndex
         gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
         if not len(gate):
@@ -280,7 +283,7 @@ def main():
             reasoning = (ex.get(args.reasoning_field) or "").strip()
             if reasoning and "<think>" not in response:
                 response = f"<think>\n{reasoning}\n</think>\n\n{response}"
-        if args.require_think and ("<think>" not in response or "</think>" not in response):
+        if args.require_think and not message_reasoning({"content": response}):  # no or an empty <think> block
             counts["no_think"] += 1
             continue
         if len(prompt) < args.min_chars or len(response) < args.min_chars:

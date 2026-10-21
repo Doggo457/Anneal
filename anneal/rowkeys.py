@@ -35,3 +35,27 @@ def question_text(row):
             return "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type", "text") == "text")
         return "" if c is None else str(c)
     return ""
+
+
+def message_reasoning(msg):
+    """The reasoning of one assistant message, stripped ("" if none): a reasoning_content / reasoning / thinking field,
+    or a "<think>TRACE</think>" block that opens the content (the pools' form). The block test is the one
+    scripts/train_longrun.py split_trace applies, which trains a row in thinking mode only when TRACE is non-empty."""
+    for k in ("reasoning_content", "reasoning", "thinking"):
+        v = msg.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    c = msg.get("content")
+    s = c.lstrip() if isinstance(c, str) else ""
+    if not s.startswith("<think>") or "</think>" not in s:
+        return ""
+    return s[len("<think>"):s.index("</think>")].strip()
+
+
+def reasoning_text(row):
+    """The teacher's reasoning for the turn a row trains (its last assistant message); "" if it has none. Since
+    21 Oct 2026 a row without reasoning is never trained on."""
+    for m in reversed(row.get("messages") or []):
+        if m.get("role") == "assistant":
+            return message_reasoning(m)
+    return ""

@@ -7,6 +7,7 @@ later rounds inherit, the two-pass round when the pools run short, and the wait 
   python tests/test_loop_logic.py        (or: python -m pytest tests/test_loop_logic.py)
 """
 
+import collections
 import json
 import os
 import shutil
@@ -162,15 +163,21 @@ def test_score_resumes_and_stops():
 def test_rows_bookkeeping():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pool.jsonl")
-        data = [{"messages": [{"role": "user", "content": f"q{i % 7}"}, {"role": "assistant", "content": f"a{i}"}]}
+        answer = {3: "a3", 4: "<think>\n \n</think>\n\na4"}  # no reasoning / an empty block: never handed out
+        data = [{"messages": [{"role": "user", "content": f"q{i % 7}"},
+                              {"role": "assistant", "content": answer.get(i, f"<think>t{i}</think> a{i}")}]}
                 for i in range(20)]
         E.write_jsonl(path, data)
         used = {L.row_key(data[0])}  # question q0 used before
-        idx, nxt = L.pick_rows(path, 0, 5, used)
-        assert idx == [1, 2, 3, 4, 5] and nxt == 6, (idx, nxt)
-        idx2, nxt2 = L.pick_rows(path, nxt, 5, used)  # q6 at 6 new; 7..13 repeat q0..q6 -> all used
-        assert idx2 == [6] and nxt2 == 20, (idx2, nxt2)
-        assert [r["messages"][1]["content"] for r in L.rows_at(path, [6, 1, 3])] == ["a6", "a1", "a3"]
+        skipped = collections.Counter()
+        idx, nxt = L.pick_rows(path, 0, 5, used, skipped)  # 3 and 4 passed over; q3 again at 10 has reasoning
+        assert idx == [1, 2, 5, 6, 10] and nxt == 11 and skipped["no_reasoning"] == 2, (idx, nxt, skipped)
+        idx2, nxt2 = L.pick_rows(path, nxt, 5, used)  # q4 at 11 is new (row 4 was never used); the rest repeat
+        assert idx2 == [11] and nxt2 == 20, (idx2, nxt2)
+        assert [r["messages"][1]["content"] for r in L.rows_at(path, [6, 1, 3])] == ["<think>t6</think> a6",
+                                                                                    "<think>t1</think> a1", "a3"]
+        assert L.reasoning_text({"messages": [{"role": "user", "content": "q"},
+                                              {"role": "assistant", "content": "x", "reasoning_content": "r"}]}) == "r"
         agent = {"messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "task"},
                               {"role": "assistant", "content": "step1"}, {"role": "tool", "content": "out"},
                               {"role": "assistant", "content": "step2"}]}
@@ -343,7 +350,7 @@ class World:
         if script in ("prepare_dataset.py", "public_source.py"):
             out = arg("--out")
             name = os.path.basename(out)
-            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120, "agent_sessions": 100}[name]
+            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120}[name]
             E.write_jsonl(os.path.join(out, "train.jsonl"),
                           [{"messages": [{"role": "user", "content": f"{name} q{i}"},
                                          {"role": "assistant", "content": f"<think>t</think> a{i}"}]} for i in range(n)])
@@ -435,9 +442,14 @@ def setup_world(tmp):
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
     cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
-    for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; banaxi and agent-session keep theirs
+    for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; banaxi keeps its minimum
         if src["name"] in ("tachibana4_v4pro", "math_v4_aops"):
             src["min_pool_rows"] = 10
+    # a source whose rows may lack reasoning (require_think off): never prepared or used (21 Oct rule), so the
+    # recipe that asks for it alone is skipped
+    cfg["sources"].append({"name": "noreason_agent", "kind": "messages", "dataset": "t/agent", "files": "x.jsonl",
+                           "require_think": False, "pool_rows": 100, "share": 0})
+    cfg["recipes"].insert(1, {"id": "noreason-agent", "init": "best", "mix": {"noreason_agent": 1.0}})
     cpath = os.path.join(tmp, "loop.yaml")
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
 
@@ -525,9 +537,10 @@ def _simulated_loop(tmp):
     y2 = ty(2)
     assert "init_adapter" not in y2 and y2["expect_trainable_params"] == 79691776
     assert done(2, "confirm")["confirmed"] and done(2, "confirm")["vs_previous_best"]["wins"] == 10
-    # the agent-session recipe had no usable rows (100 < 500): skipped; round 3 used the default recipe (the twin and rank-64
-    # recipes wait for their conditions, two-pass for short pools)
-    assert state["recipes_skipped"] == ["agent-sessions"] and state["recipes_done"] == ["v4pro-1", "agent-sessions"]
+    # the no-reasoning source was never prepared, so its recipe was skipped; round 3 used the default recipe (the twin
+    # and rank-64 recipes wait for their conditions, two-pass for short pools)
+    assert state["recipes_skipped"] == ["noreason-agent"] and state["recipes_done"] == ["v4pro-1", "noreason-agent"]
+    assert not any("noreason_agent" in " ".join(cmd) for script, cmd in w.calls if script == "public_source.py")
     assert plan3["recipe"]["id"] == "default" and plan3["init"] == "best"
     assert n_rows(plan3["replay"]) == 25 and plan3["rows"] == 125 and plan3["rolled"] == []  # 25% of 100 fresh rows
     assert ty(3)["init_adapter"].replace("/", os.sep) == os.path.join(rd(2), "train", "adapter")
@@ -746,6 +759,8 @@ def test_public_source_formats():
             dict(ok, messages=[{"from": "human", "value": "How many primes are below 20?"},
                                {"from": "gpt", "value": "<think>\n2 3 5 7 11 13 17 19\n</think>\n\nThere are 8."}]),
             dict(ok, messages=[{"role": "user", "content": "No reasoning here?"}, {"role": "assistant", "content": "Yes."}]),
+            dict(ok, messages=[{"role": "user", "content": "An empty think block?"},
+                               {"role": "assistant", "content": "<think>\n\n</think>\n\nYes."}]),
             qa("A different prompt with the same answer", "The roots are 2 and 3, so the sum is 5."),
             qa(gate_text, "Root the tree and count depths by parity; the answer for v is the size of its parity class."),
             dict(ok, messages="not a conversation"),
@@ -764,7 +779,7 @@ def test_public_source_formats():
         m = json.load(open(os.path.join(out, "measure.json")))
         c = m["counts"]
         assert (c["conversations"], c["filtered_where"], c["bad_format"], c["no_assistant"], c["require_think"],
-                c["duplicate"], c["too_long"], c["contaminated_gate"], c["kept"]) == (11, 1, 1, 1, 1, 1, 1, 1, 4), c
+                c["duplicate"], c["too_long"], c["contaminated_gate"], c["kept"]) == (12, 1, 1, 1, 2, 1, 1, 1, 4), c
         kept = E.read_jsonl(os.path.join(out, "train.jsonl")) + E.read_jsonl(os.path.join(out, "val.jsonl"))
         assert len(kept) == 4 and len(E.read_jsonl(os.path.join(out, "val.jsonl"))) == 1
         by_q = {r["messages"][0]["content"]: r["messages"] for r in kept}
