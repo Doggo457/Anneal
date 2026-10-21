@@ -10,7 +10,7 @@ read out of the stream, and its sha256 is checked against the dataset's checksum
 check writes nothing). A dropped connection resumes from the same byte. Finished shards are recorded, so a stopped run
 carries on where it left off.
 
-  python scripts/glm_rollouts.py select  [--per-task 2]                 # catalog -> data/raw/glm53/selection.json
+  python scripts/glm_rollouts.py select  --revision SHA [--per-task 2]  # catalog -> data/raw/glm53/selection.json
   python scripts/glm_rollouts.py inspect --tar PATH [--n 2]             # structure and checks of a few runs
   python scripts/glm_rollouts.py convert [--local-tar PATH] [--parallel 2] [--max-shards N]
 
