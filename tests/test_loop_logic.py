@@ -702,13 +702,13 @@ def setup_world(tmp):
     E.write_jsonl(os.path.join(ev, "swe_heldout.jsonl"),  # held-out bug-fix steps (scripts/build_swe_heldout.py)
                   [{"messages": [{"role": "user", "content": f"held-out issue {i}"},
                                  {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(12)])
-    E.write_jsonl(os.path.join(ev, "term_heldout.jsonl"),  # held-out terminal steps (build_swe_heldout.py --set terminal)
-                  [{"messages": [{"role": "user", "content": f"held-out terminal task {i}"},
-                                 {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(14)])
     for i, g in enumerate(gate):
         w.prompt_to_idx[g["prompt"]] = ("gate", i)
     for i, q in enumerate(nc):
         w.prompt_to_idx[E.mc_message(q)] = ("nc", i)
+    step = E.read_jsonl(os.path.join(ev, "swe_heldout.jsonl"))[0]["messages"][1]
+    E.write_jsonl(os.path.join(ev, "term_heldout.jsonl"),  # held-out terminal steps (build_swe_heldout.py --set terminal)
+                  [{"messages": [{"role": "user", "content": f"held-out terminal task {i}"}, step]} for i in range(14)])
     # data trained on before the loop (the first run's mix)
     E.write_jsonl(os.path.join(tmp, "data", "processed", "mix_first_2k", "train.jsonl"),
                   [{"messages": [{"role": "user", "content": "tachibana4_v4pro q0"}, {"role": "assistant", "content": "x"}]}])
@@ -1564,8 +1564,7 @@ def test_ranked_runs_and_near_duplicates():
         # B keeps 2, C rank 1 keeps 1, C rank 3 keeps 2 (its own commands).
         assert (m["counts"]["kept"], m["counts"]["near_duplicate"], m["counts"]["duplicate"]) == (10, 4, 0), m["counts"]
         kept = E.read_jsonl(os.path.join(out, "train.jsonl")) + E.read_jsonl(os.path.join(out, "val.jsonl"))
-        notes = sorted(r["messages"][-1]["content"].split("</think>")[0].split("Reasoning of ")[1].split(",")[0]
-                       for r in kept)
+        notes = sorted(r["messages"][-1]["content"].split("Reasoning of ")[1].split(",")[0] for r in kept)
         assert notes == sorted(["A rank 1 step 0", "A rank 1 step 1", "A rank 1 step 2", "A rank 2 step 1",
                                 "A rank 2 step 2", "B rank 1 step 0", "B rank 1 step 1", "C rank 1 step 0",
                                 "C rank 3 step 0", "C rank 3 step 1"]), notes
