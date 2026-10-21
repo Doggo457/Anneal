@@ -58,9 +58,11 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
   empty_cache_between_microbatches: true
   pinned_offload: false
 
-# Public sources (research/public-teacher-datasets.md, 19 Oct 2026). No large public, test-verified code-trace set from a
-# teacher as strong as Qwen3.8-27B exists, so the code rows come from DeepSeek-V4-Pro (at par: LiveCodeBench 89.8 High
-# vs 90.3) without tests, and the gate decides whether they help. All programming languages are kept.
+# Public sources (research/public-teacher-datasets.md, 19 Oct 2026). My rules: the teacher is as strong as or
+# stronger than Qwen3.8-27B on a published coding benchmark (20 Oct), and every row carries the teacher's real reasoning
+# (21 Oct: a source with require_think off is never prepared or used, and the loop passes over any row without it).
+# The code rows come from DeepSeek-V4-Pro (LiveCodeBench 87.48 vs 84.00 on Vals) without tests, and the gate decides
+# whether they help. All programming languages are kept.
 sources:
   - name: tachibana4_v4pro
     kind: fields
@@ -92,17 +94,6 @@ sources:
     require_think: true
     pool_rows: 10000
     share: 0.10
-  - name: agent_sessions
-    kind: messages
-    dataset: public agent-session set   # card: agent sessions; I chose to use it
-    files: 5k/train.jsonl
-    turns: each
-    require_think: false                               # the sessions carry no reasoning
-    drop_tool_names: [unknown_tool]
-    min_target_chars: 200
-    pool_rows: 20000
-    min_pool_rows: 500                                 # my condition: used only if 500+ rows fit
-    share: 0                                           # only through its own recipe below
 
 # Run once each, in order; when none is left every round uses default_recipe.
 #   init: best (continue the best adapter, with replay) | base_lineage (retrain from the base on the best's rows + new rows)
@@ -116,10 +107,6 @@ recipes:
   - id: v4pro-1
     note: first public round, DeepSeek-V4-Pro code rows + 10% V4-Pro math, from the base
     init: best
-  - id: agent-sessions
-    note: agent-session steps alone (no reasoning), if 500+ rows fit
-    init: best
-    mix: {agent_sessions: 1.0}
   - id: retrain-vs-continue
     note: >-
       paired comparison once two rounds are kept and the best continued the adapter before it - every row the best was

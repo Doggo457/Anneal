@@ -25,7 +25,9 @@ Filters, in order, each counted in measure.json and the card:
   no_assistant / bad_format     conversation without an assistant turn, or messages that aren't role/content dicts,
                                 or tool-call arguments that aren't a JSON object (kept as a JSON string; the
                                 template gets them parsed, see anneal/data.py chat_messages)
-  require_think                 (--require-think) the target turn has no reasoning
+  require_think                 (--require-think) the target turn has no reasoning: no reasoning field and no
+                                "<think>" block opening its content, or an empty one (anneal/rowkeys.py
+                                message_reasoning, the trainer's own test)
   short_target                  target text under --min-target-chars and no tool call
   dropped_tool_name             the target calls a tool named by --drop-tool-name (e.g. "unknown_tool": the name was
                                 lost, so the call teaches nothing)
@@ -65,6 +67,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from anneal.rowkeys import message_reasoning  # noqa: E402  (standard library only)
 
 HUB = os.path.join(ROOT, "models", "hf", "hub")
 REASONING_KEYS = ("reasoning_content", "reasoning", "thinking")
@@ -263,8 +266,8 @@ def main():
 
     from anneal.data import template_ids
 
-    def n_tokens(msgs):
-        thinking = "<think>" in (msgs[-1].get("content") or "")
+    def n_tokens(msgs):  # thinking mode exactly when the trainer uses it (train_longrun.py tokenize_rows)
+        thinking = any(m["role"] == "assistant" and message_reasoning(m) for m in msgs)
         return len(template_ids(tok, msgs, add_generation_prompt=False, enable_thinking=thinking))
 
     deco = None
@@ -348,7 +351,7 @@ def main():
             if end in no_loss:
                 counts["loss_masked"] += 1
                 continue
-            if args.require_think and "<think>" not in (t.get("content") or ""):
+            if args.require_think and not message_reasoning(t):
                 counts["require_think"] += 1
                 continue
             if len((t.get("content") or "").strip()) < args.min_target_chars and not has_call:
@@ -401,7 +404,7 @@ def main():
             for c in t.get("tool_calls", []):
                 kept_tools[c["function"]["name"]] += 1
             lengths.append(n)
-            kept_by_kind["tool_call" if has_call else ("thinking" if "<think>" in (t.get("content") or "") else "text")] += 1
+            kept_by_kind["tool_call" if has_call else ("thinking" if message_reasoning(t) else "text")] += 1
             if not args.measure_only:  # a count needs no rows: whole agent sessions would stay in memory
                 groups.setdefault(ci, []).append({"messages": row})
             if args.max_rows and counts["kept"] >= args.max_rows:

@@ -54,6 +54,7 @@ after experiments/loop.yaml changes.
 """
 
 import argparse
+import collections
 import copy
 import glob
 import hashlib
@@ -74,7 +75,7 @@ import first_run as fr  # noqa: E402
 import generate_traces as gt  # noqa: E402
 from anneal import evalsets as E  # noqa: E402
 from anneal import llama, sandbox  # noqa: E402
-from anneal.rowkeys import row_key  # noqa: E402,F401  (shared with paraphrase_check.py)
+from anneal.rowkeys import reasoning_text, row_key  # noqa: E402,F401  (shared with paraphrase_check.py)
 from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 
 PY = sys.executable
@@ -129,6 +130,12 @@ def pid_alive(pid):
         return True
     except OSError:
         return False
+
+
+def reasoning_source(src):
+    """Rule since 21 Oct 2026: "if there is no reasoning no point". A source is only used if its rows must carry the
+    teacher's reasoning (require_think, on unless a source turns it off)."""
+    return bool(src.get("require_think", True))
 
 
 def spec_hash(src):
@@ -241,9 +248,11 @@ def plan_counts(cfg, recipe, state, pool_rows, rows=None):
     return {n: k for n, k in out.items() if k > 0}
 
 
-def pick_rows(path, start, n, used):
-    """Indices of the next n rows from `start` whose key is not in `used` (adds their keys). Returns (indices, the
-    offset to start from next time)."""
+def pick_rows(path, start, n, used, skipped=None):
+    """Indices of the next n rows from `start` whose key is not in `used` (adds their keys) and whose trained turn
+    carries the teacher's reasoning (anneal/rowkeys.py reasoning_text). Since 21 Oct 2026 a row without reasoning is
+    never trained on, so those are passed over and counted in `skipped` (a Counter, key "no_reasoning"). Returns
+    (indices, the offset to start from next time)."""
     out, nxt, idx = [], start, 0
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -253,10 +262,14 @@ def pick_rows(path, start, n, used):
                 if len(out) >= n:
                     break
                 nxt = idx + 1
-                k = row_key(json.loads(line))
+                row = json.loads(line)
+                k = row_key(row)
                 if k is not None and k not in used:
-                    used.add(k)
-                    out.append(idx)
+                    if reasoning_text(row):
+                        used.add(k)
+                        out.append(idx)
+                    elif skipped is not None:
+                        skipped["no_reasoning"] += 1
             idx += 1
     return out, nxt
 
@@ -426,6 +439,8 @@ class Loop(fr.Controller):
     def pool_rows(self, cfg):
         out = {}
         for src in cfg.get("sources") or []:
+            if not reasoning_source(src):
+                continue
             info = self.read_json(os.path.join(self.pool_dir(src), "pool.json"))
             if info and info.get("spec") == spec_hash(src):
                 out[src["name"]] = info["train_rows"]
@@ -434,6 +449,10 @@ class Loop(fr.Controller):
     def prepare_pools(self, cfg):
         """Prepare every source pool not yet prepared (CPU only)."""
         for src in cfg.get("sources") or []:
+            if not reasoning_source(src):
+                self.log(f"source {src['name']}: require_think is off, so its rows may lack the teacher's reasoning; "
+                         "never prepared or used (21 Oct 2026 rule)")
+                continue
             d = self.pool_dir(src)
             info = self.read_json(os.path.join(d, "pool.json"))
             if info:
@@ -474,6 +493,16 @@ class Loop(fr.Controller):
                     cmd += ["--max-files", str(src["max_files"])]
                 if src.get("require_think", True):
                     cmd.append("--require-think")
+                for key, flag in (("respect_loss_mask", "--respect-loss-mask"), ("clean_context", "--clean-context")):
+                    if src.get(key):
+                        require_script("public_source.py", flag)
+                        cmd.append(flag)
+                if src.get("row_range"):
+                    require_script("public_source.py", "--row-range")
+                    cmd += ["--row-range", str(src["row_range"])]
+                for rx in src.get("drop_target_regex") or []:
+                    require_script("public_source.py", "--drop-target-regex")
+                    cmd += ["--drop-target-regex", rx]
             else:
                 raise RuntimeError(f"source {src['name']}: unknown kind {src['kind']!r}")
             if not os.path.exists(E.DECONTAM_EXTRA):
@@ -692,8 +721,10 @@ class Loop(fr.Controller):
                 self.save()
                 continue
             slices, offsets, new_keys = {}, {}, set(used) | blocked  # blocked rows are skipped like used ones
+            skipped = collections.Counter()
             for n, take in counts.items():
-                idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys)
+                idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys,
+                                     skipped)
                 offsets[n] = nxt
                 if idx:
                     slices[n] = idx
@@ -712,6 +743,8 @@ class Loop(fr.Controller):
                 continue
             raise Waiting(f"only {have} unused public rows available at the configured mix (need {need}); "
                           "add sources to experiments/loop.yaml")
+        if skipped["no_reasoning"]:
+            self.log(f"{skipped['no_reasoning']} pool rows passed over: their trained turn has no reasoning")
         self.state["offsets"].update(offsets)
         self.add_used_keys(new_keys - used - blocked)  # blocked rows were never trained on
         lineage = best["lineage"] if init == "base_lineage" else []
