@@ -20,6 +20,8 @@ min_free_gb: 60
 valloss: true
 milestone_evalplus: true   # EvalPlus on kept adapters only (the reported numbers)
 pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead
+reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
+# NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
 
 gate: {seed: 1, budget: 16384, max_tokens: 20480, concurrency: 4}
 # The gate (21 Oct 2026, scripts/build_gate.py): 495 CodeContests items, no Python. Write items ask for a program in
@@ -33,8 +35,9 @@ rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: 
 # p <= loss_alpha. Either way the write and fix parts may not drop by more than part_tolerance or significantly, and
 # the non-coding check (vs the base) by more than nc_tolerance or significantly.
 swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}
-# 200 single steps from Open-SWE runs in repositories the openswe_v4flash pool leaves out (its holdout below),
-# built once by scripts/build_swe_heldout.py.
+# Single steps from Open-SWE runs in repositories the openswe_v4flash pool leaves out (its holdout below), one per
+# run, built once by scripts/build_swe_heldout.py: 177 on 21 Oct 2026, every held-out run outside Python that has a
+# step passing the pool's filters (so fewer than max_rows).
 # confirm_net_win (off: optional, not chosen yet): a kept round's fresh-seed confirm must also win more gate problems
 # than it loses against the best, or the round is rejected. Under no real gain that passes about 45% of the time, so it
 # more than halves false keeps, which rolling rows forward raises; a real 3-point gain passes 94-99%

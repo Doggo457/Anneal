@@ -7,8 +7,8 @@ paper's embedding stage, without its judge model (my choice, 20 Oct 2026: no sec
 Embeddings come from FastFlowLM's EmbeddingGemma-300M on the NPU, through any OpenAI-compatible /v1/embeddings server.
 
 Method
-  1. Embed every test problem (HumanEval+ and MBPP+ from evalplus, the gate's CodeContests and OpenCodeInstruct
-     problems, the MMLU-Pro check, and any --test file) and the question (first user message) of every training row:
+  1. Embed every test problem (HumanEval+ and MBPP+ from evalplus, the gate's problems, the MMLU-Pro check, and any
+     --test file) and the question (first user message) of every training row:
      data/processed/*/train.jsonl (the first run) and data/processed/loop/*/train.jsonl (the loop's pools).
   2. A cut-off per test set, the higher of
        t_pos  the 5th percentile of the cosine between each HumanEval prompt and its published GPT-4 rewording
@@ -21,6 +21,8 @@ Method
 
 Outputs (data/eval/paraphrase/, never committed: they hold row text)
   blocked_keys.txt  row keys (anneal/rowkeys.py) the loop never hands out (scripts/loop.py blocked_keys)
+  covered.json      what this check covered: the gate file's sha256 and each training file's size. scripts/loop.py
+                    trains no round while a pool or the gate is not covered (loop.yaml reworded_check_required)
   flags.jsonl       one line per flagged row: source, row index, key, test set, test id, cosine, cut-off
   pairs.jsonl       the flagged pairs with both texts, for reading
   report.json, card.md   calibration, cut-offs, counts, speed, and the training-speed A/B; copied without any row
@@ -139,9 +141,20 @@ def load_calibration(cache_dir, offline_dir=None):
     return pairs
 
 
+def gate_statement(item):
+    """A six-language write item's problem statement: its prompt without the language instruction
+    (anneal/polyglot.py write_suffix)."""
+    from anneal.polyglot import write_suffix
+    suffix = write_suffix(item["lang"])
+    p = item["prompt"]
+    return p[:-len(suffix)] if p.endswith(suffix) else p
+
+
 def load_test_sets(extra=(), use_evalplus=True):
-    """{set name: [(id, text)]}: HumanEval+, MBPP+, the gate (CodeContests and OpenCodeInstruct parts), the MMLU-Pro
-    check, plus NAME=PATH files (JSONL with "id" and "prompt", "question" or "text")."""
+    """{set name: [(id, text)]}: HumanEval+, MBPP+, the gate, the MMLU-Pro check, plus NAME=PATH files (JSONL with
+    "id" and "prompt", "question" or "text"). The six-language gate (scripts/build_gate.py) is one set, "gate", with
+    one text per problem (its statement): a problem's write and fix items in several languages are the same problem,
+    and as separate texts they would sit at cosine ~1 to each other and lift the set's t_neg cut-off to ~1."""
     sets = {}
     if use_evalplus:
         try:
@@ -154,8 +167,14 @@ def load_test_sets(extra=(), use_evalplus=True):
     nc = E.read_jsonl(E.NONCODING_PATH)
     if not gate or not nc:
         raise Stop(EXIT_BAD_INPUT, f"{E.GATE_PATH} or {E.NONCODING_PATH} is missing: run scripts/build_evalsets.py first")
-    for kind in sorted({g["kind"] for g in gate}):
-        sets[f"gate-{kind}"] = [(g["id"], g["prompt"]) for g in gate if g["kind"] == kind]
+    statements = {}
+    for g in gate:
+        if "problem" not in g:  # the archived Python gate: one item per problem, a set per part
+            sets.setdefault(f"gate-{g['kind']}", []).append((g["id"], g["prompt"]))
+        elif g["kind"] == "write":  # every problem has a write item; fix items add the wrong program, not a problem
+            statements.setdefault(g["problem"], gate_statement(g))
+    if statements:
+        sets["gate"] = sorted(statements.items())
     sets["mmlu-pro"] = [(q["id"], q["question"]) for q in nc]
     for spec in extra:
         name, _, path = spec.partition("=")
@@ -471,6 +490,26 @@ def embed_missing(emb, cache, hashes, texts, guards, label):
     cache.save()
 
 
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_covered(out_dir, gate_sha, sizes, started):
+    """covered.json: the gate (sha256 of data/eval/gate.jsonl; None when the test sets were passed in) and every
+    training file this finished check read ({source name: size in bytes}), so scripts/loop.py can tell a pool prepared
+    or changed after the check from one the check saw. Written last, after blocked_keys.txt."""
+    cov = {"started_epoch": round(started, 1), "finished_epoch": round(time.time(), 1), "gate_sha256": gate_sha,
+           "sources": sizes}
+    tmp = os.path.join(out_dir, "covered.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(cov, fh, indent=1)
+    os.replace(tmp, os.path.join(out_dir, "covered.json"))
+
+
 def run(args, emb=None, calib_pairs=None, test_sets=None, sources=None):
     """The whole check. A Stop (a guard, a bad embedder, bad input) first appends one line to stops.jsonl with what
     was measured so far, including the training-speed A/B, then is raised again."""
@@ -511,11 +550,15 @@ def record_stop(stop, report, ctx, started, out_dir, results_dir):
 
 def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
     calib_pairs = calib_pairs if calib_pairs is not None else load_calibration(os.path.join(out_dir, "calib"), args.calib_dir)
-    test_sets = test_sets if test_sets is not None else load_test_sets(args.test)
+    gate_sha = None
+    if test_sets is None:
+        test_sets = load_test_sets(args.test)
+        gate_sha = file_sha256(E.GATE_PATH)
     sources = sources if sources is not None else ([tuple(s.split("=", 1)) for s in args.train] or discover_train(ROOT))
     if not sources:
         raise Stop(EXIT_BAD_INPUT, "no training rows found (data/processed/*/train.jsonl)")
     train_rows, train_texts = load_train(sources)
+    sizes = {name: os.path.getsize(path) for name, path in sources}  # as read, for covered.json
     for n, items in test_sets.items():
         log(f"test set {n}: {len(items)} problems")
 
@@ -622,6 +665,7 @@ def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write("".join(k + "\n" for k in blocked))
     os.replace(tmp, os.path.join(out_dir, "blocked_keys.txt"))
+    write_covered(out_dir, gate_sha, sizes, started)
 
     report.update(per_set=per_set, per_source=per_source, blocked_keys=len(blocked), flags=len(flags),
                   unique_training_questions=len(u_hashes),

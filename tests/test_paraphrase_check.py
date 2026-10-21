@@ -171,6 +171,9 @@ def test_end_to_end_and_resume():
             assert rep["self_check"]["auc"] > 0.95 and rep["per_set"]["humaneval+"]["t_neg"] is not None
             assert rep["per_set"]["humaneval+"]["flagged_test_ids"] == ["HumanEval/0", "HumanEval/1"]
             assert rep["per_source"]["loop/tachibana4_v4pro"] == {"rows_checked": len(pool), "rows_flagged": 2}
+            cov = json.load(open(os.path.join(out, "covered.json"), encoding="utf-8"))
+            assert cov["gate_sha256"] is None, cov  # test sets passed in: covers no gate file
+            assert cov["sources"] == {n: os.path.getsize(p) for n, p in sources}, cov
             # the committed copy holds no row text
             for f in ("report.json", "card.md"):
                 text = open(os.path.join(tmp, "results", f), encoding="utf-8").read()
@@ -184,6 +187,36 @@ def test_end_to_end_and_resume():
             assert srv.texts - before == 2 * len(P.PROBES) and rep2["flags"] == rep["flags"]
         finally:
             srv.close()
+
+
+def test_six_language_gate_one_text_per_problem():
+    """A problem's write items (two languages) and fix item are one test problem: one text, its statement. The archived
+    Python gate keeps one set per part."""
+    from anneal import polyglot as PG
+    saved = E.GATE_PATH, E.NONCODING_PATH
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            E.GATE_PATH, E.NONCODING_PATH = os.path.join(tmp, "gate.jsonl"), os.path.join(tmp, "nc.jsonl")
+            E.write_jsonl(E.NONCODING_PATH, [{"id": "mmlupro/1", "question": "q1"}])
+            st = {"cc/test/1": "Count the pairs.", "cc/valid/2": "Sort the stones."}
+            E.write_jsonl(E.GATE_PATH, [
+                {"id": "write/cpp/cc/test/1", "problem": "cc/test/1", "kind": "write", "lang": "cpp",
+                 "prompt": st["cc/test/1"] + PG.write_suffix("cpp")},
+                {"id": "write/java/cc/valid/2", "problem": "cc/valid/2", "kind": "write", "lang": "java",
+                 "prompt": st["cc/valid/2"] + PG.write_suffix("java")},
+                {"id": "fix/cpp/cc/valid/2", "problem": "cc/valid/2", "kind": "fix", "lang": "cpp",
+                 "prompt": PG.fix_prompt(st["cc/valid/2"], "cpp", "int main(){}")},
+                {"id": "write/rust/cc/test/1", "problem": "cc/test/1", "kind": "write", "lang": "rust",
+                 "prompt": st["cc/test/1"] + PG.write_suffix("rust")}])
+            sets = P.load_test_sets(use_evalplus=False)
+            assert sets["gate"] == [("cc/test/1", st["cc/test/1"]), ("cc/valid/2", st["cc/valid/2"])], sets["gate"]
+            assert sorted(sets) == ["gate", "mmlu-pro"], sorted(sets)
+            E.write_jsonl(E.GATE_PATH, [{"id": "cc/test/1", "kind": "cc", "prompt": "a"},
+                                        {"id": "oci/x", "kind": "oci", "prompt": "b"}])
+            sets = P.load_test_sets(use_evalplus=False)
+            assert sets["gate-cc"] == [("cc/test/1", "a")] and sets["gate-oci"] == [("oci/x", "b")], sets
+        finally:
+            E.GATE_PATH, E.NONCODING_PATH = saved
 
 
 def test_broken_embedders_stop():
