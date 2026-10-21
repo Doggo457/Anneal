@@ -62,7 +62,7 @@ import sys
 from datasets import load_dataset
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from anneal.rowkeys import message_reasoning  # noqa: E402  (standard library only)
+from anneal.rowkeys import LANG_ALIASES, answer_text, fence_languages, message_reasoning  # noqa: E402  (standard library only)
 
 DEFAULT_SYSTEM = None  # e.g. "You are a careful, concise coding assistant." Leave None to train without one.
 
@@ -216,6 +216,10 @@ def main():
                    help="data/eval/decontam_extra.jsonl: drop rows overlapping the loop's held-out problems")
     p.add_argument("--ngram", type=int, default=13)
     p.add_argument("--jaccard", type=float, default=0.8)
+    p.add_argument("--drop-answer-lang", action="append", default=[],
+                   help="drop rows whose answer (after the think block) has a code block in this language, e.g. python "
+                        "(21 Oct 2026: Python is the lowest priority); repeatable. Aliases fold as in "
+                        "anneal/rowkeys.py fence_languages")
     p.add_argument("--report-field", action="append", default=[],
                    help="column to tabulate before/after filtering in the data card (repeatable), e.g. difficulty")
     p.add_argument("--out", default="data/processed")
@@ -248,7 +252,7 @@ def main():
     length_rule = f"max {args.max_tokens} tokens ({args.tokenizer} chat template)" if count_tokens \
         else f"max {args.max_chars} chars"
 
-    counts = collections.Counter({k: 0 for k in ("examined", "too_short", "too_long", "no_think", "duplicate",
+    counts = collections.Counter({k: 0 for k in ("examined", "too_short", "too_long", "no_think", "answer_lang", "duplicate",
                                                  "contaminated_ngram", "contaminated_jaccard", "contaminated_gate",
                                                  "filtered_where")})
     seen_by = {f: collections.Counter() for f in args.report_field}
@@ -266,6 +270,8 @@ def main():
             raise SystemExit(f"{args.decontaminate_gate} holds no problems")
         print(f"  held-out overlap check against {len(gate)} problems from {args.decontaminate_gate}")
     token_lengths = []
+    drop_langs = {LANG_ALIASES.get(x.strip().lower(), x.strip().lower()) for x in args.drop_answer_lang}
+    kept_langs = collections.Counter()  # rows per language of the answer's code blocks
 
     rows = []
     for ex in ds:
@@ -285,6 +291,10 @@ def main():
                 response = f"<think>\n{reasoning}\n</think>\n\n{response}"
         if args.require_think and not message_reasoning({"content": response}):  # no or an empty <think> block
             counts["no_think"] += 1
+            continue
+        langs = fence_languages(answer_text(response))
+        if drop_langs and drop_langs.intersection(langs):
+            counts["answer_lang"] += 1
             continue
         if len(prompt) < args.min_chars or len(response) < args.min_chars:
             counts["too_short"] += 1
@@ -323,6 +333,7 @@ def main():
             token_lengths.append(n_tok)
         for f in args.report_field:
             kept_by[f][str(ex[f])] += 1
+        kept_langs.update(set(langs) or {"(no code block)"})
         rows.append({"messages": messages})
 
     if not rows:
@@ -371,6 +382,10 @@ def main():
             s = sorted(token_lengths)
             q = lambda x: s[min(len(s) - 1, int(x * len(s)))]  # noqa: E731
             f.write(f"\nKept-row length in tokens: min {s[0]}, median {q(0.5)}, p90 {q(0.9)}, max {s[-1]}.\n")
+        f.write(f"\nDropped for answer code in {sorted(drop_langs) or 'no language'}. Kept rows by the languages of the "
+                "answer's code blocks (a row counts once per language):\n\n| Language | Rows |\n|---|---|\n")
+        for lang, n in kept_langs.most_common():
+            f.write(f"| {lang or '(untagged)'} | {n} |\n")
         for fld in args.report_field:
             f.write(f"\n## `{fld}` before and after filtering\n\n| Value | Examined | Kept | Kept % |\n|---|---|---|---|\n")
             for val_, n in seen_by[fld].most_common():

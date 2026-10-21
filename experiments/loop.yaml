@@ -58,12 +58,51 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
   empty_cache_between_microbatches: true
   pinned_offload: false
 
-# Public sources (research/public-teacher-datasets.md, 19 Oct 2026). My rules: the teacher is as strong as or
-# stronger than Qwen3.8-27B on a published coding benchmark (20 Oct), and every row carries the teacher's real reasoning
-# (21 Oct: a source with require_think off is never prepared or used, and the loop passes over any row without it).
-# The code rows come from DeepSeek-V4-Pro (LiveCodeBench 87.48 vs 84.00 on Vals) without tests, and the gate decides
-# whether they help. All programming languages are kept.
+# Public sources. My rules: the teacher is as strong as or stronger than Qwen3.8-27B on a published coding
+# benchmark (20 Oct); every row carries the teacher's real reasoning (21 Oct: a source with require_think off is never
+# prepared or used, and the loop passes over any row without it); the strongest teacher comes first and takes the
+# biggest share; Python is the lowest priority; the goal is a better software developer, not just coding examples.
+# Teachers ranked on Vals AI (one harness for every model; Qwen3.8-27B: LiveCodeBench 84.00, SWE-bench Verified 86.00,
+# Terminal-Bench 2.1 58.43): DeepSeek V4-Flash-0731 87.26 / 88.80 / 67.04 beats it on all three; DeepSeek-V4-Pro
+# 87.48 / 77.40 / 50.19 beats it on LiveCodeBench only, so its rows are code tasks, not repository bug fixes
+# (research/stronger-teacher-data.md). Sources whose rows write Python, and the maths, carry share 0: they fill in only
+# once the others run out (a check-in raises their share then). Maths is 0 because it doesn't teach software work; the
+# MMLU-Pro check still rejects a round that loses general reasoning.
 sources:
+  - name: openswe_v4flash
+    kind: messages
+    dataset: nvidia/Open-SWE-Traces                    # CC-BY-4.0; OpenHands runs on real repository issues
+    revision: 1db674173119d71df45c22007af99e214600711a
+    files: data/openhands/deepseek_v4_flash_0731/      # teacher DeepSeek V4-Flash-0731, reasoning_effort max
+    where: ["resolved=1", "language!=python"]          # test-passed runs outside Python: 4,675 of 23,110 (TypeScript
+                                                       # 1,618, Go 1,590, JavaScript 901, PHP 397, Rust 91, Java 63)
+    turns: each                                        # each step with reasoning is a row; steps without it are dropped
+    report_fields: [language]
+    pool_rows: 40000
+    share: 0.55
+    group: swe
+  - name: tachibana4_v4pro_nopy
+    kind: fields
+    dataset: sequelbox/Tachibana4-DeepSeek-V4-Pro      # engineering tasks in about 20 languages: review, design, porting
+    prompt_field: prompt
+    response_field: completion
+    require_think: true
+    drop_answer_langs: [python]                        # answers that write Python wait at share 0 (tachibana4_v4pro)
+    pool_rows: 20000
+    share: 0.40
+    group: code
+  - name: banaxi_v4pro_nopy
+    kind: fields
+    dataset: Banaxi-Tech/Deepseek-V4-Reasoning-Code-2500
+    prompt_field: user
+    response_field: assistant
+    where: ["model~pro", "finish_reason=stop"]
+    require_think: true
+    drop_answer_langs: [python]
+    pool_rows: 3000
+    min_pool_rows: 100
+    share: 0.05
+    group: code
   - name: tachibana4_v4pro
     kind: fields
     dataset: sequelbox/Tachibana4-DeepSeek-V4-Pro     # Apache-2.0, 17,234 rows, completions start with <think>
@@ -71,7 +110,7 @@ sources:
     response_field: completion
     require_think: true
     pool_rows: 20000
-    share: 0.85
+    share: 0           # Python-writing rows fill in here once the rest run out (rows already used are never repeated)
     group: code      # mix ratio held per group: Banaxi can stand in for Tachibana4, math can't take the code share
   - name: banaxi_v4pro
     kind: fields
@@ -82,7 +121,7 @@ sources:
     require_think: true
     pool_rows: 3000
     min_pool_rows: 100
-    share: 0.05
+    share: 0
     group: code
   - name: math_v4_aops
     kind: messages
@@ -93,7 +132,7 @@ sources:
     turns: last
     require_think: true
     pool_rows: 10000
-    share: 0.10
+    share: 0
 
 # Run once each, in order; when none is left every round uses default_recipe.
 #   init: best (continue the best adapter, with replay) | base_lineage (retrain from the base on the best's rows + new rows)
@@ -105,7 +144,9 @@ sources:
 #   A kept recipe's LoRA shape carries on into later rounds, so they continue that adapter.
 recipes:
   - id: v4pro-1
-    note: first public round, DeepSeek-V4-Pro code rows + 10% V4-Pro math, from the base
+    note: >-
+      first public round, from the base: the configured mix, Open-SWE DeepSeek V4-Flash bug-fix steps first, then
+      DeepSeek-V4-Pro code rows, all outside Python
     init: best
   - id: retrain-vs-continue
     note: >-
@@ -142,6 +183,6 @@ recipes:
 default_recipe:
   id: default
   note: >-
-    next fresh DeepSeek-V4-Pro rows (+ rows rolled forward from rejected rounds) plus 25% as many of the best's
+    next fresh rows at the configured mix (+ rows rolled forward from rejected rounds) plus 25% as many of the best's
     earlier rows, continuing the best adapter
   init: best

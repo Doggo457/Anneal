@@ -36,6 +36,8 @@ Filters, in order, each counted in measure.json and the card:
                                 placeholder. Always on.
   masked_target                 (--drop-target-regex) the target text matches one of the patterns, e.g. masked
                                 personal data such as "[REDACTED]" inside code: the model would learn to write the mask
+  answer_lang                   (--drop-answer-lang) the target's answer (after its think block) has a code block in
+                                one of these languages (anneal/rowkeys.py fence_languages), e.g. python
   redacted_context              (--clean-context) an earlier assistant turn of the row makes a redacted call (placeholder
                                 arguments or a --drop-tool-name tool), so the target would be learnt after steps the
                                 model never really took. Without the flag these rows are kept and counted in
@@ -67,7 +69,7 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
-from anneal.rowkeys import message_reasoning  # noqa: E402  (standard library only)
+from anneal.rowkeys import LANG_ALIASES, answer_text, fence_languages, message_reasoning  # noqa: E402  (stdlib only)
 
 HUB = os.path.join(ROOT, "models", "hf", "hub")
 REASONING_KEYS = ("reasoning_content", "reasoning", "thinking")
@@ -113,16 +115,17 @@ def iter_rows(paths, field, where_cols=()):
 
 
 def parse_where(spec):
-    for op in ("=", "~"):
+    for op in ("!=", "!~", "=", "~"):
         col, sep, val = spec.partition(op)
-        if sep and col and "=" not in col and "~" not in col:
+        if sep and col and not any(c in col for c in "=~!"):
             return col.strip(), op, val.strip().lower()
-    raise SystemExit(f"--where must be COL=VALUE or COL~TEXT, got {spec!r}")
+    raise SystemExit(f"--where must be COL=VALUE, COL!=VALUE, COL~TEXT or COL!~TEXT, got {spec!r}")
 
 
 def where_ok(value, op, want):
     v = "" if value is None else str(value).strip().lower()
-    return v == want if op == "=" else want in v
+    hit = v == want if op in ("=", "!=") else want in v
+    return not hit if op.startswith("!") else hit
 
 
 def parse_arguments(args):
@@ -230,7 +233,14 @@ def main():
     ap.add_argument("--messages-field", default="messages")
     ap.add_argument("--max-files", type=int, default=0, help="use only the first N matching files (sorted)")
     ap.add_argument("--where", action="append", default=[],
-                    help="keep rows where COL=VALUE (exact) or COL~TEXT (contains), case-insensitive; repeatable")
+                    help="keep rows where COL=VALUE (exact) or COL~TEXT (contains), case-insensitive, or the negations "
+                         "COL!=VALUE and COL!~TEXT; repeatable, all must hold")
+    ap.add_argument("--report-field", action="append", default=[],
+                    help="column to count by value in measure.json and the card, for conversations read and rows kept "
+                         "(e.g. language); repeatable")
+    ap.add_argument("--drop-answer-lang", action="append", default=[],
+                    help="drop a step whose target answer (after its think block) has a code block in this language, "
+                         "e.g. python (21 Oct 2026: Python is the lowest priority); repeatable")
     ap.add_argument("--turns", choices=["last", "each"], default="last")
     ap.add_argument("--require-think", action="store_true")
     ap.add_argument("--min-target-chars", type=int, default=0)
@@ -284,7 +294,8 @@ def main():
     counts = collections.Counter({k: 0 for k in (
         "conversations", "outside_range", "filtered_where", "bad_format", "no_assistant", "candidate_rows", "loss_masked",
         "require_think", "short_target",
-        "dropped_tool_name", "placeholder_args", "masked_target", "redacted_context", "duplicate", "too_long", "template_error",
+        "dropped_tool_name", "placeholder_args", "masked_target", "answer_lang", "redacted_context", "duplicate",
+        "too_long", "template_error",
         "contaminated_evalplus", "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
@@ -302,7 +313,12 @@ def main():
     lo, _, hi = (args.row_range or "").partition(":")
     lo, hi = int(lo or 0), (int(hi) if hi.strip() else None)
     drop_res = [re.compile(x) for x in args.drop_target_regex]
-    for ci, (raw, cols) in enumerate(iter_rows(paths, args.messages_field, [c for c, _, _ in wheres])):
+    drop_langs = {LANG_ALIASES.get(x.strip().lower(), x.strip().lower()) for x in args.drop_answer_lang}
+    read_cols = list(dict.fromkeys([c for c, _, _ in wheres] + args.report_field))
+    seen_by = {f: collections.Counter() for f in args.report_field}
+    kept_by = {f: collections.Counter() for f in args.report_field}
+    kept_langs = collections.Counter()  # kept steps per language of the target's code blocks
+    for ci, (raw, cols) in enumerate(iter_rows(paths, args.messages_field, read_cols)):
         if args.max_rows and counts["kept"] >= args.max_rows:
             break
         if hi is not None and ci >= hi:
@@ -314,6 +330,8 @@ def main():
         if wheres and not all(where_ok(cols.get(c), op, v) for c, op, v in wheres):
             counts["filtered_where"] += 1
             continue
+        for f in args.report_field:
+            seen_by[f][str(cols.get(f))] += 1
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
@@ -368,6 +386,10 @@ def main():
             if drop_res and any(r.search(text) for r in drop_res):
                 counts["masked_target"] += 1
                 continue
+            langs = fence_languages(answer_text(t.get("content")))
+            if drop_langs and drop_langs.intersection(langs):
+                counts["answer_lang"] += 1
+                continue
             ctx_redacted = first_bad < end
             if ctx_redacted and args.clean_context:
                 counts["redacted_context"] += 1
@@ -403,6 +425,9 @@ def main():
             kept_shares.append((k + 1) / len(ends))
             for c in t.get("tool_calls", []):
                 kept_tools[c["function"]["name"]] += 1
+            for f in args.report_field:
+                kept_by[f][str(cols.get(f))] += 1
+            kept_langs.update(set(langs))
             lengths.append(n)
             kept_by_kind["tool_call" if has_call else ("thinking" if message_reasoning(t) else "text")] += 1
             if not args.measure_only:  # a count needs no rows: whole agent sessions would stay in memory
@@ -420,6 +445,9 @@ def main():
                "kept_by_target_kind": dict(kept_by_kind), "tool_names_top": tool_names.most_common(20),
                "sessions_by_redaction": dict(sessions), "kept_with_redacted_context": kept_ctx_redacted,
                "kept_sessions": len(kept_sessions), "kept_target_tools": kept_tools.most_common(20),
+               "kept_answer_languages": kept_langs.most_common(30),
+               "report_fields": {f: {"read": dict(seen_by[f].most_common()), "kept": dict(kept_by[f].most_common())}
+                                 for f in args.report_field},
                "kept_target_position": {"median_step": med(kept_steps), "p90_step": med(kept_steps, 0.9),
                                         "median_share": med(kept_shares), "p90_share": med(kept_shares, 0.9)},
                "redacted_step_text_chars": {"steps": len(rt), "with_200_plus": sum(x >= 200 for x in rt),
@@ -457,7 +485,13 @@ def main():
         fh.write(f"| train | {len(train)} |\n| val | {len(val)} |\n\nTarget kinds kept: {dict(kept_by_kind)}. "
                  f"Kept-row tokens: median {q(0.5)}, p90 {q(0.9)}, max {s[-1]}. Max {args.max_tokens} tokens through "
                  f"the chat template; EvalPlus decontamination {'on' if deco else 'off'}; held-out overlap check "
-                 f"{'on' if gate else 'off'}; dropped tool names {args.drop_tool_name}; row filters {args.where or 'none'}.\n")
+                 f"{'on' if gate else 'off'}; dropped tool names {args.drop_tool_name}; row filters {args.where or 'none'}; "
+                 f"answer code dropped for {sorted(drop_langs) or 'no language'}.\n\nKept steps by the languages of the "
+                 f"answer's code blocks: {dict(kept_langs.most_common(30)) or 'none'}.\n")
+        for f in args.report_field:
+            fh.write(f"\n## `{f}`: conversations read and steps kept\n\n| Value | Read | Kept |\n|---|---|---|\n")
+            for v, n in seen_by[f].most_common():
+                fh.write(f"| {v} | {n} | {kept_by[f][v]} |\n")
     print(f"wrote {len(train)} train / {len(val)} val rows -> {args.out}")
     return 0
 

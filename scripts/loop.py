@@ -438,11 +438,16 @@ class Loop(fr.Controller):
 
     def pool_rows(self, cfg):
         out = {}
+        seq = int(cfg["train"]["seq_len"])
         for src in cfg.get("sources") or []:
             if not reasoning_source(src):
                 continue
             info = self.read_json(os.path.join(self.pool_dir(src), "pool.json"))
             if info and info.get("spec") == spec_hash(src):
+                built = int(info.get("max_tokens", 8192))  # pools from before 21 Oct were all built at 8,192
+                if built > seq:  # its longer rows would be dropped in training: the pool doesn't fit this cap
+                    self.log(f"pool {src['name']} was built for rows up to {built} tokens, over seq_len {seq}: unused")
+                    continue
                 out[src["name"]] = info["train_rows"]
         return out
 
@@ -478,6 +483,11 @@ class Loop(fr.Controller):
                     cmd.append("--require-think")
                 for w in src.get("where") or []:
                     cmd += ["--where", w]
+                for lang in src.get("drop_answer_langs") or []:
+                    require_script("prepare_dataset.py", "--drop-answer-lang")
+                    cmd += ["--drop-answer-lang", lang]
+                for f in src.get("report_fields") or []:
+                    cmd += ["--report-field", f]
             elif src["kind"] == "messages":
                 cmd = [PY, "-u", os.path.join(ROOT, "scripts", "public_source.py"), "--dataset", src["dataset"],
                        "--files", src["files"], "--messages-field", src.get("messages_field", "messages"),
@@ -495,14 +505,15 @@ class Loop(fr.Controller):
                     cmd.append("--require-think")
                 for key, flag in (("respect_loss_mask", "--respect-loss-mask"), ("clean_context", "--clean-context")):
                     if src.get(key):
-                        require_script("public_source.py", flag)
                         cmd.append(flag)
                 if src.get("row_range"):
-                    require_script("public_source.py", "--row-range")
                     cmd += ["--row-range", str(src["row_range"])]
                 for rx in src.get("drop_target_regex") or []:
-                    require_script("public_source.py", "--drop-target-regex")
                     cmd += ["--drop-target-regex", rx]
+                for lang in src.get("drop_answer_langs") or []:
+                    cmd += ["--drop-answer-lang", lang]
+                for f in src.get("report_fields") or []:
+                    cmd += ["--report-field", f]
             else:
                 raise RuntimeError(f"source {src['name']}: unknown kind {src['kind']!r}")
             if not os.path.exists(E.DECONTAM_EXTRA):
@@ -515,6 +526,7 @@ class Loop(fr.Controller):
             n = self.count_lines(os.path.join(d, "train.jsonl"))
             min_rows = int(src.get("min_pool_rows", 500))
             write_json(os.path.join(d, "pool.json"), {"spec": spec_hash(src), "source": src, "train_rows": n,
+                                                      "max_tokens": seq,
                                                       "val_rows": self.count_lines(os.path.join(d, "val.jsonl")),
                                                       "usable": n >= min_rows,
                                                       "prepared": time.strftime("%Y-%m-%d %H:%M:%S")})
