@@ -59,7 +59,7 @@ CATALOG_COLS = ["task_id", "task_group_id", "attempt", "reward", "exception_type
                 "summarization_count", "turn_count", "output_tokens", "shard", "member_prefix", "execution_id"]
 EPISODE = re.compile(r"^agent/episode-(\d+)/(prompt\.txt|response\.txt|debug\.json)$")
 NEEDED = re.compile(r"^agent/(trajectory\.json|episode-\d+/(prompt\.txt|response\.txt|debug\.json))$")
-PYTHON = re.compile(r"(?<![\w.-])(python[0-9.]*|pip[0-9.]*|pytest|ipython)(?![\w-])|\w\.py\b")
+PYTHON = re.compile(r"(?:^|[^\w.-])(python[0-9.]*|pip[0-9.]*|pytest|ipython)(?=[^\w-]|$)|\w\.py\b")
 FEEDBACK = "Previous response had"
 MIN_FREE_RAM = 3 << 30
 LOCK = threading.Lock()
