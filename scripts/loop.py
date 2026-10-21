@@ -70,6 +70,7 @@ import copy
 import glob
 import hashlib
 import json
+import math
 import os
 import random
 import shutil
@@ -606,8 +607,12 @@ class Loop(fr.Controller):
 
     # ----------------------------------------------------------------------------------------- scoring
 
-    def evaluate_model(self, cfg, gguf, gate_seed, samples=True):
-        """Samples (optional), the gate at gate_seed and the non-coding check, on one server. Resumable."""
+    def evaluate_model(self, cfg, gguf, gate_seed, samples=True, early=None):
+        """Samples (optional), the gate at gate_seed and the non-coding check, on one server. Resumable.
+        early (a training round whose bug-fix loss path is closed; loop.yaml gate early_reject): answer the gate in a
+        fixed shuffled order, look after the first `fraction` of it, and if the candidate is not ahead of the best's
+        rows there by more than max_diff problems, stop: no more gate answers and no non-coding check (the round is
+        rejected; decision()). The look depends only on rows already written, so a resumed pass decides the same."""
         out = {}
         gate = E.read_jsonl(E.GATE_PATH)
         nc = E.read_jsonl(E.NONCODING_PATH)
@@ -637,16 +642,36 @@ class Loop(fr.Controller):
             chat = lambda u, m, seed, mt: ew.chat_request(u, m, seed, mt)  # noqa: E731
             check = self.gate_checker()
             gpath = os.path.join(self.rdir, f"gate.seed{gate_seed}.jsonl")
-            E.score(url, gate, gpath, gate_seed, g["max_tokens"], check, chat, ew.count_tokens, g["budget"],
-                    concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
-                    on_row=lambda r, n, tot, tps: (self.run.metric(stage="gate", round=self.rnum, done=n, of=tot,
-                                                                   tok_s=round(tps, 2)),
-                                                   self.status("evaluate", f"gate {n}/{tot}")))
             npath = os.path.join(self.rdir, "noncoding.jsonl")
-            for s in cfg["noncoding"]["seeds"]:
-                E.score(url, nc, npath, s, cfg["noncoding"]["max_tokens"], E.mc_check, chat, ew.count_tokens,
-                        g["budget"], concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
-                        on_row=lambda r, n, tot, tps, s=s: self.status("evaluate", f"non-coding seed {s}: {n}/{tot}"))
+
+            def gate_pass(order=None):
+                E.score(url, gate, gpath, gate_seed, g["max_tokens"], check, chat, ew.count_tokens, g["budget"],
+                        concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log, order=order,
+                        on_row=lambda r, n, tot, tps: (self.run.metric(stage="gate", round=self.rnum, done=n, of=tot,
+                                                                       tok_s=round(tps, 2)),
+                                                       self.status("evaluate", f"gate {n}/{tot}")))
+
+            order = None
+            if early:
+                order = E.shuffled_order(gate, f"early-reject:r{self.rnum}")
+                k = max(1, math.ceil(len(gate) * float(early["fraction"])))
+                gate_pass(order[:k])
+                cand = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
+                chk = E.early_reject_check(early["best_rows"], cand, [gate[i]["id"] for i in order[:k]],
+                                           int(early["max_diff"]))
+                out["early_check"] = chk
+                self.log(f"round {self.rnum}: early look after {chk['n']} of {len(gate)} gate problems: "
+                         f"{chk['diff']:+g} vs the best ({chk['wins']} wins / {chk['losses']} losses); "
+                         + ("not ahead by more than %d, so the pass stops here" % chk["max_diff"] if chk["stop"]
+                            else "the pass goes on"))
+                out["early_reject"] = chk["stop"]
+            if not out.get("early_reject"):
+                gate_pass(order)
+                for s in cfg["noncoding"]["seeds"]:
+                    E.score(url, nc, npath, s, cfg["noncoding"]["max_tokens"], E.mc_check, chat, ew.count_tokens,
+                            g["budget"], concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
+                            on_row=lambda r, n, tot, tps, s=s: self.status("evaluate",
+                                                                            f"non-coding seed {s}: {n}/{tot}"))
         finally:
             self.unserve()
         gate_rows = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
@@ -771,12 +796,33 @@ class Loop(fr.Controller):
         d["best_round"] = self.state["best"]["round"]
         if not d["gate"]["n"]:
             raise RuntimeError("no gate problems in common between the best and this round")
+        if ev.get("early_reject"):  # only part of the gate was answered: never a keep (evaluate_model)
+            chk = ev["early_check"]
+            d.update(keep=False, path=None, early_reject=chk)
+            d["reasons"].insert(0, f"stopped early: {chk['diff']:+g} vs the best after {chk['n']} of "
+                                   f"{len(E.read_jsonl(E.GATE_PATH))} gate problems ({chk['wins']} wins / "
+                                   f"{chk['losses']} losses), not ahead by more than {chk['max_diff']}, with the "
+                                   "bug-fix loss path closed")
         self.log(f"round {self.rnum}: {'KEEP (' + d['path'] + ' path)' if d['keep'] else 'reject'} - gate "
                  f"{d['gate']['best']:.4f} -> {d['gate']['candidate']:.4f} ({d['gate']['wins']} wins / "
                  f"{d['gate']['losses']} losses, p {d['gate']['p_one_sided']:.4f}); reasons: {d['reasons']}")
         return d
 
     # ----------------------------------------------------------------------------------------- training rounds
+
+    def early_reject_plan(self, cfg):
+        """The early look for this training round's gate pass (evaluate_model early), or None: off in loop.yaml, or
+        the bug-fix loss path is open (that path keeps on a gate score not lower, so it needs the whole pass)."""
+        er = (cfg.get("gate") or {}).get("early_reject")
+        if not er:
+            return None
+        loss = (self.done("sweloss") or {}).get("vs_best")
+        if E.loss_path_open(cfg["rules"], loss):
+            self.log(f"round {self.rnum}: bug-fix loss path open, so the whole gate is answered (no early look)")
+            return None
+        best = self.state["best"]
+        return {"fraction": float(er.get("fraction", 1 / 3)), "max_diff": int(er.get("max_diff", 0)),
+                "best_rows": [r for r in E.read_jsonl(best["gate_rows"]) if r["seed"] == best["gate_seed"]]}
 
     def next_round_number(self):
         nums = [r["round"] for r in self.state["rounds"]]
@@ -820,7 +866,7 @@ class Loop(fr.Controller):
         if cfg.get("swe_loss"):
             self.run_stage("sweloss", self.sweloss, cfg)
         ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
-            cfg, self.round_gguf(), self.state["best"]["gate_seed"])))
+            cfg, self.round_gguf(), self.state["best"]["gate_seed"], early=self.early_reject_plan(cfg))))
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
         conf = mile = None
         if d["keep"]:
