@@ -99,10 +99,10 @@ sources:
     kind: messages
     dataset: open-athena/recursive-task-synthesis-glm-5.3-rollouts   # CC-BY-4.0; Terminus-2 runs on Linux terminal
                                                        # tasks (shell, builds, sysadmin, containers, git, databases)
-    from_local: data/raw/glm53/conversations.jsonl     # scripts/glm_rollouts.py: test-passed runs (reward 1), at most
-    from_local_done: data/raw/glm53/conversations.done.json   # 2 per task, streamed from the 110 shards
+    from_local: data/raw/glm53/conversations.jsonl     # scripts/glm_rollouts.py: every test-passed run (reward 1) of
+    from_local_done: data/raw/glm53/conversations.done.json   # the whole download; picked = the best 2 of each task
     files: "*"
-    where: ["uses_python=false"]                       # runs whose commands run or write Python wait at share 0
+    where: ["uses_python=false", "picked=true"]        # runs whose commands run or write Python wait at share 0
     turns: each                                        # each step with reasoning is a row
     respect_loss_mask: true                            # replies Terminus-2 couldn't parse are context only
     pool_rows: 30000
@@ -156,6 +156,7 @@ sources:
     from_local: data/raw/glm53/conversations.jsonl
     from_local_done: data/raw/glm53/conversations.done.json
     files: "*"
+    where: ["uses_python=true", "picked=true"]
     turns: each
     respect_loss_mask: true
     pool_rows: 30000
