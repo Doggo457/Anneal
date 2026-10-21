@@ -136,7 +136,7 @@ Whatever quantisation and settings the calibration run picks are then fixed for 
 
 **Linux (Fedora 42 or Ubuntu 24.04 LTS).** One pool, no dedicated/shared split, 52–56GB for the GPU at full speed through GTT. The community benchmark tooling (the strix-halo toolboxes) targets it, and AMD's own Strix Halo optimisation page is written for it.
 
-Recommendation: Linux on the EVO-X2 for training, keep Windows on this PC. Thinking-mode runs at seq 4096 in 8-bit estimate at ~49GB, which is over the Windows dedicated pool and inside the Linux GTT budget, so the OS choice and the precision choice are the same decision. Inference-only work can happen on either. Write the decision in `Decisions-Log.md` when made.
+Recommendation: Linux on the EVO-X2 for training, keep Windows on this PC. Thinking-mode runs at seq 4096 in 8-bit estimate at ~49GB, which is over the Windows dedicated pool and inside the Linux GTT budget, so the OS choice and the precision choice are the same decision. Inference-only work can happen on either. Write the decision in `Decision-Log.md` when made.
 
 ## Storage discipline
 

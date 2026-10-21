@@ -7,12 +7,12 @@ Written 19 September 2026. Machine ordered, not yet arrived. Assumes roughly Oct
 Goal: arrive at day one with the reading done and provisional decisions made.
 
 - Read the LoRA and QLoRA papers properly. Skim Code Llama and Magicoder for how people build code training sets.
-- Shortlist a dataset and decide thinking mode. Write the leaning and the reasons in `Decisions-Log.md`.
+- Shortlist a dataset and decide thinking mode. Write the leaning and the reasons in `Decision-Log.md`.
 - Python environment on this PC. Run `scripts/prepare_dataset.py` on a small sample and read twenty real examples. You will learn more from that than from any paper about what "instruction data" is.
 - Draft the personal evaluation set: 20 to 50 realistic tasks (see `Dataset-Candidates.md`). Do this before seeing any model output so it isn't biased by what models find easy.
 - Run `scripts/memory_estimate.py --preset qwen3.8-27b` at 8-bit and 4-bit and keep the printout.
 
-Exit: `Decisions-Log.md` has a provisional dataset and OS choice with reasons.
+Exit: `Decision-Log.md` has a provisional dataset and OS choice with reasons.
 
 ## Phase 1: bring-up (weeks 1 to 3 after arrival)
 
@@ -92,4 +92,4 @@ Exit: one result the Phase 5 runs could not have produced, or a measured reason 
 
 - Monday: write one question this week should answer at the top of `experiments/LOG.md`.
 - Every run: YAML and LOG row before it starts, results row after.
-- Friday: one paragraph in `Decisions-Log.md`, what was learned and what changed.
+- Friday: one paragraph in `Decision-Log.md`, what was learned and what changed.

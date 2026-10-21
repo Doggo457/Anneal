@@ -47,3 +47,21 @@ __pycache__/
 
 # Outline build: generated figure page
 dissertation/build/fig1.html
+
+# Same file as dissertation/build/fig1.png (the build's input)
+dissertation/figure1-pipeline.png
+
+# Shared run inputs: one copy each is kept (results/README.md, "Shared inputs")
+results/baseloss-27b-plain/eval_text.txt
+results/baseloss-27b-plain-eager/eval_text.txt
+results/baseloss-27b-plain-silu/eval_text.txt
+results/baseloss-27b-plain-tile/eval_text.txt
+results/baseloss-27b-stock-assistant/eval_text.txt
+results/baseloss-27b-stock-assistant-nothink/eval_text.txt
+results/baseloss-27b-unsloth/eval_text.txt
+results/parity-llama-hf-2/tokens.json
+results/parity-llama-hf-3/tokens.json
+results/parity-llama-hf-4/tokens.json
+results/parity-evaltext-2048-b/tokens.json
+results/parity-evaltext-2048-c/tokens.json
+results/parity-lora-smoke-27b-stock-b/tokens.json
