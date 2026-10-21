@@ -541,17 +541,19 @@ class World:
 
 
 _POLYGLOT_SAVED = {}
+PRIVATE_CHECKS = []  # one entry per Loop.toolchain_check call that checked the sandbox's own storage folder
 
 
 def fake_polyglot(fingerprint, broken=()):
-    """Stand-ins for the sandbox parts of anneal/polyglot.py that Loop.toolchain_check uses: the fingerprint, and a
-    judge that gives each smoke program its expected verdict (or compile_error for the (lang, program) pairs in
-    broken). restore_polyglot puts the real ones back (tests/test_polyglot.py needs them)."""
+    """Stand-ins for the sandbox parts that Loop.toolchain_check uses: the storage-folder check (anneal/sandbox.py),
+    the fingerprint, and a judge that gives each smoke program its expected verdict (or compile_error for the (lang,
+    program) pairs in broken). restore_polyglot puts the real ones back (tests/test_polyglot.py needs them)."""
     from anneal import polyglot as P
     from anneal import polyglot_smoke as S
     if not _POLYGLOT_SAVED:
         _POLYGLOT_SAVED.update(fingerprint=P.toolchain_fingerprint, executor=P.SandboxExecutor,
-                               windows=P.Toolchain.__dict__["windows"], judge=P.judge, check=E.polyglot_check)
+                               windows=P.Toolchain.__dict__["windows"], judge=P.judge, check=E.polyglot_check,
+                               private=getattr(L.sandbox, "ensure_private_folder_closed", None))
     want = {(lang, p["code"]): (p["name"], p["expect"]) for lang in LANGS for p in S.programs(lang)}
 
     def judge(lang, code, cases, ex, tc, case_timeout_s=10.0, all_cases=False):
@@ -562,6 +564,7 @@ def fake_polyglot(fingerprint, broken=()):
     P.SandboxExecutor = lambda *a, **k: None
     P.Toolchain.windows = classmethod(lambda cls, root=None: None)
     P.judge = judge
+    L.sandbox.ensure_private_folder_closed = lambda log=print: PRIVATE_CHECKS.append(1) and False
 
 
 def restore_polyglot():
@@ -571,6 +574,10 @@ def restore_polyglot():
                                                                                             "judge"))
         P.Toolchain.windows = _POLYGLOT_SAVED["windows"]
         E.polyglot_check = _POLYGLOT_SAVED["check"]
+        if _POLYGLOT_SAVED["private"] is None:
+            del L.sandbox.ensure_private_folder_closed
+        else:
+            L.sandbox.ensure_private_folder_closed = _POLYGLOT_SAVED["private"]
         _POLYGLOT_SAVED.clear()
 
 
@@ -907,7 +914,8 @@ def _loss_path_and_guards(tmp):
     # a broken toolchain fails the gate pass instead of scoring every answer as a compile error
     fake_polyglot(lambda: w.fingerprint, broken={("rust", "sum64")})
     st = json.load(open(os.path.join(run_dir, "state.json")))
-    fake = types.SimpleNamespace(state=st, save=lambda: None)
+    fake = types.SimpleNamespace(state=st, save=lambda: None, log=lambda *a: None)
+    checks = len(PRIVATE_CHECKS)
     try:
         L.Loop.toolchain_check(fake, six)
         raise AssertionError("a broken toolchain passed the smoke check")
@@ -916,6 +924,28 @@ def _loss_path_and_guards(tmp):
     fake_polyglot(lambda: w.fingerprint)
     assert L.Loop.toolchain_check(fake, six) == "tc-1"
     assert L.Loop.toolchain_check(fake, [{"kind": "cc", "id": "cc/valid/0"}]) is None  # the old gate: nothing to build
+    assert len(PRIVATE_CHECKS) == checks + 2  # the sandbox's storage folder is checked before each six-language pass
+
+
+def test_private_folder_guard():
+    """sandbox.ensure_private_folder_closed (its source, run here with stand-ins, since the module needs Windows):
+    nothing to do when closed; closes an open folder; raises if it stays open."""
+    import ast
+    src = open(os.path.join(ROOT, "anneal", "sandbox.py"), encoding="utf-8").read()
+    fn = next(n for n in ast.parse(src).body if isinstance(n, ast.FunctionDef) and n.name == "ensure_private_folder_closed")
+
+    class SandboxUnavailable(RuntimeError):
+        pass
+    for seq, want in (([False], False), ([True, False], True), ([True, True], "raise")):
+        it, closed = iter(seq), []
+        ns = {"private_folder_writable": lambda timeout_s=30.0: next(it), "SandboxUnavailable": SandboxUnavailable,
+              "close_private_folder": lambda: closed.append(1), "profile_folder": lambda: "AC"}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "sandbox.py", "exec"), ns)
+        try:
+            got = ns["ensure_private_folder_closed"](log=lambda *a: None)
+        except SandboxUnavailable:
+            got = "raise"
+        assert got == want and len(closed) == (0 if want is False else 1), (seq, got, closed)
 
 
 # ============================================================================================ command lines and sources

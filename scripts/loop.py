@@ -645,13 +645,15 @@ class Loop(fr.Controller):
                           "restore it (rounds compare against scores on the old one)")
 
     def toolchain_check(self, gate):
-        """Before a gate pass with write or fix items: the toolchains are the ones every earlier round was judged with
-        (anneal/polyglot.py toolchain_fingerprint), and two smoke programs per language (one right, one wrong) get
-        their verdicts in the sandbox, and one program that tries to leave the sandbox is stopped. CPU only, under a
-        minute. Returns the fingerprint (None for the old gate)."""
+        """Before a gate pass with write or fix items: the code sandbox can't write to its own storage folder (closed
+        again if it can), the toolchains are the ones every earlier round was judged with (anneal/polyglot.py
+        toolchain_fingerprint), and two smoke programs per language (one right, one wrong) get their verdicts in the
+        sandbox, and one program that tries to leave the sandbox is stopped. CPU only, under a minute. Returns the
+        fingerprint (None for the old gate)."""
         langs = sorted({it["lang"] for it in gate if it.get("kind") in GATE_KINDS})
         if not langs:
             return None
+        sandbox.ensure_private_folder_closed(self.log)
         from anneal import polyglot as P
         from anneal import polyglot_smoke as S
         fp = P.toolchain_fingerprint()

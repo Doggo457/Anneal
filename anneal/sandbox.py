@@ -320,12 +320,62 @@ def setup(verbose=True):
     if verbose:
         print(f"container SID {sid}; icacls interpreter tree: rc {out.returncode} {out.stdout.strip()}"
               f"{out.stderr.strip()}")
-    folder = profile_folder()
-    if os.path.isdir(folder):
-        out = subprocess.run(["icacls", folder, "/remove:g", f"*{sid}", "/T", "/Q"], capture_output=True, text=True)
-        if verbose:
-            print(f"icacls remove container grant on {folder}: rc {out.returncode} {out.stdout.strip()}")
+    out = close_private_folder()
+    if verbose and out is not None:
+        print(f"icacls remove container grant on {profile_folder()}: rc {out.returncode} {out.stdout.strip()}")
     return sid
+
+
+def close_private_folder(name=CONTAINER_NAME):
+    """Remove every grant for the container on its own storage folder tree (...\\Packages\\<name>, with AC inside),
+    setup()'s last step on its own. None if the folder doesn't exist."""
+    _, sid = container_sid(name)
+    folder = profile_folder(name)
+    if not os.path.isdir(folder):
+        return None
+    return subprocess.run(["icacls", folder, "/remove:g", f"*{sid}", "/T", "/Q"], capture_output=True, text=True)
+
+
+_PRIVATE_PROBE = """import os
+d = os.environ.get("LOCALAPPDATA", "")
+if not d:
+    print("NOENV")
+else:
+    p = os.path.join(d, "anneal_probe.txt")
+    try:
+        open(p, "w").close()
+    except OSError:
+        print("CLOSED")
+    else:
+        os.remove(p)
+        print("OPEN")
+"""
+
+
+def private_folder_writable(timeout_s=30.0):
+    """True if a program in the code sandbox can create a file in the container's own storage folder, where Windows
+    points its LOCALAPPDATA, TEMP and TMP (...\\Packages\\anneal.codesandbox\\AC). setup() closes it, but it has been
+    found open again (21 Oct 2026: an explicit full-control grant for the container on an AC folder created after
+    setup), so the loop checks it before every gate pass."""
+    r = run_python(_PRIVATE_PROBE, timeout_s=timeout_s)
+    out = r.stdout.decode("utf-8", "replace").strip()
+    if out not in ("OPEN", "CLOSED"):
+        raise SandboxUnavailable(f"private-folder probe: rc {r.returncode}, output {out[:200]!r}, "
+                                 f"stderr {r.stderr[-300:].decode('utf-8', 'replace')!r}")
+    return out == "OPEN"
+
+
+def ensure_private_folder_closed(log=print):
+    """Close the code sandbox's own storage folder if a sandboxed program can write there; raise if it stays open.
+    True if it had to be closed."""
+    if not private_folder_writable():
+        return False
+    out = close_private_folder()
+    log(f"the code sandbox could write to its own storage folder {profile_folder()}; removed its grants there "
+        f"(icacls rc {out.returncode if out is not None else None})")
+    if private_folder_writable():
+        raise SandboxUnavailable(f"{profile_folder()}: still writable from the code sandbox after icacls /remove:g")
+    return True
 
 
 def available():
@@ -633,5 +683,7 @@ if __name__ == "__main__":
     import sys
     if "--setup" in sys.argv:
         setup()
+    if "--close-private-folder" in sys.argv:
+        print("closed it" if ensure_private_folder_closed() else "already closed")
     r = run(["-c", "print(1+1)"], timeout_s=20)
     print(r)
