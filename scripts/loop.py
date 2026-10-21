@@ -125,6 +125,10 @@ GUARDS = {"bfcl": {"label": "BFCL Java and JavaScript tool calls", "module": bfc
                    "build": "scripts/build_guards.py --bfcl"}}
 GUARD_PROBE_ROWS = 8
 MAX_ROUND_FAILURES = 3
+# The gate server's slots (answers decoded side by side, loop.yaml gate.slots; 21 Oct 2026). Rows scored before the
+# loop recorded them came from 4 slots. PROMPT_MARGIN: the chat template's tokens around a prompt.
+LEGACY_GATE_SERVER = {"slots": 4, "ctx": llama.SCORING_CTX}
+PROMPT_MARGIN = 64
 
 
 class Waiting(Exception):
@@ -468,6 +472,20 @@ def safe_delete(round_dir, rel_paths, log=print):
     return freed
 
 
+def gate_slots(cfg):
+    return int((cfg.get("gate") or {}).get("slots", 4))
+
+
+def gate_concurrency(cfg):
+    """Requests in flight on the gate server: one per slot unless loop.yaml says otherwise."""
+    return int((cfg.get("gate") or {}).get("concurrency", gate_slots(cfg)))
+
+
+def gate_server(cfg):
+    """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server)."""
+    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX}
+
+
 def guard_names(cfg):
     """The no-worse checks after EvalPlus that loop.yaml switches on (guards), in GUARDS order."""
     g = cfg.get("guards") or {}
@@ -553,7 +571,8 @@ class Loop(fr.Controller):
 
     def gate_flags(self, cfg, lora=None):
         g = cfg["gate"]
-        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS)
+        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS,
+                                   slots=gate_slots(cfg))
 
     def run_stage(self, name, fn, *a):
         if self.done(name) is not None:
@@ -674,6 +693,8 @@ class Loop(fr.Controller):
         self.serve(self.gate_flags(cfg, lora=gguf), "evaluate")
         try:
             url = self.server.url
+            self.slot_room_check(url, cfg, [("gate", gate, g["max_tokens"]),
+                                            ("non-coding", nc, cfg["noncoding"]["max_tokens"])])
             if samples:
                 sp = os.path.join(self.rdir, "samples.json")
                 ss = self.read_json(sp)
@@ -697,7 +718,7 @@ class Loop(fr.Controller):
 
             def gate_pass(order=None):
                 E.score(url, gate, gpath, gate_seed, g["max_tokens"], check, chat, ew.count_tokens, g["budget"],
-                        concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log, order=order,
+                        concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log, order=order,
                         on_row=lambda r, n, tot, tps: (self.run.metric(stage="gate", round=self.rnum, done=n, of=tot,
                                                                        tok_s=round(tps, 2)),
                                                        self.status("evaluate", f"gate {n}/{tot}")))
@@ -720,7 +741,7 @@ class Loop(fr.Controller):
                 gate_pass(order)
                 for s in cfg["noncoding"]["seeds"]:
                     E.score(url, nc, npath, s, cfg["noncoding"]["max_tokens"], E.mc_check, chat, ew.count_tokens,
-                            g["budget"], concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
+                            g["budget"], concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
                             on_row=lambda r, n, tot, tps, s=s: self.status("evaluate",
                                                                             f"non-coding seed {s}: {n}/{tot}"))
         finally:
@@ -755,6 +776,41 @@ class Loop(fr.Controller):
         elif known != sha:
             raise Waiting(f"data/eval/gate.jsonl changed since the rounds were scored on it ({known} -> {sha}); "
                           "restore it (rounds compare against scores on the old one)")
+
+    def require_gate_server(self, cfg):
+        """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
+        slot count (loop.yaml gate.slots, 21 Oct 2026): answers differ a little with it, so a change part way would
+        compare rounds scored differently. Recorded at the first check; rows scored before it was recorded came from
+        4 slots. Raises Waiting on a change."""
+        want = gate_server(cfg)
+        known = self.state.get("gate_server")
+        if known is None:
+            scored = [p for p in glob.glob(os.path.join(self.dir, "rounds", "r*", "gate.seed*.jsonl"))
+                      if E.read_jsonl(p)]
+            known = dict(LEGACY_GATE_SERVER) if scored else want
+            if known == want:
+                self.state["gate_server"] = known
+                self.save()
+        if known != want:
+            raise Waiting(f"experiments/loop.yaml asks for {want['slots']} gate server slots, but the rounds so far "
+                          f"were scored with {known['slots']}: set gate.slots back to {known['slots']}, or set every "
+                          "round's gate answers aside to score again from round 0")
+
+    def slot_room_check(self, url, cfg, sets):
+        """Each gate server slot holds llama.SCORING_CTX / slots tokens: the longest prompts of each set (label,
+        items, max_tokens) with a whole answer must fit, or long answers would be cut short. Raises Waiting."""
+        room = llama.SCORING_CTX // gate_slots(cfg)
+        for label, items, max_tokens in sets:
+            texts = sorted((it["prompt"] if "prompt" in it else E.mc_message(it) for it in items), key=len,
+                           reverse=True)[:3]
+            if not texts:
+                continue
+            need = max(ew.count_tokens(url, t) for t in texts) + PROMPT_MARGIN + int(max_tokens)
+            if need > room:
+                raise Waiting(f"the longest {label} prompt with a whole answer needs {need} tokens, over the {room} "
+                              f"each of the {gate_slots(cfg)} gate server slots holds: lower gate.slots in "
+                              "experiments/loop.yaml")
+            self.log(f"{label}: the longest prompt with a whole answer needs {need} of the {room} tokens a slot holds")
 
     def toolchain_check(self, gate):
         """Before a gate pass with write or fix items: the code sandbox can't write to its own storage folder (closed
@@ -1259,7 +1315,7 @@ class Loop(fr.Controller):
             path = os.path.join(self.rdir, f"gate.seed{seed}.jsonl")
             rows = E.score(self.server.url, gate, path, seed, g["max_tokens"], self.gate_checker(),
                            lambda u, m, s, mt: ew.chat_request(u, m, s, mt), ew.count_tokens, g["budget"],
-                           concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
+                           concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
                            on_row=lambda r, n, tot, tps: self.status("confirm", f"gate {n}/{tot}"))
         finally:
             self.unserve()
@@ -1349,7 +1405,7 @@ class Loop(fr.Controller):
         self.serve(self.gate_flags(cfg, lora=gguf), name)
         try:
             return E.score(self.server.url, items, path, seed, g["max_tokens"], None, None, ew.count_tokens,
-                           g["budget"], concurrency=g.get("concurrency", 4), stop_check=self.stopping, log=self.log,
+                           g["budget"], concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
                            request=lambda u, it, sd, mt: mod.request(u, it, sd, mt, ew.SAMPLING), judge=mod.judge,
                            on_row=on_row)
         finally:
@@ -1682,10 +1738,12 @@ def main():
             run.write_status(state="finished", detail="pools prepared")
             return 0
         c.require_gate()
+        c.require_gate_server(cfg)
         c.reference_rounds(cfg)
         while not args.max_rounds or rounds_run < args.max_rounds:
             cfg = load_config(args.config)  # re-read every round: check-ins append recipes and sources
             c.require_gate()
+            c.require_gate_server(cfg)
             for kind, h in HELDOUT.items():
                 if cfg.get(h["key"]) and not os.path.exists(c.heldout_file(cfg, kind)):
                     raise Waiting(f"the {h['label']} are not built: run {h['build']}")
