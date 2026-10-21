@@ -519,8 +519,8 @@ class World:
         if script in ("prepare_dataset.py", "public_source.py"):
             out = arg("--out")
             name = os.path.basename(out)
-            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120, "openswe_v4flash": 60,
-                 "tachibana4_v4pro_nopy": 60, "banaxi_v4pro_nopy": 60}[name]
+            n = {"tachibana4_v4pro": 720, "banaxi_v4pro": 20, "math_v4_aops": 120, "openswe_v4flash_12k": 60,
+                 "tachibana4_v4pro_nopy_12k": 60, "banaxi_v4pro_nopy_12k": 60}[name]
             E.write_jsonl(os.path.join(out, "train.jsonl"),
                           [{"messages": [{"role": "user", "content": f"{name} q{i}"},
                                          {"role": "assistant", "content": f"<think>t</think> a{i}"}]} for i in range(n)])
@@ -1041,6 +1041,8 @@ def parsed_args(script, argv):
 
 
 def check_child_commands(calls):
+    # pools are built at the training row cap, so no pooled row is too long to train on
+    cap = int(L.load_config()["train"]["seq_len"])
     seen, live = set(), set()
     for script, cmd in calls:
         assert cmd[1] == "-u", cmd
@@ -1050,11 +1052,11 @@ def check_child_commands(calls):
             continue
         ns = parsed_args(script, cmd[3:])
         if script == "public_source.py":
-            assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == 8192, ns
+            assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == cap, ns
         if script == "prepare_dataset.py":
-            assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == 8192, ns
+            assert ns.tokenizer and ns.decontaminate and ns.decontaminate_gate and ns.max_tokens == cap, ns
         # the live mix (21 Oct): V4-Flash bug-fix steps outside Python; V4-Pro answers that don't write Python
-        if script == "public_source.py" and ns.out.endswith("openswe_v4flash"):
+        if script == "public_source.py" and ns.out.endswith("openswe_v4flash_12k"):
             assert ns.where == ["resolved=1", "language!=python"] and ns.report_field == ["language"], ns
             assert ns.turns == "each" and ns.require_think and ns.revision, ns
             # repositories in bucket 0 of 20 never train: they are the held-out bug-fix steps
@@ -1062,7 +1064,7 @@ def check_child_commands(calls):
             live.add(ns.out)
         if script == "val_loss.py" and ns.val_file.endswith("swe_heldout.jsonl"):
             assert ns.seq_len == 8192 and ns.max_rows == 200, ns
-        if script == "prepare_dataset.py" and ns.out.endswith("_nopy"):
+        if script == "prepare_dataset.py" and ns.out.endswith("_nopy_12k"):
             assert ns.drop_answer_lang == ["python"] and ns.require_think, ns
             live.add(ns.out)
         if script == "train_longrun.py":

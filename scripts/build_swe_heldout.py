@@ -33,13 +33,16 @@ WORK = os.path.join(ROOT, "data", "eval", "swe_heldout_src")
 
 
 def source_args(cfg):
-    """The openswe_v4flash source of experiments/loop.yaml as public_source.py arguments for its held-out side: every
+    """The Open-SWE source of experiments/loop.yaml (the one source with a holdout; openswe_v4flash, renamed
+    openswe_v4flash_12k when the row cap went to 12,288) as public_source.py arguments for its held-out side: every
     filter the pool uses (scripts/loop.py public_source_args), only the repositories the pool leaves out, one step
-    per run, rows up to 8,192 tokens."""
+    per run, rows up to 8,192 tokens (the set was built at that length and never changes)."""
     import loop as L
-    src = next(s for s in cfg["sources"] if s["name"] == "openswe_v4flash")
-    if not src.get("holdout"):
-        raise SystemExit("experiments/loop.yaml: openswe_v4flash has no holdout {col, mod}")
+    held = [s for s in cfg["sources"] if s.get("holdout")]
+    if len(held) != 1 or not held[0]["name"].startswith("openswe_v4flash"):
+        raise SystemExit(f"experiments/loop.yaml: expected one openswe_v4flash source with a holdout, found "
+                         f"{[s['name'] for s in held]}")
+    src = held[0]
     return L.public_source_args(src, side="heldout") + ["--max-steps-per-conversation", "1", "--max-tokens", "8192"], src
 
 
