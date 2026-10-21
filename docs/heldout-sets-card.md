@@ -71,6 +71,32 @@ Kept runs by language: TypeScript 69, JavaScript 45, Go 32, Java 28, Rust 18, PH
 Tokens per step: min 2512, median 5688, p90 7793, max 8183; 2,907,375 in all. 177 is every held-out run with a step
 that passes the filters, so the set is smaller than the 200 planned.
 
+## Held-out terminal steps (the loss rule)
+
+Built 2026-10-21 22:18:43 (UK time) by `scripts/build_swe_heldout.py --set terminal` from
+`open-athena/recursive-task-synthesis-glm-5.3-rollouts` @ `dd6f34cbcb8596112c6d12bed53b5a576973b8f7` (GLM-5.3
+Terminus-2 runs on Linux terminal tasks, CC-BY-4.0), with every filter of the glm53_all_nopy_12k pool (test-passed
+runs, the teacher's reasoning, parsed replies only, near-duplicate steps dropped, decontaminated against EvalPlus and
+the gate, rows up to 12,288 tokens), but only task groups whose id hashes to bucket 0 of 20. No round ever trains on
+those task groups. The six-language gate can't see terminal skill, so a round can also be kept on a lower loss here.
+
+| Step | Count |
+|---|---|
+| test-passed runs in the dataset | 12124 |
+| runs that run or write Python | 6584 |
+| non-Python runs in the task groups rounds train on | 5240 |
+| held-out non-Python runs | 300 |
+| beyond the best 3 runs of a task | 80 |
+| their steps (candidate rows) | 1551 |
+| replies Terminus-2 couldn't parse (context only) | 18 |
+| near duplicate | 5 |
+| over 12,288 tokens | 549 |
+| more than one step from the same run | 759 |
+| kept (one step per run) | 220 |
+| in the set (a seeded draw) | 200 |
+
+Tokens per step of the 220 kept, before the draw: min 1056, median 4772, p90 10591, max 12288; 5,262,263 in all.
+
 ## Non-coding check
 
 Built 2026-10-19 by scripts/build_evalsets.py and unchanged: `TIGER-Lab/MMLU-Pro` @
