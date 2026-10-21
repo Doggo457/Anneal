@@ -253,6 +253,11 @@ def toolchain_fingerprint(root=None):
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
+# Node resolves the real path of its main script and of --require files by walking every folder up to the drive
+# root; the code sandbox's AppContainer may not lstat C:\ (EPERM), so these keep the paths as given.
+NODE_PATH_FLAGS = ["--preserve-symlinks", "--preserve-symlinks-main"]
+
+
 def build_plan(lang, code, tc, wd_path):
     """(files {name: text}, build steps [(image, args, env)], run (image, args, env)) for one program. Paths in
     args are relative to the work folder, which is the current folder of every step."""
@@ -280,18 +285,21 @@ def build_plan(lang, code, tc, wd_path):
         if tc.goroot:
             env["GOROOT"] = tc.goroot
         env["GOCACHE"] = tc.gocache or os.path.join(wd_path, "gocache")
-        return {"main.go": code}, [(tc.go, ["build", "-o", "main.exe", "main.go"], env)], (exe, [], {})
+        # -p 4: a cold build cache compiles the standard library package by package, in parallel; more compilers at
+        # once than the build job's process limit fail with "Not enough quota"
+        return {"main.go": code}, [(tc.go, ["build", "-p", "4", "-o", "main.exe", "main.go"], env)], (exe, [], {})
     if lang == "rust":
         args = ["--edition", "2021", "-O", "-C", "debuginfo=0", "-o", "main.exe", "main.rs"]
         if WINDOWS:
-            args[4:4] = ["-C", f"link-args=-Wl,--stack,{STACK_BYTES}"]
+            args[5:5] = ["-C", f"link-args=-Wl,--stack,{STACK_BYTES}"]  # after "-C debuginfo=0"
         return {"main.rs": code}, [(tc.rustc, args, common)], (exe, [], {})
     if lang == "javascript":
         # .js with ES module syntax runs as a module (Node 24 detects it); CommonJS otherwise
-        return {"main.js": code}, [], (tc.node, ["--require", stdin_shim, "main.js"], {})
+        return {"main.js": code}, [], (tc.node, NODE_PATH_FLAGS + ["--require", stdin_shim, "main.js"], {})
     if lang == "typescript":
-        build = [(tc.node, [os.path.join(tc.shims, "ts_build.js"), tc.typescript, "main.ts", "main.js"], common)]
-        return {"main.ts": code}, build, (tc.node, ["--require", stdin_shim, "main.js"], {})
+        ts_build = [os.path.join(tc.shims, "ts_build.js"), tc.typescript, "main.ts", "main.js"]
+        build = [(tc.node, NODE_PATH_FLAGS + ts_build, common)]
+        return {"main.ts": code}, build, (tc.node, NODE_PATH_FLAGS + ["--require", stdin_shim, "main.js"], {})
     raise ValueError(f"unknown language {lang!r}")
 
 
