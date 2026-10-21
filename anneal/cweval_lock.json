@@ -1,0 +1,931 @@
+{
+ "source": {
+  "repo": "Co1lin/CWEval",
+  "commit": "e9a2a124c8c53679b6d8d27adfd2f6c40e7576d7",
+  "licence": "Apache-2.0",
+  "url": "https://raw.githubusercontent.com/Co1lin/CWEval/{commit}/{path}",
+  "files": {
+   "LICENSE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+   "go.mod": "505c30288d6d5b13662aebae7e5e9b3852ca2facce2228982e6856a8a159b576",
+   "go.sum": "d557be3508ec1c27b3b8d6904d50620495ba63caac798289758b7c67a9239a46",
+   "benchmark/pytest.ini": "545c43b97b6b14331edfaedf8d6fb99562c36c47afae762626120e677b1ae60e",
+   "cweval/commons.py": "7dde102128db9a0642b31b05f2aaa1155ef0a65bdc80d46fcd0aab966a927adf",
+   "cweval/ppt/__init__.py": "85114932435a3f522a0b8523491aa6a5e48ca6908b2410d3a3d3b8eaec1c80c8",
+   "cweval/generate.py": "02d1ac46a031df8127ee0733c4aca00f81fae53999d8472399ddbb01a9081e1a",
+   "cweval/evaluate.py": "2a70209572b06f1ef7cc09520a4f3bdc462684b6e48c2f62781b38e7b0e3b2db",
+   "cweval/run_tests.py": "bb6f40c2fd38f7e39041a43de17c0fae5864aacadb5921096a22bfd018d5919b",
+   "benchmark/core/go/cwe_020_0_go_task.go": "3457e416fad3bb0e2cf4326c6a517b5bfeb7ba1cd5d1f76398d7ad11e580ceb8",
+   "benchmark/core/go/cwe_020_0_go_unsafe.go": "58808799a023f2b789630f5da4b77128bbbb544c4125d5087d4e1682e94d67a1",
+   "benchmark/core/go/cwe_020_0_go_test.py": "0d7c09291969ac653d412c846d5a8eed05f2441e99ff6788879d2cbac3fb7a3d",
+   "benchmark/core/go/cwe_022_0_go_task.go": "4374985d4749a5f9c7ca6919b0e895061e807077e1be14177775bdd3d6384aa0",
+   "benchmark/core/go/cwe_022_0_go_unsafe.go": "6209825b7a26ee4ae34ad70090e777dc8825fc1149c326a81fbc60a0b8ff5879",
+   "benchmark/core/go/cwe_022_0_go_test.py": "9fe435d55e11badf5552eb7a3448d7f739f5df1a0ca85aa6664d2ef22fe0c12e",
+   "benchmark/core/go/cwe_022_2_go_task.go": "f2d8f751264bf712a8926f5ae91c9f1849e978130bfee1f06b1b281ad9457afd",
+   "benchmark/core/go/cwe_022_2_go_unsafe.go": "567dec758326fe59035f1e1c7b01b7a1894c084b694b099b6f2651fbd15ee5ef",
+   "benchmark/core/go/cwe_022_2_go_test.py": "ca669114c3186086d47e9be1a08ca4f153231ec7319df13ba896da60be8123df",
+   "benchmark/core/go/cwe_079_0_go_task.go": "b1da3efa65f06fa7dedf8e1c8d7bfdb654afbf141a83380b4d6396500ec8a7e2",
+   "benchmark/core/go/cwe_079_0_go_unsafe.go": "8ff53e4489ec68f7f2fa14726c1b1653d8300229c00ffe9055c3a4b27f8a897a",
+   "benchmark/core/go/cwe_079_0_go_test.py": "ab75b15c49b57818f95d37da7ed1f9f5228dbb5b0d13e2a25a028bb006bc4ac9",
+   "benchmark/core/go/cwe_113_0_go_task.go": "01a971b689d00dd3805c64ca0d234e9c2da35bd1cc804524dc523cafb0d29374",
+   "benchmark/core/go/cwe_113_0_go_unsafe.go": "e0cee522edf5f0dcb80ed85d706181ee0eff134fc54f21eb7200e33e5ee276e3",
+   "benchmark/core/go/cwe_113_0_go_test.py": "ff04ec7ce339755e2760cba1e3de3d4dc9c723809c2c85fc24fbfd5da579ca8e",
+   "benchmark/core/go/cwe_117_0_go_task.go": "8eee41a7355f1b8872a99287b7cc9cf8a431904f7d4109f0e5543597ac671b24",
+   "benchmark/core/go/cwe_117_0_go_unsafe.go": "ecc459a5b42b55b8d1baf9a084341f328bb469f6f20050d01e19f21c5a999ec7",
+   "benchmark/core/go/cwe_117_0_go_test.py": "b111d8c4dad235191740723ef243a181188806bbdde7947343f2616a33e4d6b0",
+   "benchmark/core/go/cwe_326_0_go_task.go": "d7c77f65a470a4807593b3f23dc21bbd572e506d893a2d6e47db339a8e83edaf",
+   "benchmark/core/go/cwe_326_0_go_unsafe.go": "bfc4ba6737bee7a51d1f21e73098376421fa32b05d636765678bc857a3b31943",
+   "benchmark/core/go/cwe_326_0_go_test.py": "a19a29e8c69b50fa773da203a90005aab986967ad3e8e2da9e12911d58b976cd",
+   "benchmark/core/go/cwe_326_1_go_task.go": "59fcc8051882e6f7ff6e04b144bb6beede4bfdcb66d722b016eb03234dc2d725",
+   "benchmark/core/go/cwe_326_1_go_unsafe.go": "73843fef8da68d991874ce0bfac84e55e265cc6ddcf8980ef54902c918197bec",
+   "benchmark/core/go/cwe_326_1_go_test.py": "975932f367af6535c77d88ad449bfcb0819ad69b07a7396b4553b68906804967",
+   "benchmark/core/go/cwe_327_0_go_task.go": "ad571925b494b5a6ecee03d066b78658b2a1b0bc315fc28abeddd828770b7898",
+   "benchmark/core/go/cwe_327_0_go_unsafe.go": "7dd275f0d2d532388c8cd7491131932c7e6104b5a0b0be17fd1b98713d3a2320",
+   "benchmark/core/go/cwe_327_0_go_test.py": "2da7689ddae87703b1a2723f7ea46407f4c8e694394b81e0a3a9d29b8a3f12cd",
+   "benchmark/core/go/cwe_327_2_go_task.go": "fa7266309dc1dcccee276b89247674e905f56aaf310dcd02311d26dd843ad53c",
+   "benchmark/core/go/cwe_327_2_go_unsafe.go": "e1da32bbe6f113acd1626bfd3c6f4c3de21caeee7cbe9c1a157ee5a58a94331f",
+   "benchmark/core/go/cwe_327_2_go_test.py": "597d900d3c362befcf5b39fbb9e69f08649c6f6330effc7fa65c853c0bb41a83",
+   "benchmark/core/go/cwe_329_0_go_task.go": "33010c8ca87c762fd031f4b13a2527c58086ca178641174230d20bd5f9ea290f",
+   "benchmark/core/go/cwe_329_0_go_unsafe.go": "2eebd7184167dd306e5a85a252b1a8b1c7926700663d5b4b26e7c02226360856",
+   "benchmark/core/go/cwe_329_0_go_test.py": "a974005cc0aa5cab731dddec49c732d48f12ca7399ef628ff76ef025c55e2511",
+   "benchmark/core/go/cwe_347_0_go_task.go": "09e124d665a805261010fe449fbc69bec8adf8c1675c8bf505bfa33304df74cb",
+   "benchmark/core/go/cwe_347_0_go_unsafe.go": "d8de2b6cb57d9769a876783e31f3606005538f96810af5146a15a72d70802505",
+   "benchmark/core/go/cwe_347_0_go_test.py": "66d75c34dc8320a38bfe069c51862848f0af3a0472691178593f838c32a53ebe",
+   "benchmark/core/go/cwe_643_0_go_task.go": "bc9d0ff827adf7cf1101121a988ed34eb894c5a9a0694759e3dce5743d474252",
+   "benchmark/core/go/cwe_643_0_go_unsafe.go": "e470ad0af35abcff65d3d9d82b8a6f8318c92fe35ae51617451fade146e1f1b6",
+   "benchmark/core/go/cwe_643_0_go_test.py": "eeb3d5573931d6665547d01f7165d3c7f681fb76a1be91292f77e16a897b075b",
+   "benchmark/core/go/cwe_760_0_go_task.go": "a3bdee9cc0e4eed236346772491093f652872f42d3eec37be5ece86b0ac9f8f2",
+   "benchmark/core/go/cwe_760_0_go_unsafe.go": "098d027b49084fa926b86caaec12b7d2e4773107fa93f6513a5a5980b3a318d0",
+   "benchmark/core/go/cwe_760_0_go_test.py": "71d35f26e669dd8ede089a6bf942aa44ca950d8fce0414a6aac6bc83cc115757",
+   "benchmark/core/go/cwe_918_0_go_task.go": "3f1445ec833a684656c5c9242fee7d1c720a515d753f86ee254492483e807a36",
+   "benchmark/core/go/cwe_918_0_go_unsafe.go": "9354561344a983a11cd4b3724d63e7caa5319e61c743b276b051fc21ef1010b8",
+   "benchmark/core/go/cwe_918_0_go_test.py": "8152cbdd8b26ac75473960488f71c33b39ee7c60ad56d31a6f8de26476cbf8b7",
+   "benchmark/core/go/cwe_918_1_go_task.go": "2430efe6786c000bae07c0f5a595d59121e587465baddf2781646224fa0dcd38",
+   "benchmark/core/go/cwe_918_1_go_unsafe.go": "d617d5854e24bf48db35ea4c86a73d60f630137d931a260adc3adacff0ed7fb6",
+   "benchmark/core/go/cwe_918_1_go_test.py": "f13d133d4990ab3c770d25843ce495005ed66f1e26243f4fba2199122d3a0da9",
+   "benchmark/core/js/cwe_020_0_js_task.js": "089cc89d266063f4eda286bd2e6d08f902603e38d5ee0bfbf566386380822470",
+   "benchmark/core/js/cwe_020_0_js_unsafe.js": "c70d70d3563b6dfd5e4982bd8c5cb804f39104b1ac28bfbed497e7b1f3b9c78f",
+   "benchmark/core/js/cwe_020_0_js_test.py": "722db4002e5cf92041bc522754db6f1fa9048339518185a3ac377e6ecbbaf2bd",
+   "benchmark/core/js/cwe_022_0_js_task.js": "f3f1bdf7803f216a72cf5d2052973f178864a999bfe44478e37a62a860de12e2",
+   "benchmark/core/js/cwe_022_0_js_unsafe.js": "268d1be40d59cac0be86c2a15c96224af9097972da51588a8fbbfbc11a2067e1",
+   "benchmark/core/js/cwe_022_0_js_test.py": "f0216ccab4b78c0b6931f392c7ecf25107c3803ca678a9ac83731ae817e50117",
+   "benchmark/core/js/cwe_079_0_js_task.js": "06ed7a7e54078ec19c1a6c4483650e091f281cb1e1ca9af9082052abcb6d2c7c",
+   "benchmark/core/js/cwe_079_0_js_unsafe.js": "848d79ae8fb76fa19a3ef5874564abedc1100b318c1e226193ff1ac658886a63",
+   "benchmark/core/js/cwe_079_0_js_test.py": "52427f49da0cda1cd2964078d7066af1050942aceb2fe2e08d89660b3c97a789",
+   "benchmark/core/js/cwe_095_0_js_task.js": "65e14a96ac7a77f911770ca3c922e9a68bfac32fbf383f76fe7613d5ed41930c",
+   "benchmark/core/js/cwe_095_0_js_unsafe.js": "472ae6e05550ebea2cc2b6e8406b7c3528c055b93030f6aaa8882ca085853349",
+   "benchmark/core/js/cwe_095_0_js_test.py": "0f2f84acfaff39304f01b25a86dd8d5a881a4a1880eed6948d3afffd52748a4a",
+   "benchmark/core/js/cwe_113_0_js_task.js": "db112ae0ecd715d5643a0ce5d0c19112e0039286dfb382fd2e57e4120d2dac24",
+   "benchmark/core/js/cwe_113_0_js_unsafe.js": "34b8f7e750821211f321825c2f75f6f0b8bf9706d8fc5627ed464beec7ee9bd6",
+   "benchmark/core/js/cwe_113_0_js_test.py": "bb8ab59274ab6ce181431500ae18f1cf976dd9cfb225d8597077348075027380",
+   "benchmark/core/js/cwe_117_0_js_task.js": "f4c4384318862d8b17c3286ba06381f0b0a7c02e2616062b2e446b57d2e6d80d",
+   "benchmark/core/js/cwe_117_0_js_unsafe.js": "b6b7b1b24c19cc82ccf9814c2b7956ed7f7e3e9ccf6f44ef16d586660a8ddb94",
+   "benchmark/core/js/cwe_117_0_js_test.py": "f8a1486ec9f77c5b8dcc813ee3ae38153e62b730d51f870a4ad57ce883487f7d",
+   "benchmark/core/js/cwe_1333_0_js_task.js": "4b961984972c7c6ba41a2b0065b04aba4c078522dfe36ace6d449a407b0c2447",
+   "benchmark/core/js/cwe_1333_0_js_unsafe.js": "1b0e9de9a8777724b60eb9e42885ae25bef19db4fc8873ad8a6c03b2945fe6ba",
+   "benchmark/core/js/cwe_1333_0_js_test.py": "dc1cacc1dd73860c98679d815579a07e4e949524f7dbe72a1c082c3a46167df1",
+   "benchmark/core/js/cwe_326_1_js_task.js": "777b325176aa5964949ed5d7de9aa41e8d7f85f262188b066f6060582fe69135",
+   "benchmark/core/js/cwe_326_1_js_unsafe.js": "a5e7e5c42bb534001d4dd6a1309563b11d885d0344538d23cf4fcef4e9f126d8",
+   "benchmark/core/js/cwe_326_1_js_test.py": "c3e462fcb61843e2f351d76a40ad196b7872b53bed3a00bee48a3e1b38f3862f",
+   "benchmark/core/js/cwe_327_0_js_task.js": "9dbf56b61c7cc05a3aba7fabdccd2efabf141e52df22ff02a5d148604be9a667",
+   "benchmark/core/js/cwe_327_0_js_unsafe.js": "26490f6b143b3d1a59b41792ac8f029ffc171ba69f9a4aa77423a8888975e3ce",
+   "benchmark/core/js/cwe_327_0_js_test.py": "49e745974cd0cc4679b9dc2cf989ba550fd4be44b6ba3f3dd954af0f96a76894",
+   "benchmark/core/js/cwe_327_1_js_task.js": "2343be0d6c618d624a367475c07a67b44a21ddef63f129d69fd07b076e09e669",
+   "benchmark/core/js/cwe_327_1_js_unsafe.js": "71cdaf106efc2d7246776815d26c961d7d2fd2666ed549a1bbbefd07642b79fb",
+   "benchmark/core/js/cwe_327_1_js_test.py": "80a8eebb49a244cb9adaa8ac8bb4a2290b4b0b10e2d309ec6ea56593791a07fd",
+   "benchmark/core/js/cwe_327_2_js_task.js": "2c38d5f80e8004d8e32d4d68a8a03b82e37da001c9fbe8c9e89e447dbe048b83",
+   "benchmark/core/js/cwe_327_2_js_unsafe.js": "89b87f5c12ef0c141fe85a74663ea8bc96ab29b405cdd4b228e2144200756f03",
+   "benchmark/core/js/cwe_327_2_js_test.py": "a20631888dea70343798f0fd45f915d43409eb035cf013ade00459cb4765668f",
+   "benchmark/core/js/cwe_329_0_js_task.js": "1b7f620095d9ed250d7deef85292c80c0f9ac29c61cae05a869fd475a7ba3aae",
+   "benchmark/core/js/cwe_329_0_js_unsafe.js": "2490249031e909785b8ae628c9bf82e5d5499c13f236b0e94f1254662f1a0206",
+   "benchmark/core/js/cwe_329_0_js_test.py": "87b919ed843912e6a5ca2b835abab421e81175cc9b56e5f5b4a957c1ff18b1e1",
+   "benchmark/core/js/cwe_347_0_js_task.js": "dcdcbb35e5a3e3cbdb52631378b0bdae6889a72eea7f5b9df66e525605438e93",
+   "benchmark/core/js/cwe_347_0_js_unsafe.js": "b19528476baf199e101c43b088577faba3ed79eb2a48d34a05fb630028ca6ff6",
+   "benchmark/core/js/cwe_347_0_js_test.py": "858fcf06a557ba5803a01394c34f49066f27e316c91780257123d0b4d3494457",
+   "benchmark/core/js/cwe_400_0_js_task.js": "79f75523fc52fed058ed411afff049475d99c6537d5ce0f09c39810de007634c",
+   "benchmark/core/js/cwe_400_0_js_unsafe.js": "940a462a2efe31f2a8ca9bd09072c1fc24a600577c0fa1ff1df7689364185618",
+   "benchmark/core/js/cwe_400_0_js_test.py": "9267937da9e03e0bd8b012cb7d9150348b98dd784c1c80d493a6e1269d71f331",
+   "benchmark/core/js/cwe_643_0_js_task.js": "c155674e339f38c926ccdf7690f0111ea96dae123df1ea90e037f24041348706",
+   "benchmark/core/js/cwe_643_0_js_unsafe.js": "b536baa491346e56f9cb4f4eb862b7e4bcd1261e39949f26aed91e9097b52545",
+   "benchmark/core/js/cwe_643_0_js_test.py": "11ba1bc6722d319f80343c507a79bd0b8ceb7c18712f90ca050f810e9ed17cac",
+   "benchmark/core/js/cwe_760_0_js_task.js": "d8125b303af96713197ea4cb5275a04ca73e7485171144ad89e881cd11fc1328",
+   "benchmark/core/js/cwe_760_0_js_unsafe.js": "c98e6a7f9433eb54fd0e51da371c903565891fd26c073261d0fc422da193453d",
+   "benchmark/core/js/cwe_760_0_js_test.py": "50fa7e60f15b1e079e9505d5f9f7b270f3d08833e4d30650c2556c3a240ce41c",
+   "benchmark/core/js/cwe_918_0_js_task.js": "b8cf488050e08bc4ec71a6442fee3bd679e25d78acd17720004cd8251dbc88ef",
+   "benchmark/core/js/cwe_918_0_js_unsafe.js": "a7e6456eaf020a1c2e60bd73f9bdbfa192e068665962b6cb518b476189c85e89",
+   "benchmark/core/js/cwe_918_0_js_test.py": "8894244eed7218cd1a1f708885bcfc422b3349820870b73621d7216c34949405",
+   "benchmark/core/js/cwe_918_1_js_task.js": "9148ff6557497360e9e30291f60ac3937c86cbf9d9f967f62bc9326715341609",
+   "benchmark/core/js/cwe_918_1_js_unsafe.js": "8c3124956a76fb11191686639fdb04462bc8376f26180c31a7274ea52f6f4375",
+   "benchmark/core/js/cwe_918_1_js_test.py": "602d05dc1edbc2524d9c9e798bfe7a885086f277b9b5ea628bcb158c711f647d"
+  }
+ },
+ "go": [
+  {
+   "module": "github.com/ChrisTrenkamp/goxpath",
+   "version": "v0.0.0-20210404020558-97928f7e12b6",
+   "mod": "4d217e0a81223a397f37b8ddfa35150cb829276e0d545257b46fd84435cc9637",
+   "zip": "b6c411d1248bc950a5b07fffceabae8fe745913a09834c8b3acdd2a2c9dff0eb",
+   "licence": "MIT",
+   "for": "tasks"
+  },
+  {
+   "module": "github.com/golang-jwt/jwt/v5",
+   "version": "v5.2.1",
+   "mod": "3ea9a4810104feb6bfc26ee805e7e427a018ee497065e7b1b117c0131e4ee30a",
+   "zip": "ad5cdc5c6bac562a2b890e96347208ffdb30a940243b558465ab7de90913a180",
+   "licence": "MIT",
+   "for": "tasks"
+  },
+  {
+   "module": "github.com/mattn/go-sqlite3",
+   "version": "v1.14.24",
+   "mod": "bc9235ee6e4e60243f1e7dcacf0caa4d480afcdf06ed78e481fd127e9e3119df",
+   "zip": null,
+   "licence": "MIT",
+   "for": "tasks"
+  },
+  {
+   "module": "golang.org/x/crypto",
+   "version": "v0.29.0",
+   "mod": "93d942906f56eb4f288ec9699e6b3603eb1912b63295568f0d5b70ccb3f4ed8b",
+   "zip": "477b082749a2743a2098b28acf02a651f5f46b0dbb03b1cf580d499a3629718d",
+   "licence": "BSD-3-Clause",
+   "for": "tasks"
+  },
+  {
+   "module": "golang.org/x/net",
+   "version": "v0.21.0",
+   "mod": "0eef3e9fe7f668be5b4d24c8f1251c6c502d1168953c8081ac9dc3f399c64f06",
+   "zip": "4e9cb4bded1957e73fe709741c29879eab05047617c9b14b7237314ff9024913",
+   "licence": "BSD-3-Clause",
+   "for": "tasks"
+  },
+  {
+   "module": "golang.org/x/text",
+   "version": "v0.20.0",
+   "mod": "fe1f1a0e8a33c1f5d211850cee49b1a6988163ee15854e72c1d10502e4c2202b",
+   "zip": "73b665d0df2cca11badc259586ccb0ba1101637d669d7abaafb27b90b7c028af",
+   "licence": "BSD-3-Clause",
+   "for": "tasks"
+  },
+  {
+   "module": "golang.org/x/tools",
+   "version": "v0.37.0",
+   "mod": "dbd04ecd296d4dab2706766adfcdd2d52c27345613d631682f8fa4371af54aef",
+   "zip": "429b25131b8564084cce722043b12dd8e3ff5231ac6cd63a405b4f3e6fd69204",
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "golang.org/x/mod",
+   "version": "v0.28.0",
+   "mod": "dfcf96d66b86f2a3527cbfb7a194970713c51a8b50f7daa71f2b7ec6837d6236",
+   "zip": "1033fb59927549a16c7000369f6d534b652fcd201746a7d6d8cfd521e1ad85e2",
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "golang.org/x/sync",
+   "version": "v0.17.0",
+   "mod": "d333c54b74af8a0b8ec748d37c5972d27b9d088b9e45c8bf5c3ab520d2113090",
+   "zip": "c5dcfd32e223edc7a003a51a166a81759a4beccb9a91eb85385b4d67a1c820c6",
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "golang.org/x/telemetry",
+   "version": "v0.0.0-20250908211612-aef8a434d053",
+   "mod": "a41d5e07d9e2dee47cb81a88376347afe33aee5e240f4eeb50767cd6516c6e80",
+   "zip": "ae079c5f1321c91facaf2e5aaaa23eeed74228446654ce41c1494b29760a9b4e",
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "github.com/google/go-cmp",
+   "version": "v0.6.0",
+   "mod": "e7c7669d4a1dd589ba3e024ba27f43f293db611fe075ce20d7b884370d63febd",
+   "zip": null,
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "github.com/yuin/goldmark",
+   "version": "v1.4.13",
+   "mod": "ee7fe4466203a01d3ac19adc134cdec99bc6de71992c28f3dd9a74480bff0603",
+   "zip": null,
+   "licence": "MIT",
+   "for": "goimports"
+  },
+  {
+   "module": "golang.org/x/net",
+   "version": "v0.44.0",
+   "mod": "b64ec375b819035044e5091608f3ee4ad3ba7a7c2aa6e6e1ebe52b13675ab821",
+   "zip": null,
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  },
+  {
+   "module": "golang.org/x/sys",
+   "version": "v0.36.0",
+   "mod": "f411814d83a96e86781b1dee41c125b9504da5422dba37cc1d63b016ae39cfe2",
+   "zip": null,
+   "licence": "BSD-3-Clause",
+   "for": "goimports"
+  }
+ ],
+ "npm": [
+  {
+   "path": "node_modules/@asamuzakjp/css-color",
+   "version": "3.2.0",
+   "url": "https://registry.npmjs.org/@asamuzakjp/css-color/-/css-color-3.2.0.tgz",
+   "sha256": "b65bd3770651faf0b081aad7c2b4b7d4ec575f466c4cc881313e4a3ed0a38759",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@csstools/color-helpers",
+   "version": "5.1.0",
+   "url": "https://registry.npmjs.org/@csstools/color-helpers/-/color-helpers-5.1.0.tgz",
+   "sha256": "b95d5f63268d0d884b2c5caeecba9f08b81ff1ca4d75923c12673afca080d7aa",
+   "licence": "MIT-0"
+  },
+  {
+   "path": "node_modules/@csstools/css-calc",
+   "version": "2.1.4",
+   "url": "https://registry.npmjs.org/@csstools/css-calc/-/css-calc-2.1.4.tgz",
+   "sha256": "2971adbbee310145798494965c74d2228bcede97b2f9dd369f8d5e6909340236",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@csstools/css-color-parser",
+   "version": "3.1.0",
+   "url": "https://registry.npmjs.org/@csstools/css-color-parser/-/css-color-parser-3.1.0.tgz",
+   "sha256": "492d6a310a91735b721329f89e3e99304ef6e87c98df70c20eed3a97a64220da",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@csstools/css-parser-algorithms",
+   "version": "3.0.5",
+   "url": "https://registry.npmjs.org/@csstools/css-parser-algorithms/-/css-parser-algorithms-3.0.5.tgz",
+   "sha256": "11418fddd5e05444e4b24705d5313e5e26ba9b7a07c9099062fdab3206653e7e",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@csstools/css-tokenizer",
+   "version": "3.0.4",
+   "url": "https://registry.npmjs.org/@csstools/css-tokenizer/-/css-tokenizer-3.0.4.tgz",
+   "sha256": "0a92d4d311b7acf320aadcb632acde29569711f8eadcca9f0e980f3af93f4339",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@epic-web/invariant",
+   "version": "1.0.0",
+   "url": "https://registry.npmjs.org/@epic-web/invariant/-/invariant-1.0.0.tgz",
+   "sha256": "6f8058357a552982fc190386b1792bde9d52802022f885e2404cd7fc1ce9862d",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/@phc/format",
+   "version": "1.0.0",
+   "url": "https://registry.npmjs.org/@phc/format/-/format-1.0.0.tgz",
+   "sha256": "65827c4358f78068ed3fd2b27acde1cb0fe818e84cc2ab9f0e8da63e1502bcc1",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/agent-base",
+   "version": "7.1.4",
+   "url": "https://registry.npmjs.org/agent-base/-/agent-base-7.1.4.tgz",
+   "sha256": "7dd4a61668a9a4e8d4e903f1a254f94d53dafd3f316f2b9b597c5ad8c79cb57e",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/argon2",
+   "version": "0.44.0",
+   "url": "https://registry.npmjs.org/argon2/-/argon2-0.44.0.tgz",
+   "sha256": "f1e3f7b6621ca468d33b5be8a844c260d7de502e7205be0b298a01e8473e226e",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/argparse",
+   "version": "2.0.1",
+   "url": "https://registry.npmjs.org/argparse/-/argparse-2.0.1.tgz",
+   "sha256": "27903847fc8215e6fc5a33e81490f7baba66403f8aade33771b988cca097728c",
+   "licence": "Python-2.0"
+  },
+  {
+   "path": "node_modules/asn1",
+   "version": "0.2.6",
+   "url": "https://registry.npmjs.org/asn1/-/asn1-0.2.6.tgz",
+   "sha256": "17ca6fff19e3f681ae310bda39262b9968b57bee3771a730818772d83a8fe250",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/buffer-equal-constant-time",
+   "version": "1.0.1",
+   "url": "https://registry.npmjs.org/buffer-equal-constant-time/-/buffer-equal-constant-time-1.0.1.tgz",
+   "sha256": "8f455159e342103e7854ed6a4cc73edbab144d857917c88edefea862f09fe75a",
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "path": "node_modules/cross-env",
+   "version": "10.0.0",
+   "url": "https://registry.npmjs.org/cross-env/-/cross-env-10.0.0.tgz",
+   "sha256": "234310f6f0d09c909c2a2af1d79dee55703c36f210dc4cab4be149bae43319ff",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/cross-spawn",
+   "version": "7.0.6",
+   "url": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz",
+   "sha256": "188c320cdc413adfec03098fda72af7a9b02152ba13d3a8f87f172d93ced38ea",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/cssstyle",
+   "version": "4.6.0",
+   "url": "https://registry.npmjs.org/cssstyle/-/cssstyle-4.6.0.tgz",
+   "sha256": "c3698bac3074af4449a75345eabc31d5b43fdeb8267cffe0b2907c196fde5929",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/data-urls",
+   "version": "5.0.0",
+   "url": "https://registry.npmjs.org/data-urls/-/data-urls-5.0.0.tgz",
+   "sha256": "207c4648a8378e07c1816b15ed67b966d250dd099c488f4b2918ea9fad54f52a",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/debug",
+   "version": "4.4.1",
+   "url": "https://registry.npmjs.org/debug/-/debug-4.4.1.tgz",
+   "sha256": "265ca7c6f05089b9c148f849ca778f4af71ffa11172863644ed1ae6e1ed3dace",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/decimal.js",
+   "version": "10.6.0",
+   "url": "https://registry.npmjs.org/decimal.js/-/decimal.js-10.6.0.tgz",
+   "sha256": "433210122e8149972f64054c54b0ce0872e5f15a3c5835aab57ff1a8e6d071b1",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/ecdsa-sig-formatter",
+   "version": "1.0.11",
+   "url": "https://registry.npmjs.org/ecdsa-sig-formatter/-/ecdsa-sig-formatter-1.0.11.tgz",
+   "sha256": "487cb94dff2414772c3bb648a5e4e41c03cbbcc64263d08a56e36d735fc848fe",
+   "licence": "Apache-2.0"
+  },
+  {
+   "path": "node_modules/entities",
+   "version": "6.0.1",
+   "url": "https://registry.npmjs.org/entities/-/entities-6.0.1.tgz",
+   "sha256": "a4de957ab0852f6c91eae59a6000ced5a25a04f0b6e1c3062fbad732a6b5479d",
+   "licence": "BSD-2-Clause"
+  },
+  {
+   "path": "node_modules/escape-html",
+   "version": "1.0.3",
+   "url": "https://registry.npmjs.org/escape-html/-/escape-html-1.0.3.tgz",
+   "sha256": "a101155c3cbdfb1e4f98f2f83c8b5e392db6accfa606df0eba8b87a5762b0366",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/escape-string-regexp",
+   "version": "5.0.0",
+   "url": "https://registry.npmjs.org/escape-string-regexp/-/escape-string-regexp-5.0.0.tgz",
+   "sha256": "c8b662afe8aa2b852ecc27d766e584a502f8351fbbd890611f2509bf083d28e6",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/html-encoding-sniffer",
+   "version": "4.0.0",
+   "url": "https://registry.npmjs.org/html-encoding-sniffer/-/html-encoding-sniffer-4.0.0.tgz",
+   "sha256": "11c97fd835c46da51a793b369dbee136da1bdfd41417a17b93f9b53fad77d4cb",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/http-proxy-agent",
+   "version": "7.0.2",
+   "url": "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz",
+   "sha256": "785f73faa92bfba8d61da20bf59325ab2b3dca1bbc0bbac523406f404d8a6f02",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/https-proxy-agent",
+   "version": "7.0.6",
+   "url": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
+   "sha256": "960f89e8e5240882f64249d04a538421dd39d62ffacc138544647cc3251bc0e0",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/iconv-lite",
+   "version": "0.6.3",
+   "url": "https://registry.npmjs.org/iconv-lite/-/iconv-lite-0.6.3.tgz",
+   "sha256": "7127ec148f994f031eff658a50dc0629f6010775a8202213b0526ec5e30fc8f4",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/is-potential-custom-element-name",
+   "version": "1.0.1",
+   "url": "https://registry.npmjs.org/is-potential-custom-element-name/-/is-potential-custom-element-name-1.0.1.tgz",
+   "sha256": "b6e425bb136422af133754814046a640c1573349755c63130c424abcee398621",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/isexe",
+   "version": "2.0.0",
+   "url": "https://registry.npmjs.org/isexe/-/isexe-2.0.0.tgz",
+   "sha256": "47cfe872e088e28c53b736fef305324b57cc1cfc9f72a9b0f769f92731cb8359",
+   "licence": "ISC"
+  },
+  {
+   "path": "node_modules/js-yaml",
+   "version": "4.1.0",
+   "url": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.1.0.tgz",
+   "sha256": "0dae332559cf22b21c26ea70e732afd8303ff99412f9c3d9d209faa8882cf2ca",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/jsdom",
+   "version": "26.1.0",
+   "url": "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz",
+   "sha256": "5619b4779f68dec3ae076a97ccc5b8e4aeceaef7d4821ebcfcc1eb124b192000",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/jsonwebtoken",
+   "version": "9.0.2",
+   "url": "https://registry.npmjs.org/jsonwebtoken/-/jsonwebtoken-9.0.2.tgz",
+   "sha256": "9af68fd915ca9555035e5f0f3b6061e2e887d3bf56f39433ae0aa107bc8dde85",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/jwa",
+   "version": "1.4.2",
+   "url": "https://registry.npmjs.org/jwa/-/jwa-1.4.2.tgz",
+   "sha256": "231abed0583cc9a78a7184a61af4cee86bade0d0a6ac4d70718c815a91ef5c3c",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/jws",
+   "version": "3.2.2",
+   "url": "https://registry.npmjs.org/jws/-/jws-3.2.2.tgz",
+   "sha256": "ec1a3bce54b538d30f7b8da90fd8cd43f43a54dbf65d98fc2be63901d2f6ed51",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash",
+   "version": "4.17.21",
+   "url": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
+   "sha256": "6a087ac9e5702a0c9d60fbcd48696012646ec8df1491dea472b150e79fcaf804",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.includes",
+   "version": "4.3.0",
+   "url": "https://registry.npmjs.org/lodash.includes/-/lodash.includes-4.3.0.tgz",
+   "sha256": "ad1fb3f7aa3c53d2aa7b5fd006507404d71fcccb341162b6423645d997c808d7",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.isboolean",
+   "version": "3.0.3",
+   "url": "https://registry.npmjs.org/lodash.isboolean/-/lodash.isboolean-3.0.3.tgz",
+   "sha256": "11a52014f5d33bdc0b58a79fd10355b8209aeb1b2c57f2c13b7395ca57dcee9d",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.isinteger",
+   "version": "4.0.4",
+   "url": "https://registry.npmjs.org/lodash.isinteger/-/lodash.isinteger-4.0.4.tgz",
+   "sha256": "7885443a78d4400274bf42a5929f6aaab23ca5d7e303deee76fe702ffe873b7d",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.isnumber",
+   "version": "3.0.3",
+   "url": "https://registry.npmjs.org/lodash.isnumber/-/lodash.isnumber-3.0.3.tgz",
+   "sha256": "73e5167e1e06f496cbad0f96afda0590302c0867f9840730e2600edf03c29b63",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.isplainobject",
+   "version": "4.0.6",
+   "url": "https://registry.npmjs.org/lodash.isplainobject/-/lodash.isplainobject-4.0.6.tgz",
+   "sha256": "986420e1ce139727af84069d7b88912facac64e5ca1281efd9f55b228fad72d0",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.isstring",
+   "version": "4.0.1",
+   "url": "https://registry.npmjs.org/lodash.isstring/-/lodash.isstring-4.0.1.tgz",
+   "sha256": "45fd48aeca41f05f44fd413471f254c472e1e7a811ab84ea41448d2e7155cd5f",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lodash.once",
+   "version": "4.1.1",
+   "url": "https://registry.npmjs.org/lodash.once/-/lodash.once-4.1.1.tgz",
+   "sha256": "0d67808f6f1d4c35c65e0e34c19e0a2de02727616cc8e276535f3eae98ce23b5",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/lru-cache",
+   "version": "10.4.3",
+   "url": "https://registry.npmjs.org/lru-cache/-/lru-cache-10.4.3.tgz",
+   "sha256": "0ea17b527beaaaac504ea7a7aaab90db0581dc9a2e117bfbdba44789f15496ed",
+   "licence": "ISC"
+  },
+  {
+   "path": "node_modules/ms",
+   "version": "2.1.3",
+   "url": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+   "sha256": "f6616e15e530ed552f9daa2d3ce71963947c6bc7c98c9b64fd3e673fd02622c6",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/node-addon-api",
+   "version": "8.5.0",
+   "url": "https://registry.npmjs.org/node-addon-api/-/node-addon-api-8.5.0.tgz",
+   "sha256": "d12f07c8162283b6213551855f1da8dac162331374629830b5e640f130f07910",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/node-gyp-build",
+   "version": "4.8.4",
+   "url": "https://registry.npmjs.org/node-gyp-build/-/node-gyp-build-4.8.4.tgz",
+   "sha256": "940450fb4158bddc23ae156432a67338a4d7ab6a585b639c61b3b0a14d2bac24",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/node-rsa",
+   "version": "1.1.1",
+   "url": "https://registry.npmjs.org/node-rsa/-/node-rsa-1.1.1.tgz",
+   "sha256": "30631a1cd6c76dab6c755c178cc3d0af8a693a30827c6b1266ec0557e758957d",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/nwsapi",
+   "version": "2.2.22",
+   "url": "https://registry.npmjs.org/nwsapi/-/nwsapi-2.2.22.tgz",
+   "sha256": "517467ca38950048bc84478b05087a90118d44d0dd4f69a9f2360481d500afa0",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/parse5",
+   "version": "7.3.0",
+   "url": "https://registry.npmjs.org/parse5/-/parse5-7.3.0.tgz",
+   "sha256": "9316ca7af41da9e85071b62b9605aa0a6aaeb0463f833c29e7a331e7898f0420",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/path-key",
+   "version": "3.1.1",
+   "url": "https://registry.npmjs.org/path-key/-/path-key-3.1.1.tgz",
+   "sha256": "4b8999acb914830edcd3c5b8fec632b32c6bc759ac3edc86336f5a9e08ba7b92",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/punycode",
+   "version": "2.3.1",
+   "url": "https://registry.npmjs.org/punycode/-/punycode-2.3.1.tgz",
+   "sha256": "e4ce59f9fbac44349abab87279ab658f6b4614916bec5e088ae3be9323e193bb",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/rrweb-cssom",
+   "version": "0.8.0",
+   "url": "https://registry.npmjs.org/rrweb-cssom/-/rrweb-cssom-0.8.0.tgz",
+   "sha256": "6b975deba1561fbc7c6ce1e3982e354e958a34cc36097491083b472c8a922370",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/safe-buffer",
+   "version": "5.2.1",
+   "url": "https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.2.1.tgz",
+   "sha256": "5d181804516c4a693a384272a7bd0e42d17e0d4b301ccfbe408669ccafdcb3e8",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/safer-buffer",
+   "version": "2.1.2",
+   "url": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
+   "sha256": "78812f65ae3b98071ce1c9bacbe0666f4220d0b2753c2a11530eb27df440a3b3",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/saxes",
+   "version": "6.0.0",
+   "url": "https://registry.npmjs.org/saxes/-/saxes-6.0.0.tgz",
+   "sha256": "1cdf52fbbe1ccbd175c365d2b8e63f46e590e74aff23fa6a44a6ec51522e96db",
+   "licence": "ISC"
+  },
+  {
+   "path": "node_modules/semver",
+   "version": "7.7.2",
+   "url": "https://registry.npmjs.org/semver/-/semver-7.7.2.tgz",
+   "sha256": "290a29b26644b16ad172c21797c5523788b537a7784ffd175607c4812653504e",
+   "licence": "ISC"
+  },
+  {
+   "path": "node_modules/shebang-command",
+   "version": "2.0.0",
+   "url": "https://registry.npmjs.org/shebang-command/-/shebang-command-2.0.0.tgz",
+   "sha256": "9acba5bd18a51e9cdf5898380e4df63f803e1844def64ae1a46f88cff86d556e",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/shebang-regex",
+   "version": "3.0.0",
+   "url": "https://registry.npmjs.org/shebang-regex/-/shebang-regex-3.0.0.tgz",
+   "sha256": "fedbabaa6db26c6be0183f82777dfa852d59a62f8885de93bd32ebc28758958f",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/symbol-tree",
+   "version": "3.2.4",
+   "url": "https://registry.npmjs.org/symbol-tree/-/symbol-tree-3.2.4.tgz",
+   "sha256": "8a69700a00d00bdbbadf116f94398cc37f38ecdda559dc6220e17eb977b94abc",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/tldts",
+   "version": "6.1.86",
+   "url": "https://registry.npmjs.org/tldts/-/tldts-6.1.86.tgz",
+   "sha256": "80d90fdad94b1c9f2415bb64829a00a5d577f3b2ce97c566e5b080d5b420ccc6",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/tldts-core",
+   "version": "6.1.86",
+   "url": "https://registry.npmjs.org/tldts-core/-/tldts-core-6.1.86.tgz",
+   "sha256": "f75448d0aa827cc18c8344c8e0f703a68d977f294d81f16d73e8126a0a9bfe84",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/tough-cookie",
+   "version": "5.1.2",
+   "url": "https://registry.npmjs.org/tough-cookie/-/tough-cookie-5.1.2.tgz",
+   "sha256": "73baea52c8cdd34f301126e7b4e47c19ec43e228d49c9db5230b1dc3039ac43b",
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "path": "node_modules/tr46",
+   "version": "5.1.1",
+   "url": "https://registry.npmjs.org/tr46/-/tr46-5.1.1.tgz",
+   "sha256": "62dbfa0e7959c7bf972b157afcbedd7432116891c374b7de3f78224bd7e4d7e6",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/w3c-xmlserializer",
+   "version": "5.0.0",
+   "url": "https://registry.npmjs.org/w3c-xmlserializer/-/w3c-xmlserializer-5.0.0.tgz",
+   "sha256": "7fea0c33bb82228932e677a4c7aaaad45bdb04541d8517e40700355cbefebd03",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/webidl-conversions",
+   "version": "7.0.0",
+   "url": "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz",
+   "sha256": "fd4d12781018d99e2cc68cf2d997215a0b301761ab26ac2a171116960419e454",
+   "licence": "BSD-2-Clause"
+  },
+  {
+   "path": "node_modules/whatwg-encoding",
+   "version": "3.1.1",
+   "url": "https://registry.npmjs.org/whatwg-encoding/-/whatwg-encoding-3.1.1.tgz",
+   "sha256": "86295e4f0565d4d0de730180dcc32ccf8c4a001831d361a1493b4e9a25e5c8d3",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/whatwg-mimetype",
+   "version": "4.0.0",
+   "url": "https://registry.npmjs.org/whatwg-mimetype/-/whatwg-mimetype-4.0.0.tgz",
+   "sha256": "d1618a0f551c0b9d770f9ae15b54313956713d1430298e59dfc4f5d4b4bb5183",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/whatwg-url",
+   "version": "14.2.0",
+   "url": "https://registry.npmjs.org/whatwg-url/-/whatwg-url-14.2.0.tgz",
+   "sha256": "b26982a9855af10a5cd8fedbdba5ac73db4b8eab1f81528104f585039fac863e",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/which",
+   "version": "2.0.2",
+   "url": "https://registry.npmjs.org/which/-/which-2.0.2.tgz",
+   "sha256": "a13adf5fddeb769655edce551e81fbb11904b9c9be76d95e41da8c4c499d4edc",
+   "licence": "ISC"
+  },
+  {
+   "path": "node_modules/ws",
+   "version": "8.18.3",
+   "url": "https://registry.npmjs.org/ws/-/ws-8.18.3.tgz",
+   "sha256": "424be604c8e7926fc29a1f067bf2dac256af3bcea62fe30395018bbaf8a9be2a",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/xml-name-validator",
+   "version": "5.0.0",
+   "url": "https://registry.npmjs.org/xml-name-validator/-/xml-name-validator-5.0.0.tgz",
+   "sha256": "3d40b1428dae32a6328ea20543abaafb72101a2652a95f43ec8757fef213f0be",
+   "licence": "Apache-2.0"
+  },
+  {
+   "path": "node_modules/xmlchars",
+   "version": "2.2.0",
+   "url": "https://registry.npmjs.org/xmlchars/-/xmlchars-2.2.0.tgz",
+   "sha256": "bdf900298963e4bd95b76aa95e96d29f05687e6ae662d617061778267b576da8",
+   "licence": "MIT"
+  },
+  {
+   "path": "node_modules/xpath",
+   "version": "0.0.34",
+   "url": "https://registry.npmjs.org/xpath/-/xpath-0.0.34.tgz",
+   "sha256": "b3dd3659f8a311adf1b83ed3d9e0c5b1e7b4605f981c0f718e89a4c56149b33b",
+   "licence": "MIT"
+  }
+ ],
+ "recheck": {
+  "linux": {
+   "url": "https://registry.npmjs.org/recheck-linux-x64/-/recheck-linux-x64-4.5.0-beta.6.tgz",
+   "sha256": "820b54f7826fc7710abd3a4817e4287e47ccda04c3be92ad2da6a098f6053f98",
+   "member": "package/recheck",
+   "licence": "MIT",
+   "version": "4.5.0-beta.6"
+  },
+  "windows": {
+   "url": "https://registry.npmjs.org/recheck-windows-x64/-/recheck-windows-x64-4.5.0-beta.6.tgz",
+   "sha256": "7400360cf8e6719db2b8770e95b4e4939e03bb65fb0d15c1e58b8305347531e5",
+   "member": "package/recheck.exe",
+   "licence": "MIT",
+   "version": "4.5.0-beta.6"
+  }
+ },
+ "wheels": [
+  {
+   "name": "pytest",
+   "version": "9.1.1",
+   "file": "pytest-9.1.1-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff41ba892b0a34df68d6d80292b1b48aa7f/pytest-9.1.1-py3-none-any.whl",
+   "sha256": "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "pluggy",
+   "version": "1.6.0",
+   "file": "pluggy-1.6.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl",
+   "sha256": "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "iniconfig",
+   "version": "2.3.0",
+   "file": "iniconfig-2.3.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/cb/b1/3846dd7f199d53cb17f49cba7e651e9ce294d8497c8c150530ed11865bb8/iniconfig-2.3.0-py3-none-any.whl",
+   "sha256": "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "packaging",
+   "version": "26.2",
+   "file": "packaging-26.2-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl",
+   "sha256": "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "Apache-2.0 OR BSD-2-Clause"
+  },
+  {
+   "name": "pygments",
+   "version": "2.20.0",
+   "file": "pygments-2.20.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl",
+   "sha256": "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "BSD-2-Clause"
+  },
+  {
+   "name": "colorama",
+   "version": "0.4.6",
+   "file": "colorama-0.4.6-py2.py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl",
+   "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6",
+   "platform": "any",
+   "python": null,
+   "only": "win32",
+   "licence": "BSD-3-Clause"
+  },
+  {
+   "name": "pycryptodome",
+   "version": "3.23.0",
+   "file": "pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+   "url": "https://files.pythonhosted.org/packages/5f/e9/a09476d436d0ff1402ac3867d933c61805ec2326c6ea557aeeac3825604e/pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+   "sha256": "c8987bd3307a39bc03df5c8e0e3d8be0c4c3518b7f044b0f4c15d1aa78f52575",
+   "platform": "linux_x86_64",
+   "python": null,
+   "only": null,
+   "licence": "BSD-2-Clause AND Unlicense"
+  },
+  {
+   "name": "pycryptodome",
+   "version": "3.23.0",
+   "file": "pycryptodome-3.23.0-cp37-abi3-win_amd64.whl",
+   "url": "https://files.pythonhosted.org/packages/54/2f/e97a1b8294db0daaa87012c24a7bb714147c7ade7656973fd6c736b484ff/pycryptodome-3.23.0-cp37-abi3-win_amd64.whl",
+   "sha256": "c75b52aacc6c0c260f204cbdd834f76edc9fb0d8e0da9fbf8352ef58202564e2",
+   "platform": "win_amd64",
+   "python": null,
+   "only": null,
+   "licence": "BSD-2-Clause AND Unlicense"
+  },
+  {
+   "name": "pyjwt",
+   "version": "2.13.0",
+   "file": "pyjwt-2.13.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/a3/5e/ecf12fdb62546d64385c158514e9b2b671f7832108ef2ecd2020ce0af2d1/pyjwt-2.13.0-py3-none-any.whl",
+   "sha256": "66adcc2aff09b3f1bbd95fc1e1577df8ac8723c978552fd43304c8a290ac5728",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "argon2-cffi",
+   "version": "25.1.0",
+   "file": "argon2_cffi-25.1.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/4f/d3/a8b22fa575b297cd6e3e3b0155c7e25db170edf1c74783d6a31a2490b8d9/argon2_cffi-25.1.0-py3-none-any.whl",
+   "sha256": "fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "argon2-cffi-bindings",
+   "version": "25.1.0",
+   "file": "argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+   "url": "https://files.pythonhosted.org/packages/09/52/94108adfdd6e2ddf58be64f959a0b9c7d4ef2fa71086c38356d22dc501ea/argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl",
+   "sha256": "d3e924cfc503018a714f94a49a149fdc0b644eaead5d1f089330399134fa028a",
+   "platform": "linux_x86_64",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "argon2-cffi-bindings",
+   "version": "25.1.0",
+   "file": "argon2_cffi_bindings-25.1.0-cp39-abi3-win_amd64.whl",
+   "url": "https://files.pythonhosted.org/packages/e2/c6/a759ece8f1829d1f162261226fbfd2c6832b3ff7657384045286d2afa384/argon2_cffi_bindings-25.1.0-cp39-abi3-win_amd64.whl",
+   "sha256": "a98cd7d17e9f7ce244c0803cad3c23a7d379c301ba618a5fa76a67d116618b98",
+   "platform": "win_amd64",
+   "python": null,
+   "only": null,
+   "licence": "MIT"
+  },
+  {
+   "name": "cffi",
+   "version": "2.1.0",
+   "file": "cffi-2.1.0-cp312-cp312-win_amd64.whl",
+   "url": "https://files.pythonhosted.org/packages/a8/eb/f636456ff21a83fc13c032b58cc5dde061691546ac79efa284b2989b7982/cffi-2.1.0-cp312-cp312-win_amd64.whl",
+   "sha256": "c97f080ea627e2863524c5af3836e2270b5f5dfff1f104392b959f8df0c5d384",
+   "platform": "win_amd64",
+   "python": "cp312",
+   "only": null,
+   "licence": "MIT-0"
+  },
+  {
+   "name": "cffi",
+   "version": "2.1.0",
+   "file": "cffi-2.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+   "url": "https://files.pythonhosted.org/packages/6f/08/f2e7d62c460faae0926f2d6e423694aa409ced3bc1fe2927a0a6e5f05416/cffi-2.1.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+   "sha256": "799416bae98336e400981ff6e532d67d5c709cfb30afb79865a1315f94b0e224",
+   "platform": "linux_x86_64",
+   "python": "cp313",
+   "only": null,
+   "licence": "MIT-0"
+  },
+  {
+   "name": "pycparser",
+   "version": "3.0",
+   "file": "pycparser-3.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl",
+   "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992",
+   "platform": "any",
+   "python": null,
+   "only": null,
+   "licence": "BSD-3-Clause"
+  }
+ ]
+}
