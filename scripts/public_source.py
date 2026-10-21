@@ -45,6 +45,13 @@ Filters, in order, each counted in measure.json and the card:
                                 model never really took. Without the flag these rows are kept and counted in
                                 measure.json as kept_with_redacted_context.
   duplicate                     the same target text was kept before
+  near_duplicate                (--dedupe-actions-by COL) the same actions as a step already kept from a conversation
+                                with the same COL value (e.g. task_id): every assistant turn up to and including the
+                                target did the same thing (the commands of a Terminus-2 reply, else the tool calls,
+                                else the answer text; whitespace folded), only the wording or reasoning differs. It
+                                follows rejection-sampling fine-tuning (Yuan et al. 2023, arXiv 2308.01825), which
+                                keeps one reasoning path per distinct set of steps. With --rank-col the better-ranked
+                                conversation's step is the one kept.
   too_long                      over --max-tokens through the model's chat template (rows over 6 chars per token
                                 are counted without tokenising; later turns of a session only get longer)
   template_error                the chat template refused the row (the first messages are in measure.json)
@@ -53,6 +60,12 @@ Filters, in order, each counted in measure.json and the card:
                                 + target
   step_cap                      (--max-steps-per-conversation K) steps past K of one conversation, which keeps K
                                 evenly spaced ones (the other counts and statistics include them)
+Order (--rank-col COL, local JSONL files only): conversations are read in ascending order of COL (e.g. task_rank:
+the best-ranked runs of every task first), ties in file order, so the duplicate checks keep the better-ranked copy and
+--max-rows drops the worst-ranked. --first-ranks K then writes the train rows of conversations ranked K or better
+first and the others after (each part shuffled), so a loop pool, read from the top, hands out the best runs first.
+--max-conversations-per COL=N keeps steps from at most N conversations per COL value (counted once a conversation
+has a kept step; per_value_cap), e.g. one run per task group for a held-out set.
 measure.json also gives the kept targets' place in their session (kept_target_position: which assistant turn, and
 that turn's share of the session; long agent sessions only fit their early steps) and counts conversations by their tool calls (sessions_by_redaction: no_calls, clean, mixed,
 redacted) and the text of the redacted steps (redacted_step_text_chars), i.e. what masking the calls out could save.
@@ -98,8 +111,9 @@ def fetch(repo, files, revision=None, max_files=0):
 
 
 def iter_rows(paths, field, where_cols=()):
-    """(messages, {where column: value}) per row."""
+    """(conversation index, messages, {where column: value}) per row, in file order."""
     cols = [field] + [c for c in where_cols if c != field]
+    ci = 0
     for p in paths:
         if p.endswith(".parquet"):
             import pyarrow.parquet as pq
@@ -109,13 +123,56 @@ def iter_rows(paths, field, where_cols=()):
                 raise SystemExit(f"{p}: columns {missing} not found in {pf.schema_arrow.names}")
             for batch in pf.iter_batches(batch_size=64, columns=cols):
                 for r in batch.to_pylist():
-                    yield r[field], {c: r.get(c) for c in where_cols}
+                    yield ci, r[field], {c: r.get(c) for c in where_cols}
+                    ci += 1
         else:
             with open(p, encoding="utf-8") as fh:
                 for line in fh:
                     if line.strip():
                         r = json.loads(line)
-                        yield r.get(field), {c: r.get(c) for c in where_cols}
+                        yield ci, r.get(field), {c: r.get(c) for c in where_cols}
+                        ci += 1
+
+
+def rank_of(line, col):
+    """The top-level integer field col of one JSONL line, read without parsing the whole line. JSON escapes every quote
+    inside a string, so '"col":' outside an escape can only be a key; the last one is the top-level key (records are
+    written with their messages first). Falls back to parsing the line; a missing value ranks last."""
+    hits = re.findall(rb'(?<!\\)"' + re.escape(col.encode("utf-8")) + rb'":\s*(-?\d+)\s*[,}]', line)
+    if hits:
+        return int(hits[-1])
+    v = json.loads(line).get(col)
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else float("inf")
+
+
+def iter_rows_ranked(paths, field, where_cols, col):
+    """iter_rows for local JSONL files, in ascending order of the integer field col (ties in file order); the
+    conversation index stays the file-order index. One pass reads each line's rank and offset, then lines are read by
+    seeking, so only one conversation is held at a time."""
+    index, ci = [], 0
+    for pi, p in enumerate(paths):
+        if not p.endswith((".jsonl", ".json")):
+            raise SystemExit(f"--rank-col reads local JSONL files only, not {p}")
+        with open(p, "rb") as fh:
+            off = 0
+            for line in fh:
+                if line.strip():
+                    index.append((rank_of(line, col), ci, pi, off))
+                    ci += 1
+                off += len(line)
+    index.sort()
+    handles = [open(p, "rb") for p in paths]
+    try:
+        for rank, ci, pi, off in index:
+            fh = handles[pi]
+            fh.seek(off)
+            r = json.loads(fh.readline().decode("utf-8"))
+            cols = {c: r.get(c) for c in where_cols}
+            cols[col] = rank
+            yield ci, r.get(field), cols
+    finally:
+        for fh in handles:
+            fh.close()
 
 
 def holdout_bucket(value, mod):
@@ -233,6 +290,38 @@ def target_text(m):
     return (m.get("content") or "") + "".join(json.dumps(c["function"], ensure_ascii=False) for c in m.get("tool_calls", []))
 
 
+WS = re.compile(r"\s+")
+
+
+def action_signature(m):
+    """What an assistant turn does, without its wording: the keystrokes of a Terminus-2 reply (a JSON object with a
+    commands list) and whether it marks the task complete; else its tool calls; else its answer text. Whitespace is
+    folded, the reasoning left out."""
+    ans = answer_text(m.get("content")).strip()
+    try:
+        obj = json.loads(ans) if ans.startswith("{") else None
+    except ValueError:
+        obj = None
+    if isinstance(obj, dict) and isinstance(obj.get("commands"), list):
+        keys = [WS.sub(" ", str(c.get("keystrokes", ""))).strip() for c in obj["commands"] if isinstance(c, dict)]
+        return "cmd:" + json.dumps([keys, bool(obj.get("task_complete"))], ensure_ascii=False)
+    if m.get("tool_calls"):
+        return "call:" + json.dumps([[c["function"]["name"], json.loads(c["function"]["arguments"])]
+                                     for c in m["tool_calls"]], sort_keys=True, ensure_ascii=False)
+    return "txt:" + WS.sub(" ", ans)
+
+
+def action_prefix_keys(msgs, unit):
+    """{assistant turn index: a key for unit + the actions of every assistant turn up to and including it}."""
+    h = hashlib.sha1(("unit:" + str(unit)).encode("utf-8"))
+    out = {}
+    for i, m in enumerate(msgs):
+        if m["role"] == "assistant":
+            h.update(hashlib.sha1(action_signature(m).encode("utf-8")).digest())
+            out[i] = h.hexdigest()
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dataset", required=True)
@@ -265,6 +354,14 @@ def main():
     ap.add_argument("--respect-loss-mask", action="store_true",
                     help='skip a target turn whose "loss_mask" is 0 or false (sets that mark turns not to train on)')
     ap.add_argument("--row-range", default=None, help="START:END (END optional): only these conversations, see above")
+    ap.add_argument("--rank-col", default=None,
+                    help="read conversations in ascending order of this integer column (local JSONL only), see above")
+    ap.add_argument("--first-ranks", type=int, default=0,
+                    help="with --rank-col: train rows of conversations ranked this or better come first in train.jsonl")
+    ap.add_argument("--dedupe-actions-by", default=None,
+                    help="drop a step that repeats the actions of a kept step of the same COL value (near_duplicate)")
+    ap.add_argument("--max-conversations-per", default=None,
+                    help="COL=N: steps from at most N conversations per value of COL (per_value_cap)")
     ap.add_argument("--drop-target-regex", action="append", default=[],
                     help="drop a step whose target text matches this regular expression; repeatable")
     ap.add_argument("--clean-context", action="store_true",
@@ -313,10 +410,11 @@ def main():
         gate = OverlapIndex.from_jsonl(args.decontaminate_gate)
 
     counts = collections.Counter({k: 0 for k in (
-        "conversations", "outside_range", "filtered_where", "holdout_split", "bad_format", "no_assistant", "candidate_rows", "loss_masked",
+        "conversations", "outside_range", "filtered_where", "holdout_split", "per_value_cap", "bad_format",
+        "no_assistant", "candidate_rows", "loss_masked",
         "require_think", "short_target",
         "dropped_tool_name", "placeholder_args", "masked_target", "answer_lang", "redacted_context", "duplicate",
-        "too_long", "template_error",
+        "near_duplicate", "too_long", "template_error",
         "contaminated_evalplus", "contaminated_gate", "kept")})
     template_errors = {}  # first conversation index per distinct error message
     tool_names, lengths, kept_by_kind = collections.Counter(), [], collections.Counter()
@@ -335,15 +433,32 @@ def main():
     lo, hi = int(lo or 0), (int(hi) if hi.strip() else None)
     drop_res = [re.compile(x) for x in args.drop_target_regex]
     drop_langs = {LANG_ALIASES.get(x.strip().lower(), x.strip().lower()) for x in args.drop_answer_lang}
+    per_col, per_max = None, 0
+    if args.max_conversations_per:
+        per_col, _, n = args.max_conversations_per.partition("=")
+        per_col, per_max = per_col.strip(), int(n)
+        if not per_col or per_max < 1:
+            raise SystemExit("--max-conversations-per must be COL=N with N >= 1")
+    if args.first_ranks and not args.rank_col:
+        raise SystemExit("--first-ranks needs --rank-col")
     read_cols = list(dict.fromkeys([c for c, _, _ in wheres] + args.report_field
-                                   + ([args.holdout_col] if args.holdout_col else [])))
+                                   + ([args.holdout_col] if args.holdout_col else [])
+                                   + ([args.dedupe_actions_by] if args.dedupe_actions_by else [])
+                                   + ([per_col] if per_col else [])))
     if bool(args.holdout_col) != bool(args.holdout_mod):
         raise SystemExit("--holdout-col and --holdout-mod go together")
+    near_seen, per_seen, rank_by = set(), collections.Counter(), {}  # rank_by: conversation index -> its rank
     counts["step_cap"] = 0
     seen_by = {f: collections.Counter() for f in args.report_field}
     kept_by = {f: collections.Counter() for f in args.report_field}
     kept_langs = collections.Counter()  # kept steps per language of the target's code blocks
-    for ci, (raw, cols) in enumerate(iter_rows(paths, args.messages_field, read_cols)):
+    if args.rank_col:
+        if args.row_range:
+            raise SystemExit("--rank-col and --row-range don't go together (a range counts conversations in file order)")
+        reader = iter_rows_ranked(paths, args.messages_field, read_cols, args.rank_col)
+    else:
+        reader = iter_rows(paths, args.messages_field, read_cols)
+    for ci, raw, cols in reader:
         if args.max_rows and counts["kept"] >= args.max_rows:
             break
         if hi is not None and ci >= hi:
@@ -360,8 +475,13 @@ def main():
             if heldout != (args.holdout_side == "heldout"):
                 counts["holdout_split"] += 1
                 continue
+        if per_col and per_seen[str(cols.get(per_col))] >= per_max:
+            counts["per_value_cap"] += 1
+            continue
         for f in args.report_field:
             seen_by[f][str(cols.get(f))] += 1
+        if args.rank_col:
+            rank_by[ci] = cols.get(args.rank_col)
         if isinstance(raw, str):
             try:
                 raw = json.loads(raw)
@@ -385,6 +505,7 @@ def main():
         sessions["no_calls" if not n_calling else "clean" if not bad else "redacted" if len(bad) == n_calling
                  else "mixed"] += 1
         first_bad = bad[0] if bad else len(msgs)
+        near_keys = action_prefix_keys(msgs, cols.get(args.dedupe_actions_by)) if args.dedupe_actions_by else {}
         user_text = "\n".join(m["content"] for m in msgs if m["role"] == "user")
         first_user = next((m["content"] for m in msgs if m["role"] == "user"), "")
         kept_before = counts["kept"]
@@ -439,6 +560,9 @@ def main():
             if key in seen:
                 counts["duplicate"] += 1
                 continue
+            if near_keys and near_keys[end] in near_seen:
+                counts["near_duplicate"] += 1
+                continue
             if prefix_chars > char_cap:
                 counts["too_long"] += 1
                 continue
@@ -459,6 +583,8 @@ def main():
                 counts["contaminated_gate"] += 1
                 continue
             seen.add(key)
+            if near_keys:
+                near_seen.add(near_keys[end])
             counts["kept"] += 1
             kept_ctx_redacted += ctx_redacted
             kept_sessions.add(ci)
@@ -475,6 +601,8 @@ def main():
                 groups.setdefault(ci, []).append({"messages": row})
             if args.max_rows and counts["kept"] >= args.max_rows:
                 break
+        if per_col and counts["kept"] > kept_before:
+            per_seen[str(cols.get(per_col))] += 1
         cap = args.max_steps_per_conversation
         n_here = len(groups.get(ci, ())) if not args.measure_only else counts["kept"] - kept_before
         if cap and n_here > cap:  # keep cap steps spread over the session (the counts above include all of them)
@@ -517,10 +645,18 @@ def main():
     rng = random.Random(args.seed)
     rng.shuffle(keys)
     n_val = max(1, int(counts["kept"] * args.val_fraction))
-    train, val = [], []
+    train, val, later = [], [], []
     for k in keys:
-        (val if len(val) < n_val else train).extend(groups[k])
+        if len(val) < n_val:
+            val.extend(groups[k])
+        elif args.first_ranks and not rank_by.get(k, float("inf")) <= args.first_ranks:
+            later.extend(groups[k])
+        else:
+            train.extend(groups[k])
     rng.shuffle(train)
+    rng.shuffle(later)
+    n_first = len(train)
+    train += later
     for name, data in (("train", train), ("val", val)):
         with open(os.path.join(args.out, f"{name}.jsonl"), "w", encoding="utf-8") as fh:
             for r in data:
@@ -540,6 +676,13 @@ def main():
             fh.write(f"\n## `{f}`: conversations read and steps kept\n\n| Value | Read | Kept |\n|---|---|---|\n")
             for v, n in seen_by[f].most_common():
                 fh.write(f"| {v} | {n} | {kept_by[f][v]} |\n")
+        if args.first_ranks:
+            fh.write(f"\nOrder: the first {n_first} train rows come from conversations ranked {args.first_ranks} or "
+                     f"better by `{args.rank_col}`, the other {len(train) - n_first} after.\n")
+    if args.first_ranks:
+        measure["train_order"] = {"first_ranks": args.first_ranks, "first_rows": n_first, "later_rows": len(train) - n_first}
+        with open(os.path.join(args.out, "measure.json"), "w", encoding="utf-8") as fh:
+            json.dump(measure, fh, indent=1)
     print(f"wrote {len(train)} train / {len(val)} val rows -> {args.out}")
     return 0
 

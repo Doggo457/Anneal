@@ -20,7 +20,8 @@ stack_max_new_rows: 3000   # rejected rows roll forward (research/growing-data-r
 val_rows_per_source: 50
 min_free_gb: 60
 valloss: true
-milestone_evalplus: true   # EvalPlus on kept adapters only (the reported numbers)
+milestone_evalplus: true   # EvalPlus on rounds that pass the keep rule only; since 21 Oct 2026 a no-worse check against the
+                           # base (rules.evalplus_guard), not a measure of gain
 pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead
 reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
 # NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
@@ -36,12 +37,29 @@ gate: {seed: 1, budget: 16384, max_tokens: 20480, concurrency: 4, early_reject: 
 # submission and ask for the fixed program. Built and run in the sandbox (anneal/polyglot.py,
 # scripts/setup_toolchains.py).
 noncoding: {seeds: [1, 2], max_tokens: 20480}
-rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false, loss_rule: true, loss_alpha: 0.05}
+rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false, loss_rule: true, loss_alpha: 0.05,
+        evalplus_guard: true, evalplus_tolerance: 0.03}
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
-# 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) lower on more steps than chance,
-# p <= loss_alpha. Either way the write and fix parts may not drop by more than part_tolerance or significantly, and
-# the non-coding check (vs the base) by more than nc_tolerance or significantly.
+# 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
+# (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the
+# smaller p must be <= 0.025), which keeps the chance of a false keep on this path where it was with one set. Either
+# way the write and fix parts may not drop by more than part_tolerance or significantly, and the non-coding check (vs
+# the base) by more than nc_tolerance or significantly.
+# EvalPlus (21 Oct 2026, evalplus_guard): HumanEval+ and MBPP+ only check that a round is not worse; the base already
+# passes 86.2% of the plus tests, so they can't show much gain. A round that passes the rule above answers all 542
+# problems (seed 1, the first run's scoring server) and is rejected if its plus-test pass rate is below the base's by
+# more than evalplus_tolerance or significantly (one-sided sign test on the problems it lost vs won, p <= alpha), the
+# non-coding check's test. At the first run's rate of changed answers (28 of 542: 12 won, 16 lost) the sign test
+# flags a net loss of 10 problems (1.8 points); the 0.03 tolerance (about 3 standard errors there) only catches a
+# large drop when far more answers change. It runs before the confirm pass, so a blocked round costs no second gate
+# pass.
 swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}   # built at 8,192 and never changed
+term_loss: {file: data/eval/term_heldout.jsonl, max_rows: 200, seq_len: 12288}
+# Held-out terminal steps (21 Oct 2026; the six-language gate can't see terminal skill), built once by
+# scripts/build_swe_heldout.py --set terminal: the task groups the glm53_all pools leave out (their holdout below:
+# 51 groups, 94 tasks, 300 non-Python runs on 21 Oct 2026), non-Python runs only, the best 3 runs of a task at most,
+# one step per run, then max_rows by a seeded draw. The base's losses are scored once, by the first training round,
+# as for the bug-fix steps.
 # Single steps from Open-SWE runs in repositories the openswe_v4flash pool leaves out (its holdout below), one per
 # run, built once by scripts/build_swe_heldout.py: 177 on 21 Oct 2026, every held-out run outside Python that has a
 # step passing the pool's filters (so fewer than max_rows).
@@ -92,6 +110,12 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
 # (research/whole-job-multilang-data.md). Sources whose rows write Python, and the maths, carry share 0: they fill in only
 # once the others run out (a check-in raises their share then). Maths is 0 because it doesn't teach software work; the
 # MMLU-Pro check still rejects a round that loses general reasoning.
+# Shares (21 Oct 2026): GLM-5.3 terminal 40%, Open-SWE bug fixes 35%, Tachibana4 20%, Banaxi 5%. GLM-5.3 is the
+# strongest terminal teacher (Terminal-Bench 2.1: GLM-5.3 71.54, V4-Flash-0731 67.04, Qwen3.8-27B 58.43), and that
+# 13-point lead is the largest any teacher has over Qwen3.8-27B on its own benchmark (the others: under 4 points on
+# LiveCodeBench or SWE-bench Verified). It isn't shown stronger overall: there is no like-for-like SWE-bench score for
+# GLM-5.3, and V4-Flash-0731 is the one teacher shown stronger on bug fixing (88.80 vs 86.00), so Open-SWE keeps the
+# next share, close behind.
 sources:
   - name: openswe_v4flash_12k
     kind: messages
@@ -105,20 +129,28 @@ sources:
     holdout: {col: repo, mod: 20}                      # repositories hashing to bucket 0 of 20 never train: they are
                                                        # the held-out bug-fix steps (swe_loss)
     pool_rows: 40000
-    share: 0.45
+    share: 0.35
     group: swe
-  - name: glm53_terminal_nopy_12k
+  - name: glm53_all_nopy_12k
     kind: messages
     dataset: open-athena/recursive-task-synthesis-glm-5.3-rollouts   # CC-BY-4.0; Terminus-2 runs on Linux terminal
                                                        # tasks (shell, builds, sysadmin, containers, git, databases)
     from_local: data/raw/glm53/conversations.jsonl     # scripts/glm_rollouts.py: every test-passed run (reward 1) of
-    from_local_done: data/raw/glm53/conversations.done.json   # the whole download; picked = the best 2 of each task
+    from_local_done: data/raw/glm53/conversations.done.json   # the whole download, with its rank within its task
     files: "*"
-    where: ["uses_python=false", "picked=true"]        # runs whose commands run or write Python wait at share 0
+    where: ["uses_python=false"]                       # 21 Oct 2026: every passing run, not only the best 2 per task;
+                                                       # runs whose commands run or write Python wait at share 0
     turns: each                                        # each step with reasoning is a row
     respect_loss_mask: true                            # replies Terminus-2 couldn't parse are context only
-    pool_rows: 30000
-    share: 0.30
+    rank_col: task_rank                                # best-ranked runs read first (no context summarisation, then
+    first_ranks: 2                                     # fewest turns, fewest output tokens); the best 2 of each task
+                                                       # fill the front of the pool and the other passing runs follow
+    dedupe_actions_by: task_id                         # a step whose commands up to it repeat a kept step of the same
+                                                       # task is a near-duplicate (only the wording differs): dropped
+    holdout: {col: task_group_id, mod: 20}             # task groups hashing to bucket 0 of 20 never train: they are
+                                                       # the held-out terminal steps (term_loss)
+    pool_rows: 100000
+    share: 0.40
     group: terminal
   - name: tachibana4_v4pro_nopy_12k
     kind: fields
@@ -162,16 +194,20 @@ sources:
     min_pool_rows: 100
     share: 0
     group: code
-  - name: glm53_terminal
+  - name: glm53_all_12k
     kind: messages
     dataset: open-athena/recursive-task-synthesis-glm-5.3-rollouts
     from_local: data/raw/glm53/conversations.jsonl
     from_local_done: data/raw/glm53/conversations.done.json
     files: "*"
-    where: ["uses_python=true", "picked=true"]
+    where: ["uses_python=true"]
     turns: each
     respect_loss_mask: true
-    pool_rows: 30000
+    rank_col: task_rank
+    first_ranks: 2
+    dedupe_actions_by: task_id
+    holdout: {col: task_group_id, mod: 20}             # the same task groups held out as glm53_all_nopy_12k
+    pool_rows: 100000
     share: 0           # runs that use Python fill in here once the rest run out
     group: terminal
   - name: math_v4_aops
