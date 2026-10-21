@@ -166,6 +166,8 @@ def public_source_args(src, side="pool"):
     args = ["--dataset", src["dataset"], "--files", src["files"], "--messages-field", src.get("messages_field", "messages"),
             "--turns", src.get("turns", "last"), "--min-target-chars", str(src.get("min_target_chars", 0)),
             "--max-rows", str(src["pool_rows"])]
+    if src.get("from_local"):  # conversations a converter wrote in the training folder (scripts/glm_rollouts.py)
+        args += ["--from-local", os.path.join(ROOT, src["from_local"])]
     if src.get("revision"):
         args += ["--revision", src["revision"]]
     for t in src.get("drop_tool_names") or []:
@@ -193,6 +195,15 @@ def public_source_args(src, side="pool"):
     elif side != "pool":
         raise ValueError(f"source {src['name']} has no holdout")
     return args
+
+
+def local_source_ready(src):
+    """A source read from a local file (from_local) is ready once its converter has finished: the file exists and so
+    does from_local_done when the source names one. Until then it has no pool and drops out of the mix."""
+    if not src.get("from_local"):
+        return True
+    need = [src["from_local"]] + ([src["from_local_done"]] if src.get("from_local_done") else [])
+    return all(os.path.exists(os.path.join(ROOT, p)) for p in need)
 
 
 def file_sha(path):
@@ -520,6 +531,10 @@ class Loop(fr.Controller):
                 continue
             d = self.pool_dir(src)
             info = self.read_json(os.path.join(d, "pool.json"))
+            if not info and not local_source_ready(src):
+                self.log(f"source {src['name']}: {src.get('from_local_done') or src['from_local']} isn't there yet "
+                         "(its converter is still running); no pool until it is")
+                continue
             if info:
                 if info.get("spec") != spec_hash(src):
                     raise RuntimeError(f"source {src['name']} changed since its pool was prepared; give the changed "

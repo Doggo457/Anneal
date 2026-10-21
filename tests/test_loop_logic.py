@@ -176,6 +176,17 @@ def test_holdout_and_step_cap():
         pool_args = L.public_source_args(srcd)
         assert [a for a in args if a not in ("heldout", "pool")][:len(pool_args) - 1] == \
             [a for a in pool_args if a not in ("heldout", "pool")], (args, pool_args)
+        # a source a converter writes locally (scripts/glm_rollouts.py) reads that file, and has no pool until the
+        # converter's done file is there
+        glm = next(s for s in cfg["sources"] if s.get("from_local"))
+        ga = L.public_source_args(glm)
+        assert ga[ga.index("--from-local") + 1] == os.path.join(ROOT, glm["from_local"]) and "--respect-loss-mask" in ga
+        local, done = os.path.join(d, "conv.jsonl"), os.path.join(d, "conv.done.json")
+        open(local, "w").close()
+        assert not L.local_source_ready(dict(glm, from_local=local, from_local_done=done))
+        open(done, "w").close()
+        assert L.local_source_ready(dict(glm, from_local=local, from_local_done=done))
+        assert L.local_source_ready(srcd)  # a dataset source is always ready
 
 
 def test_gate_ready_and_retired_builder():
