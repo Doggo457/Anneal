@@ -28,10 +28,20 @@ C:\\Program Files: system files, no user data), and Windows gives every AppConta
 registry key of its own (%LOCALAPPDATA%\\Packages\\anneal.codesandbox, setup() removes the container's own access to
 the folder).
 
+Other languages (anneal/polyglot.py): C++, Java, Go, Rust, JavaScript and TypeScript programs are built in a second
+AppContainer, "Anneal.CodeBuild", with RX on the toolchains (sandbox/toolchains, scripts/setup_toolchains.py),
+Modify on the Go build cache and on the program's work folder, and up to 16 processes in its job (compilers start
+helpers such as cc1plus, as and ld). Compilers never run the code they compile. The built program then runs in
+"Anneal.CodeSandbox" exactly like Python: one process, no network, no files outside its work folder; Java and Node.js
+programs get RX on the JDK and Node.js folders only. The build container keeps its own private storage folder,
+because Windows points TEMP and TMP of every AppContainer process there.
+
 API:
   run(argv, stdin=b"", timeout_s=10, mem_bytes=4 << 30, files=None) -> Result(returncode, stdout, stderr,
       timed_out, wall_s, ...)
   argv are the interpreter's arguments, e.g. ["main.py"] with files={"main.py": b"..."}, or ["-c", "print(1)"].
+  spawn(image, args, cwd, env, ...) -> Result: any program in either container, in a folder made by Workdir.
+  Workdir(containers) -> a fresh scratch folder both containers may use, deleted on exit.
 
   python -m anneal.sandbox --setup     creates the profile and grants the interpreter tree (once)
   python -m anneal.sandbox --check     a quick print(1+1)
@@ -53,6 +63,8 @@ PYTHON_DIR = os.path.join(SANDBOX_ROOT, "python")
 PYTHON_EXE = os.path.join(PYTHON_DIR, "python.exe")
 SCRATCH_ROOT = os.path.join(SANDBOX_ROOT, "scratch")
 CONTAINER_NAME = "Anneal.CodeSandbox"
+BUILD_CONTAINER = "Anneal.CodeBuild"
+TOOLCHAINS_DIR = os.path.join(SANDBOX_ROOT, "toolchains")
 DEFAULT_MEM = 4 << 30
 OUTPUT_CAP = 16 << 20
 
@@ -211,27 +223,27 @@ def _check(ok, what):
 # ---------------------------------------------------------------------------------------------- the container
 
 _sid_lock = threading.Lock()
-_sid = None  # (PSID as c_void_p, "S-1-15-2-...")
+_sids = {}  # container name -> (PSID as c_void_p, "S-1-15-2-...")
+_DESCRIPTIONS = {CONTAINER_NAME: "Anneal: runs model-written code",
+                 BUILD_CONTAINER: "Anneal: compiles model-written code"}
 
 
-def container_sid():
+def container_sid(name=CONTAINER_NAME):
     """The AppContainer SID (created on first use; derived from the name if the profile already exists)."""
-    global _sid
     with _sid_lock:
-        if _sid is None:
+        if name not in _sids:
             psid = ctypes.c_void_p()
-            hr = _CreateAppContainerProfile(CONTAINER_NAME, CONTAINER_NAME, "Anneal: runs model-written code",
-                                            None, 0, ctypes.byref(psid))
+            hr = _CreateAppContainerProfile(name, name, _DESCRIPTIONS.get(name, "Anneal"), None, 0, ctypes.byref(psid))
             if hr == HRESULT_ALREADY_EXISTS:
-                hr = _DeriveAppContainerSid(CONTAINER_NAME, ctypes.byref(psid))
+                hr = _DeriveAppContainerSid(name, ctypes.byref(psid))
             if hr != 0:
-                raise SandboxUnavailable(f"AppContainer profile {CONTAINER_NAME}: HRESULT 0x{hr & 0xFFFFFFFF:08X}")
+                raise SandboxUnavailable(f"AppContainer profile {name}: HRESULT 0x{hr & 0xFFFFFFFF:08X}")
             s = wt.LPWSTR()
             _check(_ConvertSidToStringSidW(psid, ctypes.byref(s)), "ConvertSidToStringSidW")
             text = s.value
             _LocalFree(s)
-            _sid = (psid, text)  # the PSID is kept for the life of the process
-        return _sid
+            _sids[name] = (psid, text)  # the PSID is kept for the life of the process
+        return _sids[name]
 
 
 def grant(path, psid, access=FILE_MODIFY):
@@ -256,8 +268,41 @@ def grant(path, psid, access=FILE_MODIFY):
         _LocalFree(sd)
 
 
-def profile_folder():
-    return os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages", CONTAINER_NAME.lower())
+def profile_folder(name=CONTAINER_NAME):
+    return os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages", name.lower())
+
+
+def grant_tree(path, sid_text, rights="RX"):
+    """icacls: make every file under path inherit, then grant the SID (OI)(CI)rights on path."""
+    subprocess.run(["icacls", path, "/reset", "/T", "/Q"], capture_output=True, text=True)
+    out = subprocess.run(["icacls", path, "/grant", f"*{sid_text}:(OI)(CI)({rights})", "/Q"], capture_output=True,
+                         text=True)
+    if out.returncode != 0:
+        raise SandboxUnavailable(f"icacls grant on {path}: rc {out.returncode} {out.stdout.strip()} {out.stderr.strip()}")
+    return out
+
+
+def setup_toolchains_access(runtime_dirs, build_writable, verbose=True):
+    """Grants for the other languages (scripts/setup_toolchains.py calls this after installing them):
+    the build container gets RX on the whole toolchains folder and Modify on build_writable (the Go build cache);
+    the code sandbox gets RX on runtime_dirs only (the JDK, Node.js and the Node.js preload). Creates the build
+    container's profile and keeps its private storage folder, where Windows points TEMP for its processes."""
+    _, build_sid = container_sid(BUILD_CONTAINER)
+    _, run_sid = container_sid(CONTAINER_NAME)
+    grant_tree(TOOLCHAINS_DIR, build_sid, "RX")
+    for d in build_writable:
+        os.makedirs(d, exist_ok=True)
+        out = subprocess.run(["icacls", d, "/grant", f"*{build_sid}:(OI)(CI)(M)", "/Q"], capture_output=True, text=True)
+        if out.returncode != 0:
+            raise SandboxUnavailable(f"icacls grant M on {d}: rc {out.returncode} {out.stderr.strip()}")
+    for d in runtime_dirs:
+        out = subprocess.run(["icacls", d, "/grant", f"*{run_sid}:(OI)(CI)(RX)", "/Q"], capture_output=True, text=True)
+        if out.returncode != 0:
+            raise SandboxUnavailable(f"icacls grant RX on {d}: rc {out.returncode} {out.stderr.strip()}")
+    if verbose:
+        print(f"build container {build_sid}: RX on {TOOLCHAINS_DIR}, M on {build_writable}; code sandbox {run_sid}: "
+              f"RX on {runtime_dirs}")
+    return build_sid, run_sid
 
 
 def setup(verbose=True):
@@ -299,22 +344,25 @@ def require():
 
 # ---------------------------------------------------------------------------------------------- one run
 
-def _env_block(scratch):
-    system_root = os.environ.get("SystemRoot", r"C:\Windows")
-    env = {
-        "SystemRoot": system_root,
-        "PATH": PYTHON_DIR + ";" + os.path.join(system_root, "System32"),
+def _python_env(scratch):
+    return {
+        "PATH": PYTHON_DIR + ";" + os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"),
         "TEMP": scratch,
         "TMP": scratch,
         "PYTHONIOENCODING": "utf-8",
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1",
-        # CreateProcess refuses an AppContainer launch without LOCALAPPDATA (ERROR_ENVVAR_NOT_FOUND) and then
-        # rewrites LOCALAPPDATA, TEMP and TMP to the container's own folder (...\Packages\anneal.codesandbox\AC),
-        # where setup() removed the container's access, so tempfile falls back to the current folder (scratch).
-        "LOCALAPPDATA": os.environ.get("LOCALAPPDATA", ""),
     }
-    text = "".join(f"{k}={v}\0" for k, v in sorted(env.items(), key=lambda kv: kv[0].upper())) + "\0"
+
+
+def _env_block(env):
+    """A Unicode environment block built from scratch: env plus SystemRoot and LOCALAPPDATA (keys with an empty value
+    are left out). CreateProcess refuses an AppContainer launch without LOCALAPPDATA (ERROR_ENVVAR_NOT_FOUND) and then
+    rewrites LOCALAPPDATA, TEMP and TMP to the container's own folder (...\\Packages\\<container>\\AC); for the code
+    sandbox setup() removed its access there, so tempfile falls back to the current folder (scratch)."""
+    full = {"SystemRoot": os.environ.get("SystemRoot", r"C:\Windows"), "LOCALAPPDATA": os.environ.get("LOCALAPPDATA", "")}
+    full.update({k: str(v) for k, v in env.items() if v is not None and v != ""})
+    text = "".join(f"{k}={v}\0" for k, v in sorted(full.items(), key=lambda kv: kv[0].upper())) + "\0"
     return ctypes.create_unicode_buffer(text, len(text))
 
 
@@ -370,7 +418,7 @@ def _writer(handle, data):
         pass  # the child exited without reading
 
 
-def _new_job(mem_bytes):
+def _new_job(mem_bytes, max_procs=1):
     job = _CreateJobObjectW(None, None)
     _check(job, "CreateJobObjectW")
     info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
@@ -378,7 +426,7 @@ def _new_job(mem_bytes):
                                              | JOB_OBJECT_LIMIT_JOB_MEMORY
                                              | JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
                                              | JOB_OBJECT_LIMIT_PRIORITY_CLASS)
-    info.BasicLimitInformation.ActiveProcessLimit = 1
+    info.BasicLimitInformation.ActiveProcessLimit = max_procs
     info.BasicLimitInformation.PriorityClass = BELOW_NORMAL_PRIORITY_CLASS
     info.JobMemoryLimit = mem_bytes
     _check(_SetInformationJobObject(job, JobObjectExtendedLimitInformation, ctypes.byref(info),
@@ -407,6 +455,38 @@ def _remove_tree(path):
         shutil.rmtree(path, ignore_errors=True)
 
 
+class Workdir:
+    """A fresh folder under sandbox\\scratch that the given containers may modify; deleted (with anything the
+    programs left) on exit. write(name, data) puts a file in it."""
+
+    def __init__(self, containers=(CONTAINER_NAME,)):
+        self.path = os.path.join(SCRATCH_ROOT, uuid.uuid4().hex)
+        os.makedirs(self.path)
+        try:
+            for name in containers:
+                grant(self.path, container_sid(name)[0])
+        except BaseException:
+            _remove_tree(self.path)
+            raise
+
+    def write(self, name, data):
+        path = os.path.normpath(os.path.join(self.path, name))
+        if not path.startswith(self.path + os.sep):
+            raise ValueError(f"file name outside the work folder: {name!r}")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as fh:
+            fh.write(data.encode("utf-8") if isinstance(data, str) else data)
+
+    def close(self):
+        _remove_tree(self.path)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
 def run(argv, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, output_cap=OUTPUT_CAP, marker=None,
         after_marker_s=None):
     """Run the sandbox interpreter with argv in a fresh scratch folder. files: {relative name: bytes or str}
@@ -414,22 +494,32 @@ def run(argv, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, outp
 
     The deadline is timeout_s after the start; with marker (bytes) and after_marker_s, it moves to after_marker_s
     after the moment the marker first appears on stdout (a start-up allowance, then the real time limit)."""
-    psid, _ = container_sid()
-    scratch = os.path.join(SCRATCH_ROOT, uuid.uuid4().hex)
-    os.makedirs(scratch)
+    with Workdir() as wd:
+        for name, data in (files or {}).items():
+            wd.write(name, data)
+        return spawn(PYTHON_EXE, ["-X", "utf8", "-B"] + list(argv), wd.path, _python_env(wd.path), stdin=stdin,
+                     timeout_s=timeout_s, mem_bytes=mem_bytes, output_cap=output_cap, marker=marker,
+                     after_marker_s=after_marker_s, raw_env=True)
+
+
+def spawn(image, args, cwd, env, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, max_procs=1,
+          container=CONTAINER_NAME, output_cap=OUTPUT_CAP, marker=None, after_marker_s=None, path_dirs=None,
+          raw_env=False):
+    """Run image with args in the AppContainer `container`, inside a fresh job (at most max_procs processes,
+    mem_bytes of memory, killed at the deadline), current folder cwd (a Workdir the container may use). The
+    environment is env plus SystemRoot and LOCALAPPDATA; PATH is path_dirs + System32 unless raw_env (env already
+    holds PATH). Relative images are taken from cwd."""
+    psid, _ = container_sid(container)
+    if not os.path.isabs(image):
+        image = os.path.join(cwd, image)
+    env = dict(env)
+    if not raw_env:
+        env["PATH"] = ";".join(list(path_dirs or []) + [os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                                                      "System32")])
     handles, parent_ends = [], []
     job = attr = None
     attr_ready = False
     try:
-        grant(scratch, psid)
-        for name, data in (files or {}).items():
-            path = os.path.normpath(os.path.join(scratch, name))
-            if not path.startswith(scratch + os.sep):
-                raise ValueError(f"file name outside the scratch folder: {name!r}")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as fh:
-                fh.write(data.encode("utf-8") if isinstance(data, str) else data)
-
         in_parent, in_child = _pipe()
         out_parent, out_child = _pipe()
         err_parent, err_child = _pipe()
@@ -457,15 +547,15 @@ def run(argv, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, outp
         si.StartupInfo.dwFlags = STARTF_USESTDHANDLES
         si.StartupInfo.hStdInput, si.StartupInfo.hStdOutput, si.StartupInfo.hStdError = in_child, out_child, err_child
         si.lpAttributeList = ctypes.addressof(attr)
-        cmd = subprocess.list2cmdline([PYTHON_EXE, "-X", "utf8", "-B"] + list(argv))
+        cmd = subprocess.list2cmdline([image] + list(args))
         cmdbuf = ctypes.create_unicode_buffer(cmd)
-        envbuf = _env_block(scratch)
+        envbuf = _env_block(env)
         pi = PROCESS_INFORMATION()
-        job = _new_job(mem_bytes)
+        job = _new_job(mem_bytes, max_procs)
         t0 = time.perf_counter()
-        _check(_CreateProcessW(PYTHON_EXE, cmdbuf, None, None, True,
+        _check(_CreateProcessW(image, cmdbuf, None, None, True,
                                EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW
-                               | CREATE_UNICODE_ENVIRONMENT, ctypes.byref(envbuf), scratch, ctypes.byref(si),
+                               | CREATE_UNICODE_ENVIRONMENT, ctypes.byref(envbuf), cwd, ctypes.byref(si),
                                ctypes.byref(pi)), "CreateProcessW")
         for h in (in_child, out_child, err_child):
             _CloseHandle(h)
@@ -506,6 +596,9 @@ def run(argv, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, outp
         if timed_out:
             _TerminateJobObject(job, TIMEOUT_EXIT_CODE)
             _WaitForSingleObject(pi.hProcess, 10_000)
+        elif max_procs > 1:
+            # a build: the first process has exited; end any helper it left behind (kill on job close does too)
+            _TerminateJobObject(job, 0)
         wall = time.perf_counter() - t0
         code = wt.DWORD()
         _GetExitCodeProcess(pi.hProcess, ctypes.byref(code))
@@ -527,7 +620,6 @@ def run(argv, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, outp
             _DeleteAttrList(ctypes.byref(attr))
         for h in parent_ends:
             _CloseHandle(h)
-        _remove_tree(scratch)
 
 
 def run_python(code, stdin=b"", timeout_s=10.0, mem_bytes=DEFAULT_MEM, files=None, name="main.py"):
