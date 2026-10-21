@@ -515,6 +515,9 @@ CONFIRM_PASSING = {"r007": 34}  # on its fresh-seed confirm (seed 1000 + round) 
 SWE_LOSS = {}  # round -> its loss on every held-out bug-fix step (default: 1 + 0.01 x round, never lower than the best)
 TERM_LOSS = {}  # the same for the held-out terminal steps
 EVALPLUS_WORSE = set()  # rounds whose EvalPlus answers fail every plus test (the no-worse check must block them)
+BFCL_N = 12  # fake BFCL items: 8 Java, 4 JavaScript
+BFCL_PASSING = {}  # model -> BFCL items 0..k-1 pass (default 9 for every model: no change)
+BFCL_NO_CALLS = set()  # models whose answers never make a tool call (the probe must stop the pass)
 LANGS = ("cpp", "java", "go", "rust", "javascript", "typescript")
 
 
@@ -544,6 +547,7 @@ class World:
         self.swe_calls = []  # (round, --no-base) for each val_loss.py run on the held-out bug-fix steps
         self.term_calls = []  # the same for the held-out terminal steps
         self.fingerprint = "tc-1"  # the toolchains (anneal/polyglot.py toolchain_fingerprint)
+        self.bfcl_requests = []  # (model, item id, request seed) for each BFCL request
 
     def model(self):
         lora = self.server.lora if self.server else None
@@ -568,6 +572,19 @@ class World:
                     "completion_tokens": 20, "seconds": 0.0}
         return {"content": "def f(): pass", "reasoning": "thinking", "finish_reason": "stop", "completion_tokens": 30,
                 "seconds": 0.0}  # sample prompts
+
+    def bfcl_request(self, url, item, seed, max_tokens, sampling):
+        m = self.model()
+        self.bfcl_requests.append((m, item["id"], seed))
+        if m in BFCL_NO_CALLS:
+            return {"content": "I would call it.", "reasoning": "r", "tool_calls": [], "finish_reason": "stop",
+                    "completion_tokens": 40, "seconds": 0.0, "answer": "I would call it."}
+        i = int(item["id"].rsplit("_", 1)[1]) + (8 if item["language"] == "javascript" else 0)
+        ok = i < BFCL_PASSING.get(m, 9)
+        call = [{"type": "function", "function": {"name": item["tools"][0]["function"]["name"],
+                                                  "arguments": json.dumps({"x": "PASS" if ok else "FAIL"})}}]
+        return {"content": "", "reasoning": "r", "tool_calls": call, "finish_reason": "tool_calls",
+                "completion_tokens": 60, "seconds": 0.0, "answer": json.dumps(call)}
 
     def run_child(self, ctl, cmd, log_name, stop_dir=None, monitor=None, interval=30):
         script = os.path.basename(cmd[2])
@@ -702,6 +719,13 @@ def setup_world(tmp):
     E.write_jsonl(os.path.join(ev, "swe_heldout.jsonl"),  # held-out bug-fix steps (scripts/build_swe_heldout.py)
                   [{"messages": [{"role": "user", "content": f"held-out issue {i}"},
                                  {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(12)])
+    # the BFCL no-worse check (anneal/bfcl.py; scripts/build_guards.py --bfcl): 8 Java and 4 JavaScript items
+    E.write_jsonl(os.path.join(ev, "bfcl_java_js.jsonl"),
+                  [{"id": f"simple_{lg}_{i}", "category": f"simple_{lg}", "language": lg,
+                    "messages": [{"role": "user", "content": f"call {lg} {i}"}],
+                    "tools": [{"type": "function", "function": {"name": f"f{i}", "parameters": {"type": "object"}}}],
+                    "function": [{"name": f"f{i}"}], "ground_truth": [{f"f{i}": {"x": ["PASS"]}}]}
+                   for lg, k in (("java", 8), ("javascript", 4)) for i in range(k)])
     for i, g in enumerate(gate):
         w.prompt_to_idx[g["prompt"]] = ("gate", i)
     for i, q in enumerate(nc):
@@ -775,6 +799,11 @@ def setup_world(tmp):
     fr.Controller.run_child = lambda self, cmd, log_name, stop_dir=None, monitor=None, interval=30: \
         w.run_child(self, cmd, log_name, stop_dir, monitor, interval)
     ew.chat_request = w.chat
+    L.bfcl.prepare = lambda: None
+    L.bfcl.request = w.bfcl_request
+    L.bfcl.judge = lambda item, r: ((bool(r["tool_calls"]) and "PASS" in r["tool_calls"][0]["function"]["arguments"]),
+                                    "ok" if r["tool_calls"] and "PASS" in r["tool_calls"][0]["function"]["arguments"]
+                                    else ("no_tool_call" if not r["tool_calls"] else "value_error:string"))
     ew.count_tokens = lambda url, text: len(text) // 4
     gt.run_io_tests = lambda code, cases, timeout: "PASS" in code
     gt.run_assert_tests = lambda code, tests, timeout: "PASS" in code
@@ -790,6 +819,23 @@ def setup_world(tmp):
             f"{os.sep}{r}{os.sep}" in path for r in EVALPLUS_WORSE)} for i in range(10)}}
     L.Run.capture_output = lambda self, name="run.log": None
     return w, cpath
+
+
+def world_patches():
+    """Everything setup_world points at its world, with its real value, for restore_world afterwards (so tests that
+    run later see the real modules)."""
+    patched = [(L, "ROOT"), (L, "POOLS"), (L, "RESULTS_DIR"), (E, "EVAL_DIR"), (E, "GATE_PATH"),
+               (E, "NONCODING_PATH"), (E, "DECONTAM_EXTRA"), (fr.Controller, "serve"), (fr.Controller, "unserve"),
+               (fr.Controller, "run_child"), (ew, "chat_request"), (ew, "count_tokens"), (ew, "load_problems"),
+               (ew, "generate_tasks"), (ew, "sanitize_file"), (ew, "evaluate"), (gt, "run_io_tests"),
+               (gt, "run_assert_tests"), (L.Run, "capture_output"), (L.bfcl, "prepare"), (L.bfcl, "request"),
+               (L.bfcl, "judge")]
+    return [(o, a, o.__dict__[a] if a in o.__dict__ else getattr(o, a)) for o, a in patched]
+
+
+def restore_world(before):
+    for o, a, v in before:
+        setattr(o, a, v)
 
 
 def run_main(argv):
@@ -826,6 +872,12 @@ def _simulated_loop(tmp):
     assert st["state"] == "paused", st
     state = json.load(open(os.path.join(run_dir, "state.json")))
     assert [r["status"] for r in state["rounds"]] == ["reference", "record", "kept", "running"], state["rounds"]
+    # round 0 scored the base on the BFCL no-worse check after its gate pass; r002 (kept) reused those rows
+    bb = state["base_guards"]["bfcl"]
+    assert bb["scored_in_round"] == 0 and (bb["pass"], bb["n"]) == (9, 12), bb
+    assert bb["by_language"] == {"java": {"pass": 8, "n": 8}, "javascript": {"pass": 1, "n": 4}}, bb
+    assert state["rounds"][0]["guards"]["bfcl"]["pass"] == 9 and done(2, "bfcl")["guard"]["ok"]
+    assert [m for m, _, _ in w.bfcl_requests].count(None) == 12
     plan3 = done(3, "plan")
     # second call: resumes r003 (same plan), rejects it, then r004 takes r003's rows plus fresh ones and is kept
     assert run_main(args) == 0, open(os.path.join(run_dir, "status.json")).read()
@@ -1109,9 +1161,169 @@ def _terminal_path_and_evalplus_guard(tmp):
     assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and state()["best"]["round"] == 2
     assert "worse than the base" in open(os.path.join(rd(3), "report.md")).read()
     assert w.term_calls == [("r002", False), ("r003", True)]
-    # the same round with the guard off would have been kept
-    assert L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False)), done(3, "milestone"))
+    # EvalPlus blocked it, so BFCL never ran; with both checks off it would have been kept
+    assert not os.path.exists(os.path.join(rd(3), "stages", "bfcl.done.json"))
+    assert L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False), guards={}), done(3, "milestone"))
+    assert not L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False)), done(3, "milestone"))
     assert not L.guard_ok(cfg, None) and not L.guard_ok(cfg, {"guard": {"ok": False}})
+    assert L.guards_failed(cfg, done(3, "milestone"), {"bfcl": {"guard": {"ok": False}}}) == ["evalplus", "bfcl"]
+
+
+def test_bfcl_guard():
+    """21 Oct 2026: BFCL's Java and JavaScript tool calls are a no-worse check after EvalPlus. A training round waits
+    until the set is built; the base is scored once (here lazily, in the first round that needs it, since the set was
+    built after round 0) and again only when the settings change; a round worse on it is rejected before the confirm
+    pass; a pass whose first answers make no tool call at all stops (the round fails, its adapter kept)."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(BFCL_PASSING), set(BFCL_NO_CALLS)
+    before = world_patches()
+    try:
+        _bfcl_guard(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        BFCL_PASSING.clear()
+        BFCL_PASSING.update(saved[1])
+        BFCL_NO_CALLS.clear()
+        BFCL_NO_CALLS.update(saved[2])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _bfcl_guard(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    bf = os.path.join(E.EVAL_DIR, "bfcl_java_js.jsonl")
+    # not built yet: round 0 finishes without it (never stopped by a check), then the loop waits for it
+    os.rename(bf, bf + ".x")
+    assert run_main(args) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "waiting" and "build_guards.py --bfcl" in st["detail"], st
+    assert rec(0)["status"] == "reference" and not state().get("base_guards") and w.bfcl_requests == []
+    os.rename(bf + ".x", bf)
+    # r002 keeps on the gate and passes EvalPlus; the base is scored on BFCL here, then r002: level, so kept
+    PASSING["r002"] = 30
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    g2 = done(2, "bfcl")
+    assert rec(2)["status"] == "kept" and g2["guard"]["ok"] and g2["guard"]["n"] == 12, g2
+    assert g2["base"]["scored_in_round"] == 2 and g2["candidate"]["pass"] == 9
+    assert g2["guard"]["by_language"]["javascript"]["n"] == 4 and rec(2)["guards"]["bfcl"]["ok"]
+    assert [m for m, _, _ in w.bfcl_requests] == [None] * 12 + ["r002"] * 12
+    assert {s // 100000 for _, _, s in w.bfcl_requests} == {1}  # seed 1 for base and round alike
+    rep2 = open(os.path.join(rd(2), "report.md")).read()
+    assert "BFCL Java and JavaScript tool calls: no-worse check" in rep2 and "| JavaScript | 4 |" in rep2, rep2
+    assert "bfcl 0.750 -> 0.750" in open(os.path.join(run_dir, "summary.md")).read()
+    # r003 keeps on the gate, passes EvalPlus, but loses 7 BFCL items: rejected before the confirm pass
+    PASSING["r003"], BFCL_PASSING["r003"] = 35, 2
+    assert run_main(args) == 0
+    g3 = done(3, "bfcl")["guard"]
+    assert done(3, "decide")["keep"] and done(3, "milestone")["guard"]["ok"] and not g3["ok"], g3
+    assert g3["losses"] == 7 and g3["wins"] == 0 and g3["p_worse"] < 0.01, g3
+    assert rec(3)["status"] == "rejected" and any(x.startswith("BFCL") for x in rec(3)["reasons"]), rec(3)
+    assert not os.path.exists(os.path.join(rd(3), "stages", "confirm.done.json")) and state()["best"]["round"] == 2
+    assert [m for m, _, _ in w.bfcl_requests].count(None) == 12  # the base was not scored again
+    assert "WORSE" in open(os.path.join(run_dir, "summary.md")).read()
+    # a new seed for the check: the base is scored again under it before r004 is compared
+    cfg = L.load_config(cpath)
+    cfg["guards"]["bfcl"]["seed"] = 2
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    PASSING["r004"] = 35
+    assert run_main(args) == 0
+    assert rec(4)["status"] == "kept" and done(4, "bfcl")["guard"]["ok"]
+    seeds = [(m, s // 100000) for m, _, s in w.bfcl_requests]
+    assert seeds.count((None, 2)) == 12 and seeds.count(("r004", 2)) == 12
+    assert state()["base_guards"]["bfcl"]["fingerprint"]["seed"] == 2
+    # r005's answers make no tool call: the first 8 stop the pass (twice: once more with a fresh server), the round
+    # fails and keeps its adapter
+    PASSING["r005"] = 40
+    BFCL_NO_CALLS.add("r005")
+    assert run_main(args) == 1
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "failed" and "none of the first 8 answers made a tool call" in st["error"], st
+    assert rec(5)["failures"] == 1 and os.path.exists(os.path.join(rd(5), "train", "adapter"))
+    # 8 answers, plus at most the 3 already in flight; the retry stops on the 8 saved ones without asking again
+    assert 8 <= [m for m, _, _ in w.bfcl_requests].count("r005") <= 11
+    assert len(E.read_jsonl(os.path.join(rd(5), "guards", "bfcl.seed2.jsonl"))) == 8
+
+
+def test_bfcl_harness():
+    """anneal/bfcl.py: BFCL's request building (rebuilt here; checked byte for byte against BFCL 2026.3.23's own
+    convert_to_tool output when the set was pinned), the judge on known answers through BFCL's real checker, and
+    evalsets.score with a request and judge. The checker parts need the pinned wheel (scripts/build_guards.py --bfcl
+    downloads it); without it they are skipped."""
+    from anneal import bfcl as B
+    doc = [{"name": "Pkg.Cls.run", "description": "Runs it.", "parameters": {"type": "dict", "properties": {
+        "names": {"type": "ArrayList", "description": "The names.", "items": {"type": "String"}},
+        "count": {"type": "integer", "description": "How many."}, "ctx": {"type": "any", "description": "Context."}},
+        "required": ["names"]}}]
+    j = B.to_tools(B.hinted(doc, "java"))[0]["function"]
+    assert j["name"] == "Pkg_Cls_run" and j["parameters"]["type"] == "object" and doc[0]["name"] == "Pkg.Cls.run"
+    props = j["parameters"]["properties"]
+    assert all(v["type"] == "string" for v in props.values()) and "items" not in props["names"]
+    assert props["names"]["description"] == ("The names. This is Java ArrayList type parameter in string "
+                                             "representation. The list elements are of type String; they are not in "
+                                             "string representation.")
+    assert props["ctx"]["description"].endswith("any type of Java object in string representation.")
+    assert j["description"] == "Runs it. Note that the provided function is in Java 8 SDK syntax."
+    jsdoc = [{"name": "f", "description": "F.", "parameters": {"type": "dict", "properties": {
+        "o": {"type": "dict", "description": "An object.", "properties": {"a": {"type": "String"}}}}}}]
+    o = B.to_tools(B.hinted(jsdoc, "javascript"))[0]["function"]["parameters"]["properties"]["o"]
+    assert o == {"type": "string", "description": 'An object. This is JavaScript dict type parameter in string '
+                 'representation. The dictionary entries have the following schema; they are not in string '
+                 'representation. {"a": {"type": "String"}}'}, o
+    assert B.decode([{"function": {"name": "f", "arguments": '{"x": "1"}'}}]) == ([{"f": {"x": "1"}}], None)
+    assert B.decode([{"function": {"name": "f", "arguments": "{x"}}]) == (None, "bad_arguments_json")
+    assert B.probe([{"verdict": "no_tool_call"}] * 8) and B.probe([{"verdict": "finish_length"}] * 8) is None
+    assert B.probe([{"verdict": "no_tool_call"}] * 7 + [{"verdict": "value_error:string"}]) is None
+    # evalsets.score with a request and a judge: resumable, the request seed from the item's place, the calls kept
+    tmp = tempfile.mkdtemp(prefix="anneal-bfcl-test-")
+    try:
+        items = [{"id": f"simple_java_{i}", "language": "java"} for i in range(5)]
+        asked = []
+
+        def req(url, it, seed, mt):
+            asked.append((it["id"], seed))
+            return {"content": "", "reasoning": "", "finish_reason": "tool_calls", "completion_tokens": 9,
+                    "seconds": 0.0, "tool_calls": [{"function": {"name": "f", "arguments": "{}"}}], "answer": "[call]"}
+        out = os.path.join(tmp, "r.jsonl")
+        got = E.score("u", items, out, 3, 100, None, None, lambda u, t: 0, 0, concurrency=2, request=req,
+                      judge=lambda it, r: (it["id"].endswith(("0", "2")), "ok"), order=[0, 1, 2])
+        assert sorted(asked) == [("simple_java_0", 300000), ("simple_java_1", 300001), ("simple_java_2", 300002)]
+        assert [r["pass"] for r in sorted(got, key=lambda r: r["id"])] == [True, False, True]
+        assert {r["answer"] for r in got} == {"[call]"} and {r["verdict"] for r in got} == {"ok"}
+        E.score("u", items, out, 3, 100, None, None, lambda u, t: 0, 0, request=req, judge=lambda it, r: (True, "ok"))
+        assert len(asked) == 5 and len(E.read_jsonl(out)) == 5
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if not os.path.exists(B.WHEEL_PATH):
+        print(f"  (BFCL checker parts skipped: {B.WHEEL_PATH} not downloaded)")
+        return
+    import build_guards as G
+    rows = B.build_rows()
+    text = "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode("utf-8")
+    assert len(rows) == 150 and hashlib.sha256(text).hexdigest() == G.BFCL_ROWS_SHA256
+    assert collections.Counter(r["language"] for r in rows) == {"java": 100, "javascript": 50}
+    assert not any("." in t["function"]["name"] for r in rows for t in r["tools"])
+    B.prepare()
+    G.bfcl_selftest(rows)
+    by = {r["id"]: r for r in rows}
+    call = lambda n, a: {"finish_reason": "tool_calls", "content": "", "tool_calls": [  # noqa: E731
+        {"function": {"name": n, "arguments": json.dumps(a)}}]}
+    assert B.judge(by["simple_java_0"], call("GeometryPresentation.createPresentation",
+                                            {"controller": "mapController", "parent": "mapArea"}))[0] is False
+    assert B.judge(by["simple_java_0"], {"finish_reason": "stop", "content": B.TOOL_TAG + "{}", "tool_calls": []}) == \
+        (False, "no_tool_call:unparsed")
 
 
 def test_early_reject():
@@ -1121,13 +1333,7 @@ def test_early_reject():
     the seed of its place in gate.jsonl, whatever the order. With score_first_run off, training starts at round 2."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(SWE_LOSS), dict(TERM_LOSS)
-    # everything setup_world points at its world, put back afterwards so tests that run later see the real modules
-    patched = [(L, "ROOT"), (L, "POOLS"), (L, "RESULTS_DIR"), (E, "EVAL_DIR"), (E, "GATE_PATH"),
-               (E, "NONCODING_PATH"), (E, "DECONTAM_EXTRA"), (fr.Controller, "serve"), (fr.Controller, "unserve"),
-               (fr.Controller, "run_child"), (ew, "chat_request"), (ew, "count_tokens"), (ew, "load_problems"),
-               (ew, "generate_tasks"), (ew, "sanitize_file"), (ew, "evaluate"), (gt, "run_io_tests"),
-               (gt, "run_assert_tests"), (L.Run, "capture_output")]
-    before = [(o, a, o.__dict__[a] if a in o.__dict__ else getattr(o, a)) for o, a in patched]
+    before = world_patches()
     try:
         _early_reject(tmp)
     finally:
@@ -1137,8 +1343,7 @@ def test_early_reject():
         SWE_LOSS.update(saved[1])
         TERM_LOSS.clear()
         TERM_LOSS.update(saved[2])
-        for o, a, v in before:
-            setattr(o, a, v)
+        restore_world(before)
         restore_polyglot()
         shutil.rmtree(tmp, ignore_errors=True)
 
