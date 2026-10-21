@@ -47,6 +47,32 @@ def test_java_names():
         == ("Main.java", "Main")
 
 
+def test_build_plan_windows_args():
+    """Command lines as the PC builds them: rustc's stack flag after "-C debuginfo=0" (not inside it), go build with
+    at most 4 compilers at once, node keeping paths as given (the sandbox may not lstat C:\\)."""
+    from types import SimpleNamespace
+    tc = SimpleNamespace(gxx="g++", javac="javac", java="java", java_home=None, go="go", goroot=None, gocache=None,
+                         rustc="rustc", node="node", typescript="tsc.js", shims="shims")
+    saved = P.WINDOWS
+    P.WINDOWS = True
+    try:
+        _, build, _ = P.build_plan("rust", "fn main() {}", tc, "wd")
+        args = build[0][1]
+        pairs = [(args[i], args[i + 1]) for i, a in enumerate(args) if a == "-C"]
+        assert [v for _, v in pairs] == ["debuginfo=0", f"link-args=-Wl,--stack,{P.STACK_BYTES}"], args
+        assert args[-3:] == ["-o", "main.exe", "main.rs"], args
+        _, build, _ = P.build_plan("go", "package main", tc, "wd")
+        assert build[0][1][:3] == ["build", "-p", "4"], build
+        for lang in ("javascript", "typescript"):
+            _, build, run = P.build_plan(lang, "console.log(1)", tc, "wd")
+            for args in [run[1]] + [b[1] for b in build]:
+                assert args[:2] == P.NODE_PATH_FLAGS, (lang, args)
+        _, build, _ = P.build_plan("cpp", "int main(){}", tc, "wd")
+        assert f"-Wl,--stack,{P.STACK_BYTES}" in build[0][1]
+    finally:
+        P.WINDOWS = saved
+
+
 def test_prompts():
     for lang in P.LANG_ORDER:
         s = P.write_suffix(lang)
