@@ -8,7 +8,7 @@ def box(x,y,h,title,subs,key=False):
     for i,s in enumerate(subs): out.append(f'<text class="s" x="{cx}" y="{ty+21+i*17:.0f}">{s}</text>')
     return '\n'.join(out)
 A=[("Training data",["public sets with traces","(round 0 adds own rows)"],False),
-   ("Data pipeline",["trace check, deduplicate,","decontaminate, 8,192 tokens"],False),
+   ("Data pipeline",["trace check, deduplicate,","decontaminate, 12,288 tokens"],False),
    ("QLoRA training",["frozen 4-bit base + LoRA,","resumable loop rounds"],True),
    ("Gated adapters",["kept only if the gate","improves; GGUF export"],False)]
 B=[("Q4_K_M base model",["Qwen3.8-27B GGUF,","shared by B and A"],False),

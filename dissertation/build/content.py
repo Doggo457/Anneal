@@ -19,14 +19,14 @@ BLOCKS = [
 ("h2", "Problem Analysis"),
 ("bf", "The problem is defined by four constraints, each of which becomes a requirement."),
 ("bt", "**R1 Memory.** In 16-bit precision the weights of Qwen3.8-27B alone occupy about 55 GB, more than the 32 GB the training machine allocates to its GPU, which rules out full fine-tuning and 16-bit LoRA. Anneal quantises the frozen base to 4 bits, as in QLoRA [@qlora], leaving most of the budget for the adapter, optimiser state and activations."),
-("bt", "**R2 Context.** The model supports 262,144 tokens natively; only one layer in four uses full attention, and the rest are Gated DeltaNet linear-attention layers [@qwen]. Activation memory limits training examples to 8,192 tokens, perhaps 16,384, and short-example fine-tuning risks dulling long-range behaviour unnoticed [@longlora], [@ruler], so retention must be measured, not assumed."),
+("bt", "**R2 Context.** The model supports 262,144 tokens natively; only one layer in four uses full attention, and the rest are Gated DeltaNet linear-attention layers [@qwen]. Activation memory limits training examples to 12,288 tokens, and short-example fine-tuning risks dulling long-range behaviour unnoticed [@longlora], [@ruler], so retention must be measured, not assumed."),
 ("bt", "**R3 Data.** The model reasons in a `<think>` block before answering, so every training row needs a trace, or the model learns to skip reasoning. Data must come from public datasets licensed for training, written by a teacher at least as strong as the base, and must not overlap the evaluation sets, or gains could reflect memorisation."),
 ("bt", "**R4 Deployment.** The model runs locally as a quantised GGUF file through llama.cpp, so the base and adapted models are evaluated identically in that form."),
 ("bt", "Three scenarios drive the evaluation: (S1) writing a function from a specification; (S2) changing code across a real repository; and (S3) reasoning about a large repository held in the context. Professional issues are licensing, reproducibility, honest reporting of negative results, and the time and energy each run costs, which will be logged."),
 
 ("h2", "Scope and Objectives"),
 ("bf", "In scope are one base model, the post-trained Qwen3.8-27B checkpoint (no pre-trained base is released [@qwen]), LoRA over a 4-bit base, thinking mode throughout, and one owned machine with no cloud or departmental compute. Out of scope are full fine-tuning, a second model, context beyond 256k, the vision encoder, reinforcement learning and user studies. The objectives are:"),
-("obj", "O1", "Build a reproducible pipeline on PyTorch and ROCm that trains a Qwen3.8-27B adapter on examples of up to 8,192 tokens within the machine's 32 GB GPU allocation and survives interruptions to multi-week runs, by the end of Autumn week 12."),
+("obj", "O1", "Build a reproducible pipeline on PyTorch and ROCm that trains a Qwen3.8-27B adapter on examples of up to 12,288 tokens within the machine's 32 GB GPU allocation and survives interruptions to multi-week runs, by the end of Autumn week 12."),
 ("obj", "O2", "Assemble licence-checked public training sets with reasoning traces, decontaminated against every gate and evaluation set and documented in a data card, before each set's first loop round."),
 ("obj", "O3", "Produce an adapter that raises pass@1 on HumanEval+ and MBPP+ over the base model, with a 95% confidence interval for the difference that excludes zero, and report the same comparison on post-release LiveCodeBench problems and a personal task set."),
 ("obj", "O4", "Keep long-context accuracy (RULER and LongCodeBench, 32k to 256k tokens) and a non-coding check within 3 percentage points of the base model."),
@@ -63,7 +63,7 @@ BLOCKS = [
    ["Inference", "llama.cpp (GGUF); Ollama; PyTorch", "llama.cpp [@llamacpp], Vulkan build: full 262k context with a quantised KV cache, separate reasoning output and runtime adapters."],
    ["Code benchmarks", "HumanEval+ and MBPP+; LiveCodeBench; SWE-bench Verified", "EvalPlus [@evalplus] HumanEval+ and MBPP+ (542 problems, far more tests than the originals) as the primary measure; LiveCodeBench [@lcb] problems released after the model guard against contamination; SWE-bench is too slow (Section 2.3)."],
    ["Long-context code", "RepoQA; LongCodeBench", "LongCodeBench [@longcode], which covers 32k to 1M tokens; RepoQA [@repoqa] defaults to 16k-token contexts."],
-   ["Training data", "Public AI-written traces; human-written sets; own traces; teacher API; SWE-Gym", "Test-passed DeepSeek V4-Flash bug-fix and GLM-5.3 terminal runs [@openswe], [@glmterm] (CC-BY-4.0) and V4-Pro coding answers [@tachibana], [@banaxi] (Apache-2.0), other languages before Python. Own and OpenCodeReasoning [@ocr] traces only in the first run; human-written sets lack traces; agent-session sets [@agentset] lack raw reasoning; API-generated rows are not public; SWE-Gym [@swegym] trajectories exceed 8,192 tokens."],
+   ["Training data", "Public AI-written traces; human-written sets; own traces; teacher API; SWE-Gym", "Test-passed DeepSeek V4-Flash bug-fix and GLM-5.3 terminal runs [@openswe], [@glmterm] (CC-BY-4.0) and V4-Pro coding answers [@tachibana], [@banaxi] (Apache-2.0), other languages before Python. Own and OpenCodeReasoning [@ocr] traces only in the first run; human-written sets lack traces; agent-session sets [@agentset] lack raw reasoning; API-generated rows are not public; SWE-Gym [@swegym] trajectories come from 2024 models weaker than the base."],
    ["Existing products", "Cloud assistants (e.g. GitHub Copilot); vendor code models", "Cloud assistants send code off the machine; vendor models cannot be specialised further without solving the problem Anneal addresses."],
   ]),
 ("bt", "In summary, QLoRA fixes the training configuration; LoRA and Biderman et al. frame what to expect and which hyperparameters to test; LongLoRA and RULER define the long-context risk; and SWE-bench shapes the realistic tasks. Anneal combines these at 256k context, on AMD hardware, within 32 GB, and reports the outcome openly."),
@@ -74,8 +74,8 @@ BLOCKS = [
 
 ("h2", "Memory: Estimate, Then Measure"),
 ("bf", "`memory_estimate.py` estimates training memory from the model's shape, and `measure_memory.py` measures the peak over real training steps. Unsloth [@unsloth] changes two large terms (Table 2): Qwen3.8's 248,320-token vocabulary makes the standard loss expensive, and Cut Cross-Entropy, which cut Gemma 2's classifier-head training memory from 28 GB to 1 GB [@cce], shrinks this model's loss from about 12.6 GiB to 0.5 GiB."),
-("bt", "Table 2 decided the precision. An 8-bit base fits only if Unsloth's optimisations work on this chip, whereas a 4-bit base fits on either path; ablation A5 measures its cost in quantisation error. At 8,192 tokens the measured peak was 25.2 GiB. A five-step test before the loop tries 16,384-token rows, used only if the peak stays within 29 GB with 6 GB of system memory free."),
-("table", "Table 2. GPU memory per step at rank 16: estimated at 4,096 tokens, measured at 8,192 (GiB).", [4296, 2000, 2000],
+("bt", "Table 2 decided the precision. An 8-bit base fits only if Unsloth's optimisations work on this chip, whereas a 4-bit base fits on either path; ablation A5 measures its cost in quantisation error. The loop uses the longest rows that fit with a margin (peak within 29 GiB, 6 GB of system memory free): 16,384 tokens crashed, so the cap is 12,288."),
+("table", "Table 2. GPU memory per step at rank 16: estimated at 4,096 tokens, measured at 8,192 and 12,288 (GiB).", [4296, 2000, 2000],
   ["Component", "4-bit (chosen)", "8-bit (A5)"],
   [
    ["Frozen linear layers", "11.7", "22.7"],
@@ -88,6 +88,7 @@ BLOCKS = [
    ["**Total, Unsloth**", "**about 21**", "**about 32**"],
    ["Total, plain PEFT", "40 to 46", "51 to 57"],
    ["Measured peak at 8,192 tokens", "25.2", "not run"],
+   ["Measured peak at 12,288 tokens", "27.2", "not run"],
   ]),
 
 ("h2", "Data Pipeline"),
@@ -123,7 +124,7 @@ BLOCKS = [
 ("table", "Table 4. Objectives, measures and success criteria.", [800, 4300, 3196],
   ["Obj.", "Measure", "Success criterion"],
   [
-   ["O1", "Peak GPU memory per run; resume after a forced stop", "Within the 32 GB GPU allocation at 8,192 tokens; resumed run matches"],
+   ["O1", "Peak GPU memory per run; resume after a forced stop", "Within the 32 GB GPU allocation at 12,288 tokens; resumed run matches"],
    ["O2", "Data card; overlap checks against the gate and every evaluation set", "Every licence recorded; no detected overlap"],
    ["O3", "HumanEval+ and MBPP+ pass@1, mean of three seeds (primary); post-August-2026 LiveCodeBench; 20 to 50 personal tasks", "A beats B on HumanEval+ and MBPP+ with a 95% CI excluding zero; the others reported with CIs"],
    ["O4", "RULER and LongCodeBench at 32k to 256k and 100 MMLU-Pro questions, for each kept adapter", "A within 3 percentage points of B on each"],
