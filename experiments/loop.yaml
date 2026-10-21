@@ -34,7 +34,7 @@ rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: 
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) lower on more steps than chance,
 # p <= loss_alpha. Either way the write and fix parts may not drop by more than part_tolerance or significantly, and
 # the non-coding check (vs the base) by more than nc_tolerance or significantly.
-swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}
+swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}   # built at 8,192 and never changed
 # Single steps from Open-SWE runs in repositories the openswe_v4flash pool leaves out (its holdout below), one per
 # run, built once by scripts/build_swe_heldout.py: 177 on 21 Oct 2026, every held-out run outside Python that has a
 # step passing the pool's filters (so fewer than max_rows).
@@ -45,7 +45,9 @@ swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}
 
 train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); recipes override keys under their own train:
   base_model: C:/AI/training/models/hf/hub/models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit/snapshots/8aa5f05d26b7205477066e1449e0af13f762a299
-  seq_len: 8192
+  seq_len: 12288        # 21 Oct 2026: the longest row that fits with margin. 5 steps on the 12 longest 12k GLM-5.3 steps
+                        # (experiments/dryrun-27b-12k.yaml): torch peak 27.2 GiB of 32, >= 11.2 GB RAM free, 88 tok/s;
+                        # 16,384 crashed in its first forward (results/dryrun-27b-16k). Pools carry the cap in their name.
   batch_size: 1
   grad_accum: 8
   epochs: 1
@@ -84,7 +86,7 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
 # once the others run out (a check-in raises their share then). Maths is 0 because it doesn't teach software work; the
 # MMLU-Pro check still rejects a round that loses general reasoning.
 sources:
-  - name: openswe_v4flash
+  - name: openswe_v4flash_12k
     kind: messages
     dataset: nvidia/Open-SWE-Traces                    # CC-BY-4.0; OpenHands runs on real repository issues
     revision: 1db674173119d71df45c22007af99e214600711a
@@ -98,7 +100,7 @@ sources:
     pool_rows: 40000
     share: 0.45
     group: swe
-  - name: glm53_terminal_nopy
+  - name: glm53_terminal_nopy_12k
     kind: messages
     dataset: open-athena/recursive-task-synthesis-glm-5.3-rollouts   # CC-BY-4.0; Terminus-2 runs on Linux terminal
                                                        # tasks (shell, builds, sysadmin, containers, git, databases)
@@ -111,7 +113,7 @@ sources:
     pool_rows: 30000
     share: 0.30
     group: terminal
-  - name: tachibana4_v4pro_nopy
+  - name: tachibana4_v4pro_nopy_12k
     kind: fields
     dataset: sequelbox/Tachibana4-DeepSeek-V4-Pro      # engineering tasks in about 20 languages: review, design, porting
     prompt_field: prompt
@@ -121,7 +123,7 @@ sources:
     pool_rows: 20000
     share: 0.20
     group: code
-  - name: banaxi_v4pro_nopy
+  - name: banaxi_v4pro_nopy_12k
     kind: fields
     dataset: Banaxi-Tech/Deepseek-V4-Reasoning-Code-2500
     prompt_field: user
