@@ -1,6 +1,6 @@
 # Dataset shortlist
 
-Rule: read the dataset card and its licence field yourself before using anything, then record the licence in `Decisions-Log.md`. Apache, MIT and CC-BY are straightforward for academic use. Non-commercial licences (CC-BY-NC) are usable for a dissertation but must be stated explicitly.
+Rule: read the dataset card and its licence field yourself before using anything, then record the licence in `Decision-Log.md`. Apache, MIT and CC-BY are straightforward for academic use. Non-commercial licences (CC-BY-NC) are usable for a dissertation but must be stated explicitly.
 
 ## Instruction-tuning candidates (code)
 

@@ -5,7 +5,7 @@
 #   1. The PyTorch ROCm wheel index (rocm7.0 below). Check https://pytorch.org/get-started/locally/
 #      and match it to `rocm-smi --showversion`.
 #   2. The Unsloth install line. Paste the exact line from https://unsloth.ai/docs/basics/amd.
-# When it works, write the versions that worked into docs/Decisions-Log.md.
+# When it works, write the versions that worked into Decision-Log.md.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
