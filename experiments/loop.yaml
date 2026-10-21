@@ -26,7 +26,7 @@ pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe i
 reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
 # NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
 
-gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 4, early_reject: {looks: [0.3334, 0.6667], max_diff: 0}}
+gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 6, early_reject: {looks: [0.3334, 0.6667], max_diff: 0}}
 # early_reject (21 Oct 2026): a pass takes about 2 days (answers average about 8,700 tokens at about 26 tokens/s
 # over 4 slots), so a training round whose held-out loss paths are closed answers the gate in a fixed shuffled order
 # and stops, rejected, at the first look (after a third, then after two thirds) where it is not ahead of the best on
@@ -37,9 +37,10 @@ gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 4, early_reject: {looks
 # slots: answers the gate server decodes side by side (llama-server -np), one request in flight per slot; the
 # 262,144-token cache is split between them. Every gate, non-coding and BFCL score of the loop's life must come from
 # the same count (the loop waits on a change), and before each pass the longest prompt plus a whole answer must fit
-# a slot. Measured 21 Oct 2026 (llama-batched-bench, the scoring server's settings): 8 slots decode 29.9 and 27.2
-# tokens/s in all at 1,024 and 8,192 tokens of context, against 33.4 and 30.3 for 4, so 4 stays. EvalPlus keeps the
-# first run's 4 slots either way.
+# a slot. Measured 21 Oct 2026 (llama-batched-bench, the scoring server's settings), tokens/s decoded in all at 1,024
+# and 8,192 tokens of context: 4 slots 33.4 and 29.7, 5 slots 37.6 and 33.8, 6 slots 39.7 and 35.3, 7 slots 29.3 and
+# 26.5, 8 slots 29.9 and 27.2. 6 is about 19% faster than 4 overall (the rule set beforehand was at least 10%), so the
+# loop uses 6, and the base's first answers, from 4 slots, were set aside. EvalPlus keeps the first run's 4 slots.
 # The gate (21 Oct 2026, scripts/build_gate.py): 495 CodeContests items, no Python. Write items ask for a program in
 # C++, Java, Go, Rust, JavaScript or TypeScript (one language per problem, in turn); fix items show a wrong C++ or Java
 # submission and ask for the fixed program. Built and run in the sandbox (anneal/polyglot.py,
