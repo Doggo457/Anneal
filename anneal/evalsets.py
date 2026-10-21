@@ -267,6 +267,16 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
     def one(i, it):
         if stop_check and stop_check():
             raise Stopped()
+        try:
+            return answer(i, it)
+        except Stopped:
+            raise
+        except Exception:
+            if stop_check and stop_check():  # a pause stopped the server under it: answered again on resume
+                raise Stopped()
+            raise
+
+    def answer(i, it):
         message = None if request else it["prompt"] if "prompt" in it else mc_message(it)
         for attempt in range(1 + request_retries):
             try:

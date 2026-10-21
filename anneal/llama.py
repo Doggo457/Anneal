@@ -5,7 +5,9 @@ Scoring server (base and adapter alike; results/lora_testing_findings.md, result
   GGML_VK_DISABLE_COOPMAT=1 (llama-server dies on prompt batches over 8 tokens with a LoRA otherwise; set for the
   base too so only the adapter differs), -c 262144 -np 4 -ctk q8_0 -ctv q8_0 -fa on -ngl 999, --ctx-checkpoints 0
   and --cache-ram 0 (nothing rolls back; each checkpoint costs ~5 s here), --reasoning-format deepseek, and
-  --lora <gguf> for an adapter.
+  --lora <gguf> for an adapter. -np is the number of answers decoded side by side; the 262,144-token cache is split
+  evenly between them. The first run and EvalPlus use 4; the loop's gate server takes its count from loop.yaml
+  (gate.slots).
 """
 
 import json
@@ -33,8 +35,11 @@ def ollama_gguf():
     return os.path.join(models, "blobs", digest.replace(":", "-"))
 
 
-def scoring_flags(lora=None, extra=()):
-    flags = ["-c", "262144", "-np", "4", "-ctk", "q8_0", "-ctv", "q8_0", "-fa", "on", "-ngl", "999",
+SCORING_CTX = 262144  # the scoring server's whole KV cache, split evenly between its slots
+
+
+def scoring_flags(lora=None, extra=(), slots=4):
+    flags = ["-c", str(SCORING_CTX), "-np", str(int(slots)), "-ctk", "q8_0", "-ctv", "q8_0", "-fa", "on", "-ngl", "999",
              "--ctx-checkpoints", "0", "--cache-ram", "0", "--reasoning-format", "deepseek"]
     if lora:
         flags += ["--lora", lora]

@@ -548,6 +548,7 @@ class World:
         self.term_calls = []  # the same for the held-out terminal steps
         self.fingerprint = "tc-1"  # the toolchains (anneal/polyglot.py toolchain_fingerprint)
         self.bfcl_requests = []  # (model, item id, request seed) for each BFCL request
+        self.served = []  # (stage, flags) for each server the loop started
 
     def model(self):
         lora = self.server.lora if self.server else None
@@ -788,6 +789,7 @@ def setup_world(tmp):
     def serve(self, flags, name, coopmat=False):
         self.server = FakeServer(flags)
         w.server = self.server
+        w.served.append((name, list(flags)))
         return self.server
 
     def unserve(self):
@@ -1324,6 +1326,98 @@ def test_bfcl_harness():
                                             {"controller": "mapController", "parent": "mapArea"}))[0] is False
     assert B.judge(by["simple_java_0"], {"finish_reason": "stop", "content": B.TOOL_TAG + "{}", "tool_calls": []}) == \
         (False, "no_tool_call:unparsed")
+
+
+def test_gate_slots():
+    """21 Oct 2026: the gate server's slot count comes from loop.yaml (gate.slots), one request in flight per slot,
+    and is recorded with the loop's first scores: a later change waits, and so does a loop whose gate answers came from
+    4 slots before it was recorded, until they are set aside. A prompt that can't fit a slot with a whole answer
+    waits too. EvalPlus keeps the first run's 4 slots. A pause that stops the server under answers in flight stops the
+    pass; it is not a failure."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _gate_slots(tmp)
+    finally:
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _gate_slots(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    cfg["gate"]["slots"] = 8
+    cfg["gate"].pop("concurrency", None)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    # gate answers from before the slot count was recorded (so from 4 slots): the loop waits
+    r0 = os.path.join(run_dir, "rounds", "r000", "gate.seed1.jsonl")
+    os.makedirs(os.path.dirname(r0))
+    E.write_jsonl(r0, [{"id": "write/cpp/cc/valid/0", "seed": 1, "pass": True}])
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "scored with 4" in status()["detail"], status()
+    assert "gate_server" not in state() and not w.served
+    # set aside: round 0 is scored on 8 slots and that is recorded
+    os.rename(r0, r0 + ".4-slots")
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"] == {"slots": 8, "ctx": 262144} and state()["rounds"][0]["status"] == "reference"
+    # every gate-settings server (round 0 and r002: evaluate, BFCL, confirm) had 8 slots; EvalPlus kept 4
+    slots = [(name.split("-", 1)[1], f[f.index("-np") + 1], f[f.index("-c") + 1]) for name, f in w.served]
+    assert {s for s in slots if s[0] != "evalplus"} == {(n, "8", "262144") for n in ("evaluate", "bfcl", "confirm")}
+    assert ("evalplus", "4", "262144") in slots, slots
+    assert L.gate_concurrency(cfg) == 8 and L.gate_concurrency({"gate": {"slots": 8, "concurrency": 3}}) == 3
+    assert L.gate_concurrency({"gate": {}}) == 4 and L.gate_server({"gate": {}})["slots"] == 4
+    flags = L.llama.scoring_flags()  # the first run's and EvalPlus's server
+    assert flags[flags.index("-np") + 1] == "4" and flags[flags.index("-c") + 1] == "262144"
+    # a later change of slot count waits
+    cfg["gate"]["slots"] = 4
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    n = len(w.served)
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "scored with 8" in status()["detail"] and len(w.served) == n, status()
+    # the room check: each of 8 slots holds 32,768 tokens; prompt + 64 + max_tokens must fit
+    logs = []
+    stub = types.SimpleNamespace(log=logs.append)
+    items = [{"prompt": "x" * 4 * 12224}, {"prompt": "short"}]  # 12,224 tokens here (4 characters a token)
+    L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 8}}, [("gate", items, 20480)])
+    assert logs and "32768 of the 32768" in logs[-1], logs
+    items[0]["prompt"] += "xxxx"
+    try:
+        L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 8}}, [("gate", items, 20480)])
+        raise AssertionError("a prompt one token too long fitted")
+    except L.Waiting as exc:
+        assert "32769 tokens" in str(exc) and "lower gate.slots" in str(exc), exc
+    L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 4}}, [("gate", items, 20480)])
+    # a pause stops the server under the answers in flight: the pass stops (resumed later), it doesn't fail
+    with tempfile.TemporaryDirectory() as d:
+        out, stop = os.path.join(d, "s.jsonl"), [False]
+        items = [{"id": f"x/{i}", "prompt": f"p{i}"} for i in range(5)]
+
+        def chat(url, message, seed, max_tokens):
+            if message == "p2" or stop[0]:
+                stop[0] = True
+                raise ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+            return {"content": "ok", "reasoning": "", "finish_reason": "stop", "completion_tokens": 1, "seconds": 0.0}
+        try:
+            E.score("u", items, out, 1, 10, lambda it, c: True, chat, lambda u, t: 0, 0, concurrency=1,
+                    stop_check=lambda: stop[0], log=lambda m: None)
+            raise AssertionError("not stopped")
+        except E.Stopped:
+            pass
+        assert [r["id"] for r in E.read_jsonl(out)] == ["x/0", "x/1"]
+        stop[0] = False  # the same failure with no pause is an error
+        try:
+            E.score("u", items, out, 1, 10, lambda it, c: True, lambda *a: 1 / 0, lambda u, t: 0, 0,
+                    concurrency=1, stop_check=lambda: False, log=lambda m: None, request_retries=0)
+            raise AssertionError("no error")
+        except RuntimeError as exc:
+            assert "x/2 failed: ZeroDivisionError" in str(exc), exc
 
 
 def test_early_reject():
