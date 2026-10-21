@@ -472,6 +472,16 @@ def safe_delete(round_dir, rel_paths, log=print):
     return freed
 
 
+def early_looks(er):
+    """The early-reject looks (loop.yaml gate early_reject: looks, or the older single fraction) as sorted fractions
+    of the gate, each above 0 and below 1."""
+    looks = er.get("looks")
+    looks = sorted(float(f) for f in (looks if looks is not None else [er.get("fraction", 1 / 3)]))
+    if not looks or not all(0 < f < 1 for f in looks):
+        raise ValueError(f"gate early_reject looks must be fractions between 0 and 1, got {looks}")
+    return looks
+
+
 def gate_slots(cfg):
     return int((cfg.get("gate") or {}).get("slots", 4))
 
@@ -680,9 +690,10 @@ class Loop(fr.Controller):
     def evaluate_model(self, cfg, gguf, gate_seed, samples=True, early=None):
         """Samples (optional), the gate at gate_seed and the non-coding check, on one server. Resumable.
         early (a training round whose held-out loss paths are closed; loop.yaml gate early_reject): answer the gate in a
-        fixed shuffled order, look after the first `fraction` of it, and if the candidate is not ahead of the best's
-        rows there by more than max_diff problems, stop: no more gate answers and no non-coding check (the round is
-        rejected; decision()). The look depends only on rows already written, so a resumed pass decides the same."""
+        fixed shuffled order and look after the first `looks` fractions of it in turn (a third, then two thirds, since
+        21 Oct 2026); at the first look where the candidate is not ahead of the best's rows on everything answered so
+        far by more than max_diff problems, stop: no more gate answers and no non-coding check (the round is rejected;
+        decision()). Each look depends only on rows already written, so a resumed pass decides the same."""
         out = {}
         gate = E.read_jsonl(E.GATE_PATH)
         nc = E.read_jsonl(E.NONCODING_PATH)
@@ -726,17 +737,22 @@ class Loop(fr.Controller):
             order = None
             if early:
                 order = E.shuffled_order(gate, f"early-reject:r{self.rnum}")
-                k = max(1, math.ceil(len(gate) * float(early["fraction"])))
-                gate_pass(order[:k])
-                cand = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
-                chk = E.early_reject_check(early["best_rows"], cand, [gate[i]["id"] for i in order[:k]],
-                                           int(early["max_diff"]))
-                out["early_check"] = chk
-                self.log(f"round {self.rnum}: early look after {chk['n']} of {len(gate)} gate problems: "
-                         f"{chk['diff']:+g} vs the best ({chk['wins']} wins / {chk['losses']} losses); "
-                         + ("not ahead by more than %d, so the pass stops here" % chk["max_diff"] if chk["stop"]
-                            else "the pass goes on"))
-                out["early_reject"] = chk["stop"]
+                out["early_checks"] = []
+                for f in early_looks(early):
+                    k = max(1, math.ceil(len(gate) * f))
+                    gate_pass(order[:k])
+                    cand = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
+                    chk = E.early_reject_check(early["best_rows"], cand, [gate[i]["id"] for i in order[:k]],
+                                               int(early["max_diff"]))
+                    out["early_checks"].append(chk)
+                    out["early_check"] = chk
+                    self.log(f"round {self.rnum}: early look after {chk['n']} of {len(gate)} gate problems: "
+                             f"{chk['diff']:+g} vs the best ({chk['wins']} wins / {chk['losses']} losses); "
+                             + ("not ahead by more than %d, so the pass stops here" % chk["max_diff"] if chk["stop"]
+                                else "the pass goes on"))
+                    out["early_reject"] = chk["stop"]
+                    if chk["stop"]:
+                        break
             if not out.get("early_reject"):
                 gate_pass(order)
                 for s in cfg["noncoding"]["seeds"]:
@@ -964,7 +980,7 @@ class Loop(fr.Controller):
                      "whole gate is answered (no early look)")
             return None
         best = self.state["best"]
-        return {"fraction": float(er.get("fraction", 1 / 3)), "max_diff": int(er.get("max_diff", 0)),
+        return {"looks": early_looks(er), "max_diff": int(er.get("max_diff", 0)),
                 "best_rows": [r for r in E.read_jsonl(best["gate_rows"]) if r["seed"] == best["gate_seed"]]}
 
     def next_round_number(self):
