@@ -11,8 +11,8 @@ Rounds (results/loop/rounds/rNNN):
                     reference for every later round.
   r001 first-run    the first run's adapter on the same sets, for the record (it trained on self-generated rows, so it
                     never becomes the best).
-  r002 onwards      plan -> data -> train -> convert -> valloss -> sweloss -> evaluate -> decide [-> confirm ->
-                    milestone] -> finish
+  r002 onwards      plan -> data -> train -> convert -> valloss -> sweloss -> termloss -> evaluate -> decide
+                    [-> milestone -> confirm] -> finish
     plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml whose condition holds (after_kept,
                after_dropped_stacks), else `default_recipe`. Init: the best adapter (training continues from it), or
                the base when the best is the base or the recipe changes the LoRA shape ("base_lineage": retrain from
@@ -35,6 +35,9 @@ Rounds (results/loop/rounds/rNNN):
     sweloss    loss on the held-out bug-fix steps (data/eval/swe_heldout.jsonl, scripts/build_swe_heldout.py: Open-SWE
                runs from repositories no round trains on), this adapter against the best so far: the base's losses
                (scored once, in the first round) while the base is the best, then the kept round's own.
+    termloss   the same on the held-out terminal steps (data/eval/term_heldout.jsonl, scripts/build_swe_heldout.py
+               --set terminal: GLM-5.3 runs from task groups no round trains on), 21 Oct 2026: the six-language gate
+               can't see terminal skill.
     evaluate   one llama-server with --lora: 3 sample generations, the gate (seed = the best's reference seed), the
                non-coding check (seeds 1 and 2). The gate (scripts/build_gate.py, 21 Oct 2026) asks for programs in
                C++, Java, Go, Rust, JavaScript and TypeScript (write items) and for fixes of wrong C++ and Java
@@ -42,16 +45,20 @@ Rounds (results/loop/rounds/rNNN):
                toolchains must be the ones every earlier round was judged with, and two smoke programs per language
                must get their verdicts.
     decide     anneal/evalsets.decide, two ways to keep: the gate path (gate higher, one-sided sign test p <= alpha) or
-               the loss path (rules.loss_rule, 21 Oct 2026: gate not lower, and the held-out bug-fix loss lower on more
-               steps than chance, p <= loss_alpha). Either way the write and fix parts and the non-coding check are
-               not worse beyond tolerance nor significantly worse, and the samples are clean.
+               the loss path (rules.loss_rule, 21 Oct 2026: gate not lower, and the held-out bug-fix loss or the
+               held-out terminal loss lower on more steps than chance, Holm-adjusted across the two, p <= loss_alpha).
+               Either way the write and fix parts and the non-coding check are not worse beyond tolerance nor
+               significantly worse, and the samples are clean.
+    milestone  (passed decide) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact scoring server, paired
+               against the base's first-run EvalPlus answers. Since 21 Oct 2026 a no-worse check only (the base
+               already passes about 86% of the plus tests, so it can't show much gain): with rules.evalplus_guard a
+               drop beyond evalplus_tolerance, or a significant one, rejects the round (evalsets.guard_check). It runs
+               before confirm, so a blocked round skips the second gate pass.
     confirm    (kept) the gate again with a fresh seed; those rows become the best's reference, so the next round is
                compared against an unbiased score, not the lucky draw that got this one kept. With
                rules.confirm_net_win the fresh-seed rows of a round kept on the gate path must also win more problems
                than they lose against the best's reference, or the round is rejected (offsets the extra tries that
                rolling rows forward gives).
-    milestone  (kept) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact scoring server, paired against the
-               base's first-run EvalPlus answers: the numbers that get reported.
     finish     state.json updated (best, rejects in a row); a rejected round's adapter, checkpoints and GGUF are
                deleted (its scores, logs and report stay); report.md and results/loop/summary.md written.
 
@@ -93,8 +100,14 @@ from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 PY = sys.executable
 CONFIG = os.path.join(ROOT, "experiments", "loop.yaml")
 POOLS = os.path.join(ROOT, "data", "processed", "loop")
-ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "evaluate", "decide", "confirm", "milestone",
-                "finish"]
+ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate", "decide", "milestone",
+                "confirm", "finish"]
+# Held-out loss sets (sweloss, termloss): the loop.yaml key, the stage, the default file, what a report calls it.
+HELDOUT = {"swe": {"key": "swe_loss", "stage": "sweloss", "file": os.path.join("data", "eval", "swe_heldout.jsonl"),
+                   "label": "held-out bug-fix steps", "build": "scripts/build_swe_heldout.py"},
+           "terminal": {"key": "term_loss", "stage": "termloss",
+                        "file": os.path.join("data", "eval", "term_heldout.jsonl"),
+                        "label": "held-out terminal steps", "build": "scripts/build_swe_heldout.py --set terminal"}}
 LANG_NAMES = {"cpp": "C++", "java": "Java", "go": "Go", "rust": "Rust", "javascript": "JavaScript",
               "typescript": "TypeScript"}
 GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); the retired Python gate had cc and oci
@@ -190,6 +203,10 @@ def public_source_args(src, side="pool"):
         args += ["--drop-answer-lang", lang]
     for f in src.get("report_fields") or []:
         args += ["--report-field", f]
+    for key, flag in (("rank_col", "--rank-col"), ("first_ranks", "--first-ranks"),
+                      ("dedupe_actions_by", "--dedupe-actions-by")):
+        if src.get(key):
+            args += [flag, str(src[key])]
     if src.get("holdout"):
         h = src["holdout"]
         args += ["--holdout-col", str(h["col"]), "--holdout-mod", str(int(h["mod"])), "--holdout-side", side]
@@ -439,6 +456,14 @@ def safe_delete(round_dir, rel_paths, log=print):
     return freed
 
 
+def guard_ok(cfg, mile):
+    """Whether a round that passed decide also passes the EvalPlus no-worse check (rules.evalplus_guard, 21 Oct 2026).
+    True when the guard is off; False when it is on and EvalPlus is missing or worse than the base."""
+    if not cfg["rules"].get("evalplus_guard"):
+        return True
+    return bool(mile and (mile.get("guard") or {}).get("ok"))
+
+
 class Loop(fr.Controller):
     def __init__(self, args, run):
         super().__init__(args, run)
@@ -609,7 +634,7 @@ class Loop(fr.Controller):
 
     def evaluate_model(self, cfg, gguf, gate_seed, samples=True, early=None):
         """Samples (optional), the gate at gate_seed and the non-coding check, on one server. Resumable.
-        early (a training round whose bug-fix loss path is closed; loop.yaml gate early_reject): answer the gate in a
+        early (a training round whose held-out loss paths are closed; loop.yaml gate early_reject): answer the gate in a
         fixed shuffled order, look after the first `fraction` of it, and if the candidate is not ahead of the best's
         rows there by more than max_diff problems, stop: no more gate answers and no non-coding check (the round is
         rejected; decision()). The look depends only on rows already written, so a resumed pass decides the same."""
@@ -791,8 +816,8 @@ class Loop(fr.Controller):
         cand_rows = [r for r in E.read_jsonl(ev["gate_rows"]) if r["seed"] == ev["gate_seed"]]
         base_nc = E.read_jsonl(self.state["base"]["noncoding_rows"])
         cand_nc = E.read_jsonl(ev["noncoding_rows"])
-        loss = (self.done("sweloss") or {}).get("vs_best") if self.rnum >= 2 else None
-        d = E.decide(best_rows, cand_rows, base_nc, cand_nc, cfg["rules"], ev.get("samples_ok", True), loss=loss)
+        losses = self.heldout_losses() if self.rnum >= 2 else {}
+        d = E.decide(best_rows, cand_rows, base_nc, cand_nc, cfg["rules"], ev.get("samples_ok", True), losses=losses)
         d["best_round"] = self.state["best"]["round"]
         if not d["gate"]["n"]:
             raise RuntimeError("no gate problems in common between the best and this round")
@@ -802,23 +827,35 @@ class Loop(fr.Controller):
             d["reasons"].insert(0, f"stopped early: {chk['diff']:+g} vs the best after {chk['n']} of "
                                    f"{len(E.read_jsonl(E.GATE_PATH))} gate problems ({chk['wins']} wins / "
                                    f"{chk['losses']} losses), not ahead by more than {chk['max_diff']}, with the "
-                                   "bug-fix loss path closed")
-        self.log(f"round {self.rnum}: {'KEEP (' + d['path'] + ' path)' if d['keep'] else 'reject'} - gate "
+                                   "held-out loss paths closed")
+        self.log(f"round {self.rnum}: {'KEEP (' + d['path'] + ' path)' if d['keep'] else 'reject'}"
+                 + (f" ({', '.join(d['loss_fell'])} loss fell)" if d.get("loss_fell") else "") + " - gate "
                  f"{d['gate']['best']:.4f} -> {d['gate']['candidate']:.4f} ({d['gate']['wins']} wins / "
                  f"{d['gate']['losses']} losses, p {d['gate']['p_one_sided']:.4f}); reasons: {d['reasons']}")
         return d
 
     # ----------------------------------------------------------------------------------------- training rounds
 
+    def heldout_losses(self):
+        """{"swe": ..., "terminal": ...}: this round's held-out loss comparisons against the best (those scored)."""
+        out = {}
+        for kind, h in HELDOUT.items():
+            vs = (self.done(h["stage"]) or {}).get("vs_best")
+            if vs is not None:
+                out[kind] = vs
+        return out
+
     def early_reject_plan(self, cfg):
         """The early look for this training round's gate pass (evaluate_model early), or None: off in loop.yaml, or
-        the bug-fix loss path is open (that path keeps on a gate score not lower, so it needs the whole pass)."""
+        a held-out loss path is open (Holm-adjusted, as in decide; that path keeps on a gate score not lower, so it
+        needs the whole pass)."""
         er = (cfg.get("gate") or {}).get("early_reject")
         if not er:
             return None
-        loss = (self.done("sweloss") or {}).get("vs_best")
-        if E.loss_path_open(cfg["rules"], loss):
-            self.log(f"round {self.rnum}: bug-fix loss path open, so the whole gate is answered (no early look)")
+        fell = E.open_loss_paths(cfg["rules"], self.heldout_losses())
+        if fell:
+            self.log(f"round {self.rnum}: {', '.join(E.LOSS_LABELS.get(k, k) for k in fell)} loss path open, so the "
+                     "whole gate is answered (no early look)")
             return None
         best = self.state["best"]
         return {"fraction": float(er.get("fraction", 1 / 3)), "max_diff": int(er.get("max_diff", 0)),
@@ -863,16 +900,18 @@ class Loop(fr.Controller):
         self.run_stage("convert", self.convert_round)
         if cfg.get("valloss", True):
             self.run_stage("valloss", self.valloss)
-        if cfg.get("swe_loss"):
-            self.run_stage("sweloss", self.sweloss, cfg)
+        for kind, h in HELDOUT.items():
+            if cfg.get(h["key"]):
+                self.run_stage(h["stage"], self.heldout_loss, cfg, kind)
         ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
             cfg, self.round_gguf(), self.state["best"]["gate_seed"], early=self.early_reject_plan(cfg))))
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
         conf = mile = None
         if d["keep"]:
-            conf = self.run_stage("confirm", self.confirm, cfg, d)
-            if conf.get("confirmed", True) and cfg.get("milestone_evalplus", True):
+            if cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard"):
                 mile = self.run_stage("milestone", self.milestone, cfg)
+            if guard_ok(cfg, mile):
+                conf = self.run_stage("confirm", self.confirm, cfg, d)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile)
 
     def plan(self, cfg):
@@ -1083,30 +1122,40 @@ class Loop(fr.Controller):
         val = self.read_json(os.path.join(vdir, "summary.json")) or {}
         return self.mark_done("valloss", {k: v for k, v in val.items() if k != "per_row"})
 
-    def swe_file(self, cfg):
-        return os.path.join(ROOT, (cfg.get("swe_loss") or {}).get("file") or os.path.join("data", "eval", "swe_heldout.jsonl"))
+    def heldout_file(self, cfg, kind):
+        h = HELDOUT[kind]
+        return os.path.join(ROOT, (cfg.get(h["key"]) or {}).get("file") or h["file"])
 
-    def swe_reference(self, sha):
-        """The best's per-step losses on the held-out bug-fix steps ({path, field, sha, round}), or None. While the
-        base is the best they are the base's (scored once, by the first training round's sweloss)."""
+    def swe_file(self, cfg):
+        return self.heldout_file(cfg, "swe")
+
+    def heldout_reference(self, kind, sha):
+        """The best's per-step losses on a held-out set ({path, field, sha, round}), or None. While the base is the
+        best they are the base's (scored once, by the first training round's stage for that set)."""
+        key = HELDOUT[kind]["key"]
         best = self.state["best"]
-        ref = best.get("swe_loss") if best["round"] != 0 else (self.state.get("base") or {}).get("swe_loss")
+        ref = best.get(key) if best["round"] != 0 else (self.state.get("base") or {}).get(key)
         if ref and ref.get("sha") != sha:
-            self.log(f"the held-out bug-fix steps changed since round {ref.get('round')} was scored on them: no reference")
+            self.log(f"the {HELDOUT[kind]['label']} changed since round {ref.get('round')} was scored on them: no reference")
             return None
         return ref
 
-    def sweloss(self, cfg):
-        """Loss on the held-out bug-fix steps: this round's adapter (and the base, the first time), compared step by
-        step with the best so far (anneal/evalsets.compare_loss). For the loss path of the keep rule."""
-        sc = cfg.get("swe_loss") or {}
-        path = self.swe_file(cfg)
+    def swe_reference(self, sha):
+        return self.heldout_reference("swe", sha)
+
+    def heldout_loss(self, cfg, kind):
+        """Loss on a held-out set (kind "swe": bug-fix steps; "terminal": terminal steps): this round's adapter (and the
+        base, the first time), compared step by step with the best so far (anneal/evalsets.compare_loss). For the
+        loss paths of the keep rule."""
+        h = HELDOUT[kind]
+        sc = cfg.get(h["key"]) or {}
+        path = self.heldout_file(cfg, kind)
         if not os.path.exists(path):
-            raise Waiting("the held-out bug-fix steps are not built: run scripts/build_swe_heldout.py")
+            raise Waiting(f"the {h['label']} are not built: run {h['build']}")
         sha = file_sha(path)
-        ref = self.swe_reference(sha)
+        ref = self.heldout_reference(kind, sha)
         need_base = ref is None and self.state["best"]["round"] == 0
-        vdir = os.path.join(self.rdir, "sweloss")
+        vdir = os.path.join(self.rdir, h["stage"])
         summ = os.path.join(vdir, "summary.json")
         val = self.read_json(summ)
         if val is None or (need_base and "base" not in (val.get("scored") or [])):
@@ -1116,17 +1165,17 @@ class Loop(fr.Controller):
                    "--run-dir", vdir]
             if not need_base:
                 cmd.append("--no-base")
-            rc = self.run_child(cmd, "swe_loss.log")
+            rc = self.run_child(cmd, f"{kind}_loss.log")
             self.check_stop()
             if rc != 0:
-                raise RuntimeError(f"val_loss.py (held-out bug-fix steps) exited with {rc}")
+                raise RuntimeError(f"val_loss.py ({h['label']}) exited with {rc}")
             val = self.read_json(summ) or {}
         per = val.get("per_row") or []
         if not per:
             raise RuntimeError(f"{summ}: no rows scored")
         if need_base:
             ref = {"path": summ, "field": "base_loss", "sha": sha, "round": 0}
-            self.state["base"]["swe_loss"] = ref
+            self.state["base"][h["key"]] = ref
             self.save()
         mine = {r["key"]: r["adapter_loss"] for r in per}
         vs = None
@@ -1135,11 +1184,14 @@ class Loop(fr.Controller):
                       if r.get(ref["field"]) is not None}
             vs = E.compare_loss(theirs, mine, {r["key"]: r["trained"] for r in per})
             vs["reference_round"] = ref["round"]
-            self.log(f"round {self.rnum}: held-out bug-fix loss {vs['best']} (round {ref['round']}) -> {vs['candidate']}; "
+            self.log(f"round {self.rnum}: {h['label']} loss {vs['best']} (round {ref['round']}) -> {vs['candidate']}; "
                      f"{vs['wins']} steps lower / {vs['losses']} higher, p {vs['p_one_sided']:.4f}")
-        return self.mark_done("sweloss", {"summary": summ, "rows": len(per), "sha": sha,
-                                          "own": {"path": summ, "field": "adapter_loss", "sha": sha, "round": self.rnum},
-                                          "all": val.get("all"), "vs_best": vs})
+        return self.mark_done(h["stage"], {"summary": summ, "rows": len(per), "sha": sha,
+                                           "own": {"path": summ, "field": "adapter_loss", "sha": sha, "round": self.rnum},
+                                           "all": val.get("all"), "vs_best": vs})
+
+    def sweloss(self, cfg):
+        return self.heldout_loss(cfg, "swe")
 
     def confirm(self, cfg, d):
         """The kept adapter on the gate again with a fresh seed: its unbiased reference for later rounds."""
@@ -1186,6 +1238,7 @@ class Loop(fr.Controller):
         write_json(os.path.join(d, "result.json"), res)
         base = self.read_json(os.path.join(fdir, "score", "base.json"))
         out = {}
+        bp, cp = {}, {}  # every problem of both sets, plus tests: the no-worse check against the base
         for ds in ew.DATASETS:
             r = res["datasets"][ds]
             out[ds] = {"base": r["base"], "plus": r["plus"]}
@@ -1194,17 +1247,33 @@ class Loop(fr.Controller):
                 tasks = sorted(set(pb) & set(pa))
                 for key in ("base_pass", "plus_pass"):
                     out[ds][f"vs_base_{key}"] = fr.paired([int(pa[t][key]) for t in tasks], [int(pb[t][key]) for t in tasks])
-        return self.mark_done("milestone", {"datasets": out})
+                for t in tasks:
+                    bp[f"{ds}/{t}"], cp[f"{ds}/{t}"] = int(pb[t]["plus_pass"]), int(pa[t]["plus_pass"])
+        rules = cfg["rules"]
+        guard = E.guard_check(bp, cp, float(rules.get("evalplus_tolerance", 0.03)), rules["alpha"])
+        if not base:
+            guard.update(ok=False, missing=f"{os.path.join(fdir, 'score', 'base.json')} not found")
+        self.log(f"round {self.rnum}: EvalPlus plus tests vs the base {guard['base']} -> {guard['candidate']} on "
+                 f"{guard['n']} problems ({guard['wins']} won / {guard['losses']} lost, p worse {guard['p_worse']:.4f}): "
+                 + ("no worse" if guard["ok"] else "WORSE") + ("" if rules.get("evalplus_guard") else " (guard off)"))
+        return self.mark_done("milestone", {"datasets": out, "guard": guard})
 
     def finish(self, cfg, plan, ev, d, conf, mile):
         rec = self.round_record()
         best = self.state["best"]
         reasons = list(d["reasons"])
+        g_ok = guard_ok(cfg, mile)
+        if d["keep"] and not g_ok:
+            g = (mile or {}).get("guard") or {}
+            reasons.append("EvalPlus (HumanEval+ and MBPP+ plus tests) worse than the base: " + (
+                f"{g['base']:.4f} -> {g['candidate']:.4f} on {g['n']} problems, {g['losses']} lost / {g['wins']} won, "
+                f"p {g['p_worse']:.4f} (tolerance {g['tolerance']}, alpha {g['alpha']})" if g.get("n")
+                else (g.get("missing") or "no EvalPlus result")))
         if d["keep"] and conf and not conf.get("confirmed", True):
             c = conf["vs_previous_best"]
             reasons.append(f"the fresh-seed confirm did not win more problems than it lost against the best "
                            f"({c['wins']} wins / {c['losses']} losses)")
-        kept = d["keep"] and (conf is None or conf.get("confirmed", True))
+        kept = d["keep"] and g_ok and conf is not None and conf.get("confirmed", True)
         new_rows = [[n, list(idx)] for n, idx in plan.get("rolled") or []] + [[n, idx] for n, idx in plan["slices"].items()]
         n_new = sum(len(ix) for _, ix in new_rows)
         if kept:
@@ -1216,7 +1285,7 @@ class Loop(fr.Controller):
                                   "lora_shape": lora_shape(plan["train"]), "init": plan["init"],
                                   "train_shape": {k: plan["train"][k] for k in SHAPE_KEYS if plan["train"].get(k) is not None},
                                   "recipe": plan["recipe"]["id"],
-                                  "swe_loss": (self.done("sweloss") or {}).get("own")}
+                                  **{h["key"]: (self.done(h["stage"]) or {}).get("own") for h in HELDOUT.values()}}
             self.state["rejects_in_row"] = 0
             if plan.get("rolled"):
                 self.state["stack"] = None  # its rows are in the best's lineage now
@@ -1240,10 +1309,14 @@ class Loop(fr.Controller):
                 self.log(f"round {self.rnum}: {rec['stack']}")
         if plan["recipe"]["id"] != "default" and plan["recipe"]["id"] not in self.state["recipes_done"]:
             self.state["recipes_done"].append(plan["recipe"]["id"])
-        lo = d.get("loss") or {}
+        los = d.get("losses") or ({"swe": d["loss"]} if d.get("loss") else {})
+        brief = {h["key"]: ({k: los[kind].get(k) for k in ("best", "candidate", "wins", "losses", "p_one_sided", "p_holm")}
+                            if los.get(kind) else None) for kind, h in HELDOUT.items()}
+        gd = (mile or {}).get("guard")
         rec.update(gate=f"{ev['gate_pass']}/{ev['gate_n']}", gate_diff=d["gate"]["diff"], p=d["gate"]["p_one_sided"],
-                   path=d.get("path") if kept else None,
-                   swe_loss={k: lo.get(k) for k in ("best", "candidate", "wins", "losses", "p_one_sided")} if lo else None,
+                   path=d.get("path") if kept else None, loss_fell=d.get("loss_fell") if kept else None, **brief,
+                   evalplus_guard={k: gd.get(k) for k in ("base", "candidate", "diff", "wins", "losses", "p_worse", "ok")}
+                   if gd else None,
                    noncoding=ev["noncoding_accuracy"], reasons=reasons, best_before=d["best_round"],
                    evalplus=(mile or {}).get("datasets"), finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         self.save()
@@ -1262,9 +1335,11 @@ class Loop(fr.Controller):
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
                   + "; ".join(reasons) + ".", ""]
         elif rec["status"] == "kept":
+            fell = " and ".join(HELDOUT[k]["label"] for k in d.get("loss_fell") or [] if k in HELDOUT) or "held-out steps"
             L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
-                   "loss": "Kept on the bug-fix loss: its gate score held level and its loss on the held-out bug-fix "
-                           "steps fell, by a one-sided sign test."}.get(rec.get("path") or d.get("path"), "Kept."), ""]
+                   "loss": f"Kept on the held-out loss: its gate score held level and its loss on the {fell} fell, by "
+                           "a one-sided sign test (Holm-adjusted across the bug-fix and terminal sets)."}.get(
+                       rec.get("path") or d.get("path"), "Kept."), ""]
         part_label = {"write": "write a program", "fix": "fix a wrong submission", "cc": "CodeContests",
                       "oci": "OpenCodeInstruct held-out"}
         rows = [("gate (all)", g)] + [(f"part: {part_label.get(k, k)}", c) for k, c in (d.get("parts") or {}).items()]
@@ -1280,11 +1355,12 @@ class Loop(fr.Controller):
         if nc["n"]:
             L.append(f"| non-coding (vs base, mean of seeds) | {nc['n']} | {nc['best']:.4f} | {nc['candidate']:.4f} | "
                      f"{nc['diff']:+.4f} | {nc['wins']} / {nc['losses']} | - |")
-        lo = d.get("loss")
-        if lo and lo.get("n"):
-            L.append(f"| held-out bug-fix steps: loss (lower is better; vs round {lo.get('reference_round')}) | "
-                     f"{lo['n']} | {lo['best']:.4f} | {lo['candidate']:.4f} | {lo['diff']:+.4f} | "
-                     f"{lo['wins']} lower / {lo['losses']} higher | {lo['p_one_sided']:.4f} |")
+        for kind, lo in (d.get("losses") or ({"swe": d["loss"]} if d.get("loss") else {})).items():
+            if lo and lo.get("n"):
+                holm = f" (Holm {lo['p_holm']:.4f})" if isinstance(lo.get("p_holm"), (int, float)) else ""
+                L.append(f"| {HELDOUT.get(kind, {}).get('label', kind)}: loss (lower is better; vs round "
+                         f"{lo.get('reference_round')}) | {lo['n']} | {lo['best']:.4f} | {lo['candidate']:.4f} | "
+                         f"{lo['diff']:+.4f} | {lo['wins']} lower / {lo['losses']} higher | {lo['p_one_sided']:.4f}{holm} |")
         verdicts = _count(r.get("verdict") or ("ok" if r["pass"] else "no finished answer") for r in E.read_jsonl(ev["gate_rows"])
                           if r["seed"] == ev["gate_seed"]) if ev.get("gate_rows") else {}
         if verdicts:
@@ -1320,8 +1396,13 @@ class Loop(fr.Controller):
                       + ("; net win required: " + ("yes, passed" if conf.get("confirmed", True) else "not met")
                          if conf.get("net_win_required") else "") + "."]
         if mile:
-            L += ["", "## EvalPlus (seed 1, the first run's scoring server)", "", "| | base tests | base+extra | vs base (base+extra) |",
-                  "|---|---|---|---|"]
+            g = mile.get("guard") or {}
+            L += ["", "## EvalPlus no-worse check (seed 1, the first run's scoring server)", "",
+                  "A check that the round is not worse than the base, not a measure of gain (21 Oct 2026)."
+                  + (f" Plus tests, all {g['n']} problems: base {g['base']:.4f}, this round {g['candidate']:.4f}, "
+                     f"{g['wins']} won / {g['losses']} lost, p worse {g['p_worse']:.4f}: "
+                     + ("no worse." if g.get("ok") else "worse.") if g.get("n") else ""), "",
+                  "| | base tests | base+extra | vs base (base+extra) |", "|---|---|---|---|"]
             for ds, m in mile["datasets"].items():
                 vb = m.get("vs_base_plus_pass")
                 L.append(f"| {ds} | {m['base']:.4f} | {m['plus']:.4f} | " + (
@@ -1337,21 +1418,24 @@ class Loop(fr.Controller):
              + (f" Rows waiting to roll into the next round: {self.state['stack']['rows']} from rounds "
                 f"{self.state['stack']['rounds']}." if self.state.get("stack") else "")
              + (f" Rolled-forward stacks dropped: {len(self.state['stacks_dropped'])}." if self.state.get("stacks_dropped") else ""), "",
-             "| round | recipe | init | rows | gate | diff vs best | p | bug-fix loss vs best (p) | non-coding | result | "
-             "EvalPlus+ HE / MBPP |",
-             "|---|---|---|---|---|---|---|---|---|---|---|"]
+             "| round | recipe | init | rows | gate | diff vs best | p | bug-fix loss vs best (p) | terminal loss vs best (p) "
+             "| non-coding | result | EvalPlus+ HE / MBPP (no-worse check) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in self.state["rounds"]:
             ep = r.get("evalplus") or {}
             eps = " / ".join(f"{ep[ds]['plus']:.3f}" for ds in ew.DATASETS if ds in ep) or "-"
             diff = f"{r['gate_diff']:+.4f}" if isinstance(r.get("gate_diff"), (int, float)) else "-"
             p = f"{r['p']:.4f}" if isinstance(r.get("p"), (int, float)) else "-"
             ncs = f"{r['noncoding']:.3f}" if isinstance(r.get("noncoding"), (int, float)) else "-"
-            sl = r.get("swe_loss") or {}
-            sls = (f"{sl['best']:.4f} -> {sl['candidate']:.4f} ({sl['p_one_sided']:.4f})"
-                   if isinstance(sl.get("best"), (int, float)) and isinstance(sl.get("candidate"), (int, float)) else "-")
+            def lcell(sl):
+                sl = sl or {}
+                return (f"{sl['best']:.4f} -> {sl['candidate']:.4f} ({sl['p_one_sided']:.4f})"
+                        if isinstance(sl.get("best"), (int, float)) and isinstance(sl.get("candidate"), (int, float))
+                        else "-")
             result = r["status"] + (f" ({r['path']} path)" if r.get("path") else "")
             L.append(f"| {r['round']} | {r.get('recipe', r.get('name', '-'))} | {r.get('init', '-')} | {r.get('rows', '-')} | "
-                     f"{r.get('gate', '-')} | {diff} | {p} | {sls} | {ncs} | {result} | {eps} |")
+                     f"{r.get('gate', '-')} | {diff} | {p} | {lcell(r.get('swe_loss'))} | {lcell(r.get('term_loss'))} | "
+                     f"{ncs} | {result} | {eps} |")
         with open(os.path.join(self.dir, "summary.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(L) + "\n")
 
@@ -1407,8 +1491,9 @@ def main():
         while not args.max_rounds or rounds_run < args.max_rounds:
             cfg = load_config(args.config)  # re-read every round: check-ins append recipes and sources
             c.require_gate()
-            if cfg.get("swe_loss") and not os.path.exists(c.swe_file(cfg)):
-                raise Waiting("the held-out bug-fix steps are not built: run scripts/build_swe_heldout.py")
+            for kind, h in HELDOUT.items():
+                if cfg.get(h["key"]) and not os.path.exists(c.heldout_file(cfg, kind)):
+                    raise Waiting(f"the {h['label']} are not built: run {h['build']}")
             pause_after = int(cfg.get("pause_after_rejects_in_row") or 0)
             if pause_after and c.state["rejects_in_row"] >= pause_after:
                 raise Waiting(f"{c.state['rejects_in_row']} rejects in a row: paused for a new recipe")

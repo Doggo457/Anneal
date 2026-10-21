@@ -66,7 +66,8 @@ def main():
                    if state.get("stack") else None,
                    "stacks_dropped": len(state.get("stacks_dropped") or []),
                    "rounds": [{k: r.get(k) for k in ("round", "status", "recipe", "init", "rows", "gate", "gate_diff",
-                                                      "p", "path", "swe_loss", "noncoding", "reasons", "failures",
+                                                      "p", "path", "loss_fell", "swe_loss", "term_loss", "evalplus_guard", "noncoding",
+                                                      "reasons", "failures",
                                                       "last_error", "finished")}
                               for r in (state.get("rounds") or [])[-4:]],
                    "log_tail": tail(os.path.join(lp, "run.log"), 3)}
@@ -76,6 +77,8 @@ def main():
                         if k in out["eval_sets"]} if out["eval_sets"] else None
     swe = read_json(os.path.join(ROOT, "data", "eval", "swe_heldout_card.json"))
     out["swe_heldout"] = {k: swe.get(k) for k in ("rows", "available_steps", "built")} if swe else None
+    term = read_json(os.path.join(ROOT, "data", "eval", "term_heldout_card.json"))
+    out["term_heldout"] = {k: term.get(k) for k in ("rows", "available_steps", "built")} if term else None
     smoke = read_json(os.path.join(RESULTS, "toolchains", "smoke.json"))
     out["toolchains"] = {"smoke_when": smoke.get("when"), "mismatches": smoke.get("mismatches")} if smoke else None
     out["watchdog_tail"] = tail(os.path.join(RESULTS, "watchdog", "watchdog.log"), 3)

@@ -406,11 +406,33 @@ def mc_accuracy(rows):
     return sum(1 for r in rows if r["pass"]) / len(rows) if rows else None
 
 
+LOSS_LABELS = {"swe": "bug-fix", "terminal": "terminal"}
+
+
+def loss_paths(rules, losses):
+    """The held-out loss paths of the keep rule (decide), Holm-adjusted across the paths that have a comparison
+    (21 Oct 2026: bug-fix steps and terminal steps), so adding a path doesn't raise the chance of a false keep:
+    {name: {p_one_sided, p_holm, open}}. A path is open when loss_rule is on, the candidate's mean loss is lower and
+    its Holm-adjusted one-sided sign-test p is <= loss_alpha. With one path, p_holm is its own p."""
+    alpha = rules.get("loss_alpha", rules["alpha"])
+    live = sorted(((k, v) for k, v in (losses or {}).items() if v and v.get("n") and v.get("diff") is not None),
+                  key=lambda kv: (kv[1]["p_one_sided"], kv[0]))
+    out, prev = {}, 0.0
+    for j, (k, v) in enumerate(live):
+        prev = max(prev, min(1.0, (len(live) - j) * v["p_one_sided"]))
+        out[k] = {"p_one_sided": v["p_one_sided"], "p_holm": prev,
+                  "open": bool(rules.get("loss_rule")) and v["diff"] < 0 and prev <= alpha}
+    return out
+
+
+def open_loss_paths(rules, losses):
+    """Names of the open loss paths (loss_paths), in a fixed order."""
+    return sorted(k for k, v in loss_paths(rules, losses).items() if v["open"])
+
+
 def loss_path_open(rules, loss):
-    """Whether the bug-fix loss path of the keep rule (decide) is open: loss_rule on and the candidate's loss on the
-    held-out bug-fix steps lower than the best's on more steps than chance (one-sided sign test, p <= loss_alpha)."""
-    return bool(rules.get("loss_rule")) and bool(loss and loss.get("n")) and loss.get("diff") is not None \
-        and loss["diff"] < 0 and loss["p_one_sided"] <= rules.get("loss_alpha", rules["alpha"])
+    """Whether the bug-fix loss path alone is open (the rule before the terminal path was added)."""
+    return bool(open_loss_paths(rules, {"swe": loss}))
 
 
 def shuffled_order(items, salt):
@@ -429,6 +451,22 @@ def early_reject_check(best_rows, cand_rows, ids, max_diff):
     return {"n": len(common), "of": len(ids), "diff": diff, "max_diff": max_diff,
             "wins": sum(1 for i in common if c[i] > b[i]), "losses": sum(1 for i in common if c[i] < b[i]),
             "stop": len(common) == len(ids) and diff <= max_diff}
+
+
+def guard_check(base_pass, cand_pass, tolerance, alpha):
+    """A no-worse check against the base ({problem: 1 passed / 0 failed}, paired per problem): worse when the
+    candidate's pass rate is lower by more than tolerance, or it fails more of the problems that changed than chance
+    allows (one-sided sign test on its losses, p <= alpha). The same test as the non-coding check (decide)."""
+    ids = sorted(set(base_pass) & set(cand_pass))
+    wins = sum(1 for i in ids if cand_pass[i] > base_pass[i])
+    losses = sum(1 for i in ids if cand_pass[i] < base_pass[i])
+    b = sum(base_pass[i] for i in ids) / len(ids) if ids else None
+    c = sum(cand_pass[i] for i in ids) / len(ids) if ids else None
+    diff = (c - b) if ids else None
+    p_worse = sign_test_greater(losses, wins)
+    worse = bool(ids) and (diff < -tolerance or p_worse <= alpha)
+    return {"n": len(ids), "base": b, "candidate": c, "diff": diff, "wins": wins, "losses": losses,
+            "p_worse": p_worse, "tolerance": tolerance, "alpha": alpha, "ok": bool(ids) and not worse}
 
 
 def compare_loss(best, cand, weights=None):
@@ -450,12 +488,14 @@ def compare_loss(best, cand, weights=None):
 PART_NAMES = {"write": "write part", "fix": "fix part", "cc": "CodeContests part"}
 
 
-def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=None):
+def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=None, losses=None):
     """The keep rule. Keep the candidate only if
       EITHER its gate score (paired per problem against the best so far) is higher and a one-sided exact sign test on
         the problems that changed gives p <= alpha,
-      OR (rules loss_rule, 21 Oct 2026) its gate score is not lower AND its loss on the held-out bug-fix steps
-        (loss: compare_loss against the best) is lower on more steps than chance, p <= loss_alpha;
+      OR (rules loss_rule, 21 Oct 2026) its gate score is not lower AND its loss on held-out steps (losses:
+        {"swe": bug-fix steps, "terminal": terminal steps}, each compare_loss against the best; loss alone means the
+        bug-fix steps) is lower on more steps than chance, Holm-adjusted across the paths, p <= loss_alpha
+        (loss_paths);
     and in both cases all hold:
       - each guarded part (write, fix; cc in the old Python gate) is not worse than the best by more than
         part_tolerance (cc_tolerance in older configs), and not significantly worse (one-sided sign test on its
@@ -480,8 +520,12 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
     gate_gain = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] > 0 and allp["p_one_sided"] <= alpha
     gate_level = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] >= 0
     loss_alpha = rules.get("loss_alpha", alpha)
-    loss_fall = loss_path_open(dict(rules, loss_rule=True), loss)
-    path = "gate" if gate_gain else ("loss" if rules.get("loss_rule") and gate_level and loss_fall else None)
+    if losses is None:
+        losses = {"swe": loss} if loss is not None else {}
+    losses = {k: v for k, v in losses.items() if v is not None}
+    lp = loss_paths(dict(rules, loss_rule=True), losses)
+    fell = sorted(k for k, v in lp.items() if v["open"])
+    path = "gate" if gate_gain else ("loss" if rules.get("loss_rule") and gate_level and fell else None)
     if path is None:
         if allp["n"] == 0 or allp["diff"] is None or allp["diff"] <= 0:
             reasons.append(f"gate not higher (diff {allp['diff']})")
@@ -489,13 +533,14 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
             reasons.append(f"gate gain not clear: one-sided sign test p {allp['p_one_sided']:.4f} > {alpha}")
         if rules.get("loss_rule"):
             if not gate_level:
-                reasons.append("bug-fix loss path closed: the gate score is lower")
-            elif not (loss and loss.get("n")):
-                reasons.append("bug-fix loss path: no held-out loss for this round")
-            else:
-                reasons.append(f"bug-fix loss not clearly lower: {loss['best']:.4f} -> {loss['candidate']:.4f}, "
-                               f"{loss['wins']} steps lower / {loss['losses']} higher, p {loss['p_one_sided']:.4f} "
-                               f"(needs <= {loss_alpha})")
+                reasons.append("held-out loss path closed: the gate score is lower")
+            elif not lp:
+                reasons.append("held-out loss paths: no held-out loss for this round")
+            for k in (sorted(lp) if gate_level else []):  # with the gate level, no path fell here
+                lo = losses[k]
+                reasons.append(f"{LOSS_LABELS.get(k, k)} loss not clearly lower: {lo['best']:.4f} -> "
+                               f"{lo['candidate']:.4f}, {lo['wins']} steps lower / {lo['losses']} higher, p "
+                               f"{lo['p_one_sided']:.4f}, Holm-adjusted {lp[k]['p_holm']:.4f} (needs <= {loss_alpha})")
     guarded = [(PART_NAMES[k], parts[k], tol) for k in kinds if k in PART_NAMES]
     for name, c, t in guarded + [("non-coding check", nc, rules["nc_tolerance"])]:
         if not c["n"]:
@@ -507,7 +552,8 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
         elif p_worse <= alpha:
             reasons.append(f"{name} significantly worse: {c['losses']} losses vs {c['wins']} wins, p {p_worse:.4f}")
     out = {"keep": not reasons, "path": path if not reasons else None, "reasons": reasons, "gate": allp,
-           "parts": parts, "langs": by_lang, "noncoding": nc, "loss": loss, "rules": dict(rules)}
+           "parts": parts, "langs": by_lang, "noncoding": nc, "loss": losses.get("swe"),
+           "losses": {k: dict(losses[k], **lp.get(k, {})) for k in losses}, "loss_fell": fell, "rules": dict(rules)}
     for k in ("cc", "oci"):  # the old Python gate's report fields
         if k in parts:
             out[f"gate_{k}"] = parts[k]

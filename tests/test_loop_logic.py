@@ -119,6 +119,43 @@ def test_six_language_decide_and_loss():
     # the non-coding guard holds on the loss path too
     worse_nc = rows(nc_ids, set(nc_ids[:5])) + rows(nc_ids, set(nc_ids[:5]), seed=2)
     assert not E.decide(base, base, nc, worse_nc, rules, loss=down)["keep"]
+    # two held-out sets (21 Oct 2026: bug-fix and terminal steps), Holm-adjusted: one clear fall still keeps, but a
+    # p that passes alone (0.03 <= 0.05) no longer does when the other set is level (2 x 0.03 > 0.05)
+    def lo(wins, losses, diff=-0.05):
+        return {"n": wins + losses, "best": 1.0, "candidate": 1.0 + diff, "diff": diff, "wins": wins,
+                "losses": losses, "p_one_sided": E.sign_test_greater(wins, losses)}
+    near = lo(19, 9)          # p 0.0436
+    flat = lo(10, 10, 0.0)    # p 0.588
+    assert 0.025 < near["p_one_sided"] <= 0.05
+    assert E.decide(base, base, nc, nc, rules, losses={"swe": near})["keep"]
+    d = E.decide(base, base, nc, nc, rules, losses={"swe": flat, "terminal": near})
+    assert not d["keep"] and abs(d["losses"]["terminal"]["p_holm"] - 2 * near["p_one_sided"]) < 1e-12, d
+    assert any("terminal loss not clearly lower" in r and "Holm-adjusted" in r for r in d["reasons"]), d["reasons"]
+    d = E.decide(base, base, nc, nc, rules, losses={"swe": flat, "terminal": down})
+    assert d["keep"] and d["path"] == "loss" and d["loss_fell"] == ["terminal"] and d["loss"] is flat, d
+    lp = E.loss_paths(rules, {"swe": near, "terminal": down})  # Holm step-down: the second p is checked at 0.05
+    assert lp["terminal"]["open"] and lp["swe"]["open"] and lp["swe"]["p_holm"] == near["p_one_sided"], lp
+    assert E.open_loss_paths(rules, {"swe": near, "terminal": down}) == ["swe", "terminal"]
+    assert E.open_loss_paths(rules, {"swe": lo(19, 9, +0.01)}) == []  # more steps lower but the mean rose: closed
+    assert E.open_loss_paths(dict(rules, loss_rule=False), {"terminal": down}) == []
+    assert E.loss_path_open(rules, down) and not E.loss_path_open(rules, None)
+    # EvalPlus no-worse check against the base (21 Oct 2026): the non-coding check's test
+    bp = {f"p{i}": int(i < 470) for i in range(542)}
+    same = E.guard_check(bp, dict(bp), 0.03, 0.05)
+    assert same["ok"] and same["diff"] == 0 and same["n"] == 542
+    cp = dict(bp)
+    for i in range(10):     # 10 lost, none won
+        cp[f"p{i}"] = 0
+    g = E.guard_check(bp, cp, 0.03, 0.05)
+    assert not g["ok"] and g["losses"] == 10 and g["p_worse"] < 0.05, g
+    cp2 = dict(bp)
+    for i in range(16):     # first run's pattern: 12 won, 16 lost: level, kept
+        cp2[f"p{i}"] = 0
+    for i in range(470, 482):
+        cp2[f"p{i}"] = 1
+    g2 = E.guard_check(bp, cp2, 0.03, 0.05)
+    assert g2["ok"] and (g2["wins"], g2["losses"]) == (12, 16) and g2["p_worse"] > 0.05, g2
+    assert not E.guard_check({}, {}, 0.03, 0.05)["ok"]  # nothing to compare is never a pass
     # the scorer keeps the judge's verdict
     check = E.gate_check(None, None, None, lambda item, content: (False, "compile_error"))
     assert check({"kind": "fix", "id": "fix/cpp/x", "lang": "cpp"}, "x") == (False, "compile_error")
@@ -183,6 +220,22 @@ def test_holdout_and_step_cap():
         glm = next(s for s in cfg["sources"] if s.get("from_local"))
         ga = L.public_source_args(glm)
         assert ga[ga.index("--from-local") + 1] == os.path.join(ROOT, glm["from_local"]) and "--respect-loss-mask" in ga
+        # 21 Oct 2026: every passing GLM-5.3 run, best-ranked first, near-duplicate steps dropped, task groups held out
+        gns = parsed_args("public_source.py", ga + ["--tokenizer", "x", "--out", d])
+        assert glm["name"] == "glm53_all_nopy_12k" and gns.where == ["uses_python=false"], gns
+        assert (gns.rank_col, gns.first_ranks, gns.dedupe_actions_by) == ("task_rank", 2, "task_id"), gns
+        assert (gns.holdout_col, gns.holdout_mod, gns.holdout_side) == ("task_group_id", 20, "pool"), gns
+        py = next(s for s in cfg["sources"] if s["name"] == "glm53_all_12k")
+        assert py["holdout"] == glm["holdout"] and py["share"] == 0 and py["where"] == ["uses_python=true"]
+        targs, tsrc = B.source_args(cfg, "terminal")
+        tns = parsed_args("public_source.py", targs + ["--tokenizer", "x", "--out", d])
+        assert tsrc is glm and (tns.holdout_col, tns.holdout_mod, tns.holdout_side) == ("task_group_id", 20, "heldout")
+        assert (tns.max_steps_per_conversation, tns.max_conversations_per, tns.max_tokens) == (1, "task_id=3", 12288)
+        assert tns.rank_col == "task_rank" and tns.dedupe_actions_by == "task_id" and tns.respect_loss_mask, tns
+        assert B.paths("terminal")[0].endswith("term_heldout.jsonl") and B.paths("swe")[0] == B.OUT
+        shares = {s["name"]: s["share"] for s in cfg["sources"] if s["share"]}
+        assert shares == {"glm53_all_nopy_12k": 0.40, "openswe_v4flash_12k": 0.35, "tachibana4_v4pro_nopy_12k": 0.20,
+                          "banaxi_v4pro_nopy_12k": 0.05}, shares
         local, done = os.path.join(d, "conv.jsonl"), os.path.join(d, "conv.done.json")
         open(local, "w").close()
         assert not L.local_source_ready(dict(glm, from_local=local, from_local_done=done))
@@ -460,6 +513,8 @@ PASSING = {None: 20, "first-run": 22, "r002": 30, "r003": 18, "r004": 35, "r005"
            "r008": 30, "r009": 40, "r010": 40, "r011": 40}  # gate items 0..k-1 pass
 CONFIRM_PASSING = {"r007": 34}  # on its fresh-seed confirm (seed 1000 + round) r007 does worse than when it was kept
 SWE_LOSS = {}  # round -> its loss on every held-out bug-fix step (default: 1 + 0.01 x round, never lower than the best)
+TERM_LOSS = {}  # the same for the held-out terminal steps
+EVALPLUS_WORSE = set()  # rounds whose EvalPlus answers fail every plus test (the no-worse check must block them)
 LANGS = ("cpp", "java", "go", "rust", "javascript", "typescript")
 
 
@@ -487,6 +542,7 @@ class World:
         self.pause_train_once = {"loop-r003"}
         self.prompt_to_idx = {}
         self.swe_calls = []  # (round, --no-base) for each val_loss.py run on the held-out bug-fix steps
+        self.term_calls = []  # the same for the held-out terminal steps
         self.fingerprint = "tc-1"  # the toolchains (anneal/polyglot.py toolchain_fingerprint)
 
     def model(self):
@@ -565,11 +621,13 @@ class World:
         if script == "val_loss.py":
             rd = arg("--run-dir")
             os.makedirs(rd, exist_ok=True)
-            if arg("--val-file").endswith("swe_heldout.jsonl"):  # the held-out bug-fix steps (the loss rule)
+            vf = arg("--val-file")
+            if vf.endswith(("swe_heldout.jsonl", "term_heldout.jsonl")):  # held-out bug-fix / terminal steps
                 rnd = [x for x in arg("--adapter").replace("\\", "/").split("/") if x.startswith("r") and x[1:].isdigit()][0]
-                self.swe_calls.append((rnd, "--no-base" in cmd))
-                keys = [r["messages"][0]["content"] for r in E.read_jsonl(arg("--val-file"))][:int(arg("--max-rows"))]
-                own = SWE_LOSS.get(rnd, 1.0 + 0.01 * int(rnd[1:]))  # by default each round is a little higher
+                calls, table = (self.swe_calls, SWE_LOSS) if vf.endswith("swe_heldout.jsonl") else (self.term_calls, TERM_LOSS)
+                calls.append((rnd, "--no-base" in cmd))
+                keys = [r["messages"][0]["content"] for r in E.read_jsonl(vf)][:int(arg("--max-rows"))]
+                own = table.get(rnd, 1.0 + 0.01 * int(rnd[1:]))  # by default each round is a little higher
                 per = [dict({"row": i, "key": k, "trained": 100 + i, "adapter_loss": own},
                             **({} if "--no-base" in cmd else {"base_loss": 1.0})) for i, k in enumerate(keys)]
                 names = ["adapter"] if "--no-base" in cmd else ["base", "adapter"]
@@ -644,6 +702,9 @@ def setup_world(tmp):
     E.write_jsonl(os.path.join(ev, "swe_heldout.jsonl"),  # held-out bug-fix steps (scripts/build_swe_heldout.py)
                   [{"messages": [{"role": "user", "content": f"held-out issue {i}"},
                                  {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(12)])
+    E.write_jsonl(os.path.join(ev, "term_heldout.jsonl"),  # held-out terminal steps (build_swe_heldout.py --set terminal)
+                  [{"messages": [{"role": "user", "content": f"held-out terminal task {i}"},
+                                 {"role": "assistant", "content": "<think>t</think> step"}]} for i in range(14)])
     for i, g in enumerate(gate):
         w.prompt_to_idx[g["prompt"]] = ("gate", i)
     for i, q in enumerate(nc):
@@ -725,7 +786,8 @@ def setup_world(tmp):
     ew.generate_tasks = lambda *a, **k: {"rows": [], "wall_s": 1, "generated_tokens": 0}
     ew.sanitize_file = lambda ds, raw, out=None: raw
     ew.evaluate = lambda ds, path, parallel=8: {"base": 0.8, "plus": 0.7, "per_task": {
-        f"{ds}/{i}": {"base_pass": True, "plus_pass": i % 2 == 0} for i in range(10)}}
+        f"{ds}/{i}": {"base_pass": True, "plus_pass": i % 2 == 0 and not any(
+            f"{os.sep}{r}{os.sep}" in path for r in EVALPLUS_WORSE)} for i in range(10)}}
     L.Run.capture_output = lambda self, name="run.log": None
     return w, cpath
 
@@ -837,7 +899,7 @@ def _simulated_loop(tmp):
     assert done(7, "decide")["keep"] and not done(7, "confirm")["confirmed"]
     r7 = [r for r in state["rounds"] if r["round"] == 7][0]
     assert any("fresh-seed confirm" in x for x in r7["reasons"]) and not os.path.exists(os.path.join(rd(7), "convert"))
-    assert not os.path.exists(os.path.join(rd(7), "stages", "milestone.done.json"))
+    assert done(7, "milestone")["guard"]["ok"]  # EvalPlus (the no-worse check) runs before the confirm pass
     assert [(s["rows"], s["attempts"], s["rounds"]) for s in state["stacks_dropped"]] == [(300, 3, [6, 7, 8])]
     # r009: rank 64 on the DeltaNet projections too, retrained from the base on every kept row + 100 fresh rows
     p9, y9 = done(9, "plan"), ty(9)
@@ -885,6 +947,11 @@ def _simulated_loop(tmp):
     assert state["best"]["swe_loss"]["round"] == 9 and state["best"]["swe_loss"]["field"] == "adapter_loss"
     assert done(3, "sweloss")["vs_best"]["reference_round"] == 2 and done(2, "sweloss")["vs_best"]["reference_round"] == 0
     assert done(10, "sweloss")["vs_best"]["reference_round"] == 9 and done(10, "sweloss")["vs_best"]["losses"] == 12
+    # the held-out terminal loss works the same way
+    assert w.term_calls[0] == ("r002", False) and all(nb for _, nb in w.term_calls[1:]), w.term_calls
+    assert sorted({r for r, _ in w.term_calls}) == [f"r{n:03d}" for n in range(2, 12)], w.term_calls
+    assert state["base"]["term_loss"]["round"] == 0 and state["best"]["term_loss"]["round"] == 9
+    assert done(10, "termloss")["vs_best"]["reference_round"] == 9 and done(10, "termloss")["vs_best"]["losses"] == 14
     assert all(r.get("path") in (None, "gate") for r in state["rounds"]), state["rounds"]
     rep4 = open(os.path.join(rd(4), "report.md")).read()
     assert "Kept on the gate" in rep4 and "part: fix a wrong submission" in rep4 and "language: TypeScript" in rep4
@@ -934,7 +1001,8 @@ def _loss_path_and_guards(tmp):
     assert r2["status"] == "kept" and r2["path"] == "loss" and d2["path"] == "loss" and d2["gate"]["diff"] == 0, d2
     assert d2["loss"]["wins"] == 12 and d2["loss"]["losses"] == 0 and r2["swe_loss"]["candidate"] == 0.8
     assert state["best"]["round"] == 2 and state["best"]["swe_loss"]["round"] == 2
-    assert "Kept on the bug-fix loss" in open(os.path.join(rd(2), "report.md")).read()
+    assert "Kept on the held-out loss" in open(os.path.join(rd(2), "report.md")).read()
+    assert d2["loss_fell"] == ["swe"] and r2["loss_fell"] == ["swe"] and done(2, "milestone")["guard"]["ok"]
     assert "kept (loss path)" in open(os.path.join(run_dir, "summary.md")).read()
     # with the loss rule off, the same round would have been rejected
     cfg = L.load_config(cpath)
@@ -974,13 +1042,85 @@ def _loss_path_and_guards(tmp):
     assert len(PRIVATE_CHECKS) == checks + 2  # the sandbox's storage folder is checked before each six-language pass
 
 
+def test_terminal_path_and_evalplus_guard():
+    """21 Oct 2026: the held-out terminal loss is a second loss path (Holm-adjusted with the bug-fix one), and
+    EvalPlus is a no-worse check that runs on rounds that pass the keep rule, before the confirm pass."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(SWE_LOSS), dict(TERM_LOSS), set(EVALPLUS_WORSE)
+    try:
+        _terminal_path_and_evalplus_guard(tmp)
+    finally:
+        PASSING.clear()
+        PASSING.update(saved[0])
+        SWE_LOSS.clear()
+        SWE_LOSS.update(saved[1])
+        TERM_LOSS.clear()
+        TERM_LOSS.update(saved[2])
+        EVALPLUS_WORSE.clear()
+        EVALPLUS_WORSE.update(saved[3])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _terminal_path_and_evalplus_guard(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    # the terminal steps aren't built yet: a training round trains, then waits before its first held-out loss
+    term = os.path.join(E.EVAL_DIR, "term_heldout.jsonl")
+    os.rename(term, term + ".x")
+    assert run_main(args) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "waiting" and "build_swe_heldout.py --set terminal" in st["detail"], st
+    os.rename(term + ".x", term)
+    # r002: level on the gate (20 of 40), the bug-fix loss a little higher, the terminal loss lower on all 14 steps:
+    # kept on the loss path, by the terminal set; the base's terminal losses are scored once, here
+    PASSING["r002"], TERM_LOSS["r002"] = 20, 0.8
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    d2, r2 = done(2, "decide"), [r for r in state()["rounds"] if r["round"] == 2][0]
+    assert d2["keep"] and d2["path"] == "loss" and d2["loss_fell"] == ["terminal"], d2
+    assert d2["losses"]["swe"]["p_holm"] == 1.0 and d2["losses"]["terminal"]["p_holm"] < 0.001, d2["losses"]
+    assert r2["status"] == "kept" and abs(r2["term_loss"]["candidate"] - 0.8) < 1e-9 and r2["loss_fell"] == ["terminal"], r2
+    assert w.term_calls == [("r002", False)] and state()["base"]["term_loss"]["field"] == "base_loss"
+    assert state()["best"]["term_loss"]["round"] == 2 and state()["best"]["swe_loss"]["round"] == 2
+    rep2 = open(os.path.join(rd(2), "report.md")).read()
+    assert "held-out terminal steps fell" in rep2 and "held-out terminal steps: loss" in rep2, rep2
+    assert "EvalPlus no-worse check" in rep2 and done(2, "milestone")["guard"]["ok"]
+    summary = open(os.path.join(run_dir, "summary.md")).read()
+    assert "terminal loss vs best" in summary and "0.8000" in summary
+    # r003 passes the keep rule on the gate (30 of 40) but its EvalPlus answers fail every plus test: blocked before
+    # the confirm pass, rejected, its adapter deleted
+    PASSING["r003"] = 30
+    EVALPLUS_WORSE.add("r003")
+    assert run_main(args) == 0
+    d3, r3 = done(3, "decide"), [r for r in state()["rounds"] if r["round"] == 3][0]
+    g3 = done(3, "milestone")["guard"]
+    assert d3["keep"] and not g3["ok"] and g3["candidate"] == 0 and g3["losses"] > 0, g3
+    assert r3["status"] == "rejected" and any(x.startswith("EvalPlus") for x in r3["reasons"]), r3
+    assert not os.path.exists(os.path.join(rd(3), "stages", "confirm.done.json"))
+    assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and state()["best"]["round"] == 2
+    assert "worse than the base" in open(os.path.join(rd(3), "report.md")).read()
+    assert w.term_calls == [("r002", False), ("r003", True)]
+    # the same round with the guard off would have been kept
+    assert L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False)), done(3, "milestone"))
+    assert not L.guard_ok(cfg, None) and not L.guard_ok(cfg, {"guard": {"ok": False}})
+
+
 def test_early_reject():
     """The early look (loop.yaml gate early_reject): a round behind the best on the shuffled first third of the gate
     stops there, rejected, with no more gate answers and no non-coding check; a round ahead there answers the whole
     gate and can be kept; a round whose bug-fix loss path is open answers the whole gate. Every gate request keeps
     the seed of its place in gate.jsonl, whatever the order. With score_first_run off, training starts at round 2."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
-    saved = dict(PASSING), dict(SWE_LOSS)
+    saved = dict(PASSING), dict(SWE_LOSS), dict(TERM_LOSS)
     # everything setup_world points at its world, put back afterwards so tests that run later see the real modules
     patched = [(L, "ROOT"), (L, "POOLS"), (L, "RESULTS_DIR"), (E, "EVAL_DIR"), (E, "GATE_PATH"),
                (E, "NONCODING_PATH"), (E, "DECONTAM_EXTRA"), (fr.Controller, "serve"), (fr.Controller, "unserve"),
@@ -995,6 +1135,8 @@ def test_early_reject():
         PASSING.update(saved[0])
         SWE_LOSS.clear()
         SWE_LOSS.update(saved[1])
+        TERM_LOSS.clear()
+        TERM_LOSS.update(saved[2])
         for o, a, v in before:
             setattr(o, a, v)
         restore_polyglot()
@@ -1049,6 +1191,12 @@ def _early_reject(tmp):
     ev4, d4 = done(4, "evaluate"), done(4, "decide")
     assert "early_check" not in ev4 and ev4["gate_n"] == len(gate) and not d4["keep"], ev4
     assert E.loss_path_open(cfg["rules"], d4["loss"])
+    # r005: behind, the bug-fix loss higher, but the terminal loss clearly lower: no early look either
+    PASSING["r005"], TERM_LOSS["r005"] = 18, 0.5
+    assert run_main(args) == 0
+    ev5, d5 = done(5, "evaluate"), done(5, "decide")
+    assert "early_check" not in ev5 and ev5["gate_n"] == len(gate) and not d5["keep"], ev5
+    assert E.open_loss_paths(cfg["rules"], d5["losses"]) == ["terminal"], d5["losses"]
     # every gate request, in any order and any round, used the seed of the item's place in gate.jsonl
     idx = {g["prompt"]: i for i, g in enumerate(gate)}
     gate_asks = [(m, s) for _, m, s in asked if m in idx]
@@ -1169,6 +1317,9 @@ def check_child_commands(calls):
             live.add(ns.out)
         if script == "val_loss.py" and ns.val_file.endswith("swe_heldout.jsonl"):
             assert ns.seq_len == 8192 and ns.max_rows == 200, ns
+        if script == "val_loss.py" and ns.val_file.endswith("term_heldout.jsonl"):
+            assert ns.seq_len == 12288 and ns.max_rows == 200, ns
+            live.add("termloss")
         if script == "prepare_dataset.py" and ns.out.endswith("_nopy_12k"):
             assert ns.drop_answer_lang == ["python"] and ns.require_think, ns
             live.add(ns.out)
@@ -1176,7 +1327,7 @@ def check_child_commands(calls):
             assert ns.config.endswith("train.yaml"), ns
     assert seen == {"prepare_dataset.py", "public_source.py", "mix_datasets.py", "train_longrun.py",
                     "convert_lora_to_gguf.py", "val_loss.py"}, seen
-    assert len(live) == 3, live
+    assert len(live) == 4, live
 
 
 def fake_transformers():
@@ -1366,6 +1517,80 @@ def test_public_source_formats():
         assert (m8["counts"]["filtered_where"], m8["counts"]["answer_lang"], m8["counts"]["kept"]) == (1, 1, 2), m8
         assert m8["report_fields"] == {"language": {"read": {"go": 2, "rust": 1}, "kept": {"go": 1, "rust": 1}}}, m8
         assert sorted(m8["kept_answer_languages"]) == [["go", 1], ["rust", 1]], m8
+
+
+def test_ranked_runs_and_near_duplicates():
+    """GLM-5.3 runs (21 Oct 2026: every passing run, best 2 per task first): --rank-col reads the best-ranked runs
+    first, --dedupe-actions-by drops a step whose commands up to it repeat a kept step of the same task (wording and
+    reasoning aside), --first-ranks puts the best runs' rows first in train.jsonl, and --max-conversations-per keeps
+    one run per task group for a held-out set."""
+    import public_source as ps
+
+    def reply(cmds, done=False):
+        return json.dumps({"analysis": "Looking at the state.", "plan": "Next step.", "task_complete": done,
+                           "commands": [{"keystrokes": c, "duration": 0.5} for c in cmds]})
+
+    def run(task, group, rank, steps, note=""):
+        msgs = [{"role": "system", "content": "You are an agent in a Linux terminal."}]
+        for k, (cmds, done) in enumerate(steps):
+            msgs.append({"role": "user", "content": f"Task {task}: set up the service. Terminal output {k}. {note}"})
+            msgs.append({"role": "assistant", "content": reply(cmds, done),
+                         "reasoning_content": f"Reasoning of {task} rank {rank} step {k}, worded my own way."})
+        return {"messages": msgs, "task_id": task, "task_group_id": group, "task_rank": rank, "picked": rank <= 2,
+                "uses_python": False}
+    a1 = [(["ls -la\n"], False), (["cat app.conf\n"], False), (["systemctl restart app\n"], True)]
+    a2 = [(["ls  -la\n"], False), (["cat /etc/app.conf\n"], False), (["systemctl restart app\n"], True)]
+    c3 = [(["make build\n"], False), (["make test\n"], True)]
+    rows = [run("A", "g1", 3, a1),   # the same commands as A's best run, worded differently: all near-duplicates
+            run("C", "g2", 3, c3),   # a third-best run with its own commands: kept, but after the best runs
+            run("A", "g1", 2, a2),   # same first command (whitespace aside) as rank 1, then its own path
+            run("B", "g1", 1, [(["docker ps\n"], False), (["docker logs app\n"], True)],
+                note='A log line quoting \\"task_rank\\": 0 and "task_rank": 0 inside text.'),
+            run("A", "g1", 1, a1),
+            run("C", "g2", 1, [(["make\n"], True)])]
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "conversations.jsonl")
+        E.write_jsonl(src, rows)
+        lines = open(src, "rb").read().splitlines()
+        assert [ps.rank_of(x, "task_rank") for x in lines] == [3, 3, 2, 1, 1, 1]
+        assert ps.rank_of(b'{"messages": [], "task_id": "X"}', "task_rank") == float("inf")
+        common = ["--dataset", "t/glm", "--files", "*", "--from-local", src, "--turns", "each", "--require-think",
+                  "--respect-loss-mask", "--tokenizer", "x"]
+        out = os.path.join(d, "pool")
+        assert run_public_source(common + ["--rank-col", "task_rank", "--first-ranks", "2", "--dedupe-actions-by",
+                                           "task_id", "--val-fraction", "0.01", "--out", out]) == 0
+        m = json.load(open(os.path.join(out, "measure.json")))
+        # A: rank 1 keeps 3; rank 2 drops its first step (same "ls -la") and keeps 2; rank 3 drops all 3.
+        # B keeps 2, C rank 1 keeps 1, C rank 3 keeps 2 (its own commands).
+        assert (m["counts"]["kept"], m["counts"]["near_duplicate"], m["counts"]["duplicate"]) == (10, 4, 0), m["counts"]
+        kept = E.read_jsonl(os.path.join(out, "train.jsonl")) + E.read_jsonl(os.path.join(out, "val.jsonl"))
+        notes = sorted(r["messages"][-1]["content"].split("</think>")[0].split("Reasoning of ")[1].split(",")[0]
+                       for r in kept)
+        assert notes == sorted(["A rank 1 step 0", "A rank 1 step 1", "A rank 1 step 2", "A rank 2 step 1",
+                                "A rank 2 step 2", "B rank 1 step 0", "B rank 1 step 1", "C rank 1 step 0",
+                                "C rank 3 step 0", "C rank 3 step 1"]), notes
+        train = E.read_jsonl(os.path.join(out, "train.jsonl"))
+        tiers = [int("rank 3" in r["messages"][-1]["content"]) for r in train]
+        assert tiers == sorted(tiers) and m["train_order"]["later_rows"] == sum(tiers), (tiers, m["train_order"])
+        assert m["train_order"]["first_rows"] + m["train_order"]["later_rows"] == len(train)
+        # without the rank order the file's first copy of A's commands (its rank-3 run) would be the one kept
+        out2 = os.path.join(d, "fileorder")
+        assert run_public_source(common + ["--dedupe-actions-by", "task_id", "--measure-only", "--out", out2]) == 0
+        assert json.load(open(os.path.join(out2, "measure.json")))["counts"]["near_duplicate"] == 4
+        # one step from one run per task group (held-out builder): g1's best run in rank order, then g2's
+        out3 = os.path.join(d, "held")
+        assert run_public_source(common + ["--rank-col", "task_rank", "--dedupe-actions-by", "task_id",
+                                           "--max-conversations-per", "task_group_id=1",
+                                           "--max-steps-per-conversation", "1", "--out", out3]) == 0
+        m3 = json.load(open(os.path.join(out3, "measure.json")))
+        held = E.read_jsonl(os.path.join(out3, "train.jsonl")) + E.read_jsonl(os.path.join(out3, "val.jsonl"))
+        assert (m3["counts"]["kept"], m3["counts"]["per_value_cap"], len(held)) == (2, 4, 2), m3["counts"]
+        assert sorted(r["messages"][1]["content"][:6] for r in held) == ["Task B", "Task C"], held
+        try:
+            run_public_source(common + ["--first-ranks", "2", "--out", os.path.join(d, "bad")])
+            raise AssertionError("--first-ranks without --rank-col must fail")
+        except SystemExit as e:
+            assert "--rank-col" in str(e)
 
 
 def test_prepare_dataset_filters():
