@@ -28,6 +28,7 @@ trains on) falls, by a one-sided sign test over the steps.
 
 import bisect
 import collections
+import hashlib
 import json
 import math
 import os
@@ -246,13 +247,17 @@ class Stopped(Exception):
 
 
 def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, budget, concurrency=4,
-          stop_check=None, log=print, on_row=None, request_retries=1):
+          stop_check=None, log=print, on_row=None, request_retries=1, order=None):
     """One answer per item for this seed, checked by check(item, content) -> bool. Resumable: items already in
     out_path for this seed are skipped. chat(url, message, seed, max_tokens) -> evalplus_win.chat_request dict.
-    Returns the rows of this seed (old and new)."""
+    order: indexes into items to answer, in that order (default all, in list order); an item's request seed comes
+    from its index in items either way, so it gets the same seed whatever the order. Returns the rows of this seed
+    (old and new)."""
     done = {(r["id"], r["seed"]) for r in read_jsonl(out_path)}
-    todo = [(i, it) for i, it in enumerate(items) if (it["id"], seed) not in done]
-    log(f"score: {len(items)} items, seed {seed}, {len(items) - len(todo)} done, {len(todo)} to do")
+    want = range(len(items)) if order is None else order
+    todo = [(i, items[i]) for i in want if (items[i]["id"], seed) not in done]
+    log(f"score: {len(want)} items" + ("" if order is None else f" (of {len(items)}, in a set order)")
+        + f", seed {seed}, {len(want) - len(todo)} done, {len(todo)} to do")
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     lock = threading.Lock()
     t0, n_done, tok = time.time(), [0], [0]
@@ -401,6 +406,31 @@ def mc_accuracy(rows):
     return sum(1 for r in rows if r["pass"]) / len(rows) if rows else None
 
 
+def loss_path_open(rules, loss):
+    """Whether the bug-fix loss path of the keep rule (decide) is open: loss_rule on and the candidate's loss on the
+    held-out bug-fix steps lower than the best's on more steps than chance (one-sided sign test, p <= loss_alpha)."""
+    return bool(rules.get("loss_rule")) and bool(loss and loss.get("n")) and loss.get("diff") is not None \
+        and loss["diff"] < 0 and loss["p_one_sided"] <= rules.get("loss_alpha", rules["alpha"])
+
+
+def shuffled_order(items, salt):
+    """A fixed shuffle of range(len(items)) from salt and the item ids (same salt, same order on every machine)."""
+    return sorted(range(len(items)), key=lambda i: hashlib.sha256(f"{salt}:{items[i]['id']}".encode()).hexdigest())
+
+
+def early_reject_check(best_rows, cand_rows, ids, max_diff):
+    """The interim look of the early reject (loop.yaml gate early_reject): on the gate problems ids, how many more the
+    candidate solved than the best (diff, a count), and stop = diff <= max_diff. It only ever rejects early, so it
+    can't make a keep more likely than the full test; it skips the rest of the gate pass for rounds that are behind
+    or level on the first part."""
+    b, c = per_problem(best_rows), per_problem(cand_rows)
+    common = [i for i in ids if i in b and i in c]
+    diff = sum(c[i] - b[i] for i in common)
+    return {"n": len(common), "of": len(ids), "diff": diff, "max_diff": max_diff,
+            "wins": sum(1 for i in common if c[i] > b[i]), "losses": sum(1 for i in common if c[i] < b[i]),
+            "stop": len(common) == len(ids) and diff <= max_diff}
+
+
 def compare_loss(best, cand, weights=None):
     """Paired comparison of per-row losses on the same held-out rows ({row: loss}; lower is better), weighted by
     weights ({row: trained tokens}) for the means. A row is a win if the candidate's loss is lower. One-sided sign
@@ -450,8 +480,7 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
     gate_gain = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] > 0 and allp["p_one_sided"] <= alpha
     gate_level = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] >= 0
     loss_alpha = rules.get("loss_alpha", alpha)
-    loss_fall = bool(loss and loss.get("n")) and loss["diff"] is not None and loss["diff"] < 0 \
-        and loss["p_one_sided"] <= loss_alpha
+    loss_fall = loss_path_open(dict(rules, loss_rule=True), loss)
     path = "gate" if gate_gain else ("loss" if rules.get("loss_rule") and gate_level and loss_fall else None)
     if path is None:
         if allp["n"] == 0 or allp["diff"] is None or allp["diff"] <= 0:

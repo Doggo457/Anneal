@@ -10,6 +10,7 @@ later rounds inherit, the two-pass round when the pools run short, and the wait 
 import collections
 import hashlib
 import json
+import math
 import os
 import shutil
 import sys
@@ -670,6 +671,8 @@ def setup_world(tmp):
     import yaml
     cfg = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
     cfg.update(first_run_dir=fdir, rows_per_round=100, min_rows_per_round=30, min_free_gb=0, stack_max_new_rows=300)
+    cfg["score_first_run"] = True  # the record round is exercised here; off in loop.yaml since 21 Oct
+    cfg["gate"]["early_reject"] = None  # whole passes here; test_early_reject covers the early look
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
     cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
@@ -969,6 +972,108 @@ def _loss_path_and_guards(tmp):
     assert L.Loop.toolchain_check(fake, six) == "tc-1"
     assert L.Loop.toolchain_check(fake, [{"kind": "cc", "id": "cc/valid/0"}]) is None  # the old gate: nothing to build
     assert len(PRIVATE_CHECKS) == checks + 2  # the sandbox's storage folder is checked before each six-language pass
+
+
+def test_early_reject():
+    """The early look (loop.yaml gate early_reject): a round behind the best on the shuffled first third of the gate
+    stops there, rejected, with no more gate answers and no non-coding check; a round ahead there answers the whole
+    gate and can be kept; a round whose bug-fix loss path is open answers the whole gate. Every gate request keeps
+    the seed of its place in gate.jsonl, whatever the order. With score_first_run off, training starts at round 2."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(SWE_LOSS)
+    # everything setup_world points at its world, put back afterwards so tests that run later see the real modules
+    patched = [(L, "ROOT"), (L, "POOLS"), (L, "RESULTS_DIR"), (E, "EVAL_DIR"), (E, "GATE_PATH"),
+               (E, "NONCODING_PATH"), (E, "DECONTAM_EXTRA"), (fr.Controller, "serve"), (fr.Controller, "unserve"),
+               (fr.Controller, "run_child"), (ew, "chat_request"), (ew, "count_tokens"), (ew, "load_problems"),
+               (ew, "generate_tasks"), (ew, "sanitize_file"), (ew, "evaluate"), (gt, "run_io_tests"),
+               (gt, "run_assert_tests"), (L.Run, "capture_output")]
+    before = [(o, a, o.__dict__[a] if a in o.__dict__ else getattr(o, a)) for o, a in patched]
+    try:
+        _early_reject(tmp)
+    finally:
+        PASSING.clear()
+        PASSING.update(saved[0])
+        SWE_LOSS.clear()
+        SWE_LOSS.update(saved[1])
+        for o, a, v in before:
+            setattr(o, a, v)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _early_reject(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    cfg["gate"]["early_reject"] = {"fraction": 0.3334, "max_diff": 0}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    gate = E.read_jsonl(E.GATE_PATH)
+    asked = []
+
+    def chat(url, message, seed, max_tokens=None, sampling=None):
+        asked.append((w.model(), message, seed))
+        return w.chat(url, message, seed, max_tokens, sampling)
+    ew.chat_request = chat
+    # r002 is behind the base (18 vs 20 of 40) and its bug-fix loss is higher: it stops after the first third
+    PASSING["r002"] = 18
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert [(r["round"], r["status"]) for r in state()["rounds"]] == [(0, "reference"), (2, "rejected")], state()
+    assert not os.path.exists(rd(1))
+    k = math.ceil(len(gate) * 0.3334)
+    first = [gate[i]["id"] for i in E.shuffled_order(gate, "early-reject:r2")[:k]]
+    rows = E.read_jsonl(os.path.join(rd(2), "gate.seed1.jsonl"))
+    assert k == 14 and sorted(r["id"] for r in rows) == sorted(first), rows
+    assert not E.read_jsonl(os.path.join(rd(2), "noncoding.jsonl"))
+    ev2, d2 = done(2, "evaluate"), done(2, "decide")
+    assert ev2["early_reject"] is True and ev2["early_check"]["stop"] and ev2["early_check"]["n"] == 14, ev2
+    assert ev2["early_check"]["diff"] <= 0 and ev2["gate_n"] == 14
+    assert not d2["keep"] and d2["early_reject"]["stop"] and d2["reasons"][0].startswith("stopped early"), d2
+    assert "stopped early" in open(os.path.join(rd(2), "report.md")).read()
+    # r003 is ahead (40 of 40): the first third shows it, so it answers the whole gate and the non-coding check
+    PASSING["r003"] = 40
+    assert run_main(args) == 0
+    ev3, d3 = done(3, "evaluate"), done(3, "decide")
+    assert ev3["early_reject"] is False and ev3["early_check"]["diff"] > 0 and ev3["gate_n"] == len(gate), ev3
+    assert E.read_jsonl(os.path.join(rd(3), "noncoding.jsonl")) and d3["keep"] and d3["path"] == "gate", d3
+    assert state()["best"]["round"] == 3
+    # r004 is behind r003 but its bug-fix loss falls: the loss path is open, so there is no early look
+    PASSING["r004"], SWE_LOSS["r004"] = 18, 0.5
+    assert run_main(args) == 0
+    ev4, d4 = done(4, "evaluate"), done(4, "decide")
+    assert "early_check" not in ev4 and ev4["gate_n"] == len(gate) and not d4["keep"], ev4
+    assert E.loss_path_open(cfg["rules"], d4["loss"])
+    # every gate request, in any order and any round, used the seed of the item's place in gate.jsonl
+    idx = {g["prompt"]: i for i, g in enumerate(gate)}
+    gate_asks = [(m, s) for _, m, s in asked if m in idx]
+    assert gate_asks and all(s % 100000 == idx[m] for m, s in gate_asks), gate_asks[:5]
+    # the scorer on its own: an order answers just those items, each with its own seed, and resumes
+    with tempfile.TemporaryDirectory() as d:
+        items = [{"id": f"x/{i}", "prompt": f"p{i}"} for i in range(6)]
+        got = []
+        chat2 = lambda url, message, seed, max_tokens: (got.append((message, seed)) or  # noqa: E731
+                                                        {"content": "ok", "reasoning": "", "finish_reason": "stop",
+                                                         "completion_tokens": 1, "seconds": 0.0})
+        out = os.path.join(d, "s.jsonl")
+        E.score("u", items, out, 2, 10, lambda it, c: True, chat2, lambda u, t: 0, 0, concurrency=2, order=[4, 1],
+                log=lambda m: None)
+        assert sorted(got) == [("p1", 200001), ("p4", 200004)], got
+        E.score("u", items, out, 2, 10, lambda it, c: True, chat2, lambda u, t: 0, 0, concurrency=2,
+                log=lambda m: None)
+        assert len(got) == 6 and len(E.read_jsonl(out)) == 6 and ("p0", 200000) in got
+    # the look itself
+    best = [{"id": f"x/{i}", "seed": 1, "pass": i < 3} for i in range(6)]
+    cand = [{"id": f"x/{i}", "seed": 1, "pass": i in (0, 1, 4)} for i in range(6)]
+    c = E.early_reject_check(best, cand, ["x/2", "x/4", "x/5"], 0)
+    assert (c["n"], c["diff"], c["wins"], c["losses"], c["stop"]) == (3, 0, 1, 1, True), c
+    assert not E.early_reject_check(best, cand, ["x/4"], 0)["stop"]
+    assert not E.early_reject_check(best, cand[:4], ["x/2", "x/4"], 0)["stop"]  # x/4 not answered yet: no look
 
 
 def test_private_folder_guard():
