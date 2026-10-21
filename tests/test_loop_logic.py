@@ -1254,8 +1254,9 @@ def _bfcl_guard(tmp):
     st = json.load(open(os.path.join(run_dir, "status.json")))
     assert st["state"] == "failed" and "none of the first 8 answers made a tool call" in st["error"], st
     assert rec(5)["failures"] == 1 and os.path.exists(os.path.join(rd(5), "train", "adapter"))
-    # 8 answers, plus at most the 3 already in flight; the retry stops on the 8 saved ones without asking again
-    assert 8 <= [m for m, _, _ in w.bfcl_requests].count("r005") <= 11
+    # 8 answers, plus at most the others already in flight (one per gate slot); the retry stops on the 8 saved ones
+    # without asking again
+    assert 8 <= [m for m, _, _ in w.bfcl_requests].count("r005") <= 8 + L.gate_concurrency(cfg) - 1
     assert len(E.read_jsonl(os.path.join(rd(5), "guards", "bfcl.seed2.jsonl"))) == 8
 
 
