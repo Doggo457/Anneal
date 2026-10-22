@@ -51,7 +51,7 @@ Rounds (results/loop/rounds/rNNN):
                Either way the write and fix parts and the non-coding check are not worse beyond tolerance nor
                significantly worse, and the samples are clean.
     bfcl       (passed decide) the no-worse checks in loop.yaml's guards, 21 Oct 2026, in GUARDS order: BFCL's 150
-    cweval     Java and JavaScript function calls (anneal/bfcl.py), then CWEval's 33 Go and JavaScript secure-coding
+    cweval     Java and JavaScript function calls (anneal/bfcl.py), then CWEval's 32 Go and JavaScript secure-coding
                tasks (anneal/cweval.py) once switched on. Same rule as EvalPlus, on the gate's server settings, paired
                per item against the base's rows (scored once, in round 0 or the first round that needs them, and
                again only if the settings change). They run before EvalPlus, the longest check (21 Oct 2026): a
