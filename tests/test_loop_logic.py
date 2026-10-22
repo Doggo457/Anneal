@@ -39,6 +39,11 @@ import first_run as fr  # noqa: E402
 import evalplus_win as ew  # noqa: E402
 import generate_traces as gt  # noqa: E402
 
+# The graphics driver is read from Windows; every test but test_gpu_driver runs on the one all earlier scores used.
+_real_gpu_driver = L.llama.gpu_driver
+_legacy_driver = lambda: L.llama.LEGACY_GPU_DRIVER  # noqa: E731
+L.llama.gpu_driver = _legacy_driver
+
 
 # ============================================================================================ unit tests
 
@@ -1732,7 +1737,7 @@ def _gate_slots(tmp):
     assert run_main(args) == 0, status()
     assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None,
                                       "budget": 16384, "max_tokens": 20480, "budget_message": None,
-                                      "nc_max_tokens": 20480}
+                                      "nc_max_tokens": 20480, "gpu_driver": "32.0.12078.30"}
     assert state()["rounds"][0]["status"] == "reference"
     # every gate-settings server (round 0 and r002: evaluate, BFCL, confirm) had 8 slots; EvalPlus kept 4
     slots = [(name.split("-", 1)[1], f[f.index("-np") + 1], f[f.index("-c") + 1]) for name, f in w.served]
@@ -1843,7 +1848,7 @@ def _gate_build_and_spec(tmp):
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
     default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None, "budget": 16384,
-               "max_tokens": 20480, "budget_message": None, "nc_max_tokens": 20480}
+               "max_tokens": 20480, "budget_message": None, "nc_max_tokens": 20480, "gpu_driver": "32.0.12078.30"}
     # the default settings: b11435, no speculative decoding, the build's binary not looked for, nothing new in the
     # no-worse checks' fingerprint
     assert run_main(args) == 0, status()
@@ -1888,6 +1893,85 @@ def _gate_build_and_spec(tmp):
     fp = state()["base_guards"]["bfcl"]["fingerprint"]
     assert fp["build"] == "b11796-vulkan" and fp["flags"][-4:] == mtp1, fp
     assert L.describe_gate_server(state()["gate_server"], ["slots", "spec"]) == f"{slots} slots, MTP draft 1"
+
+
+def test_gpu_driver():
+    """22 Oct 2026: the graphics driver compiles llama.cpp's shaders, so it is recorded with the gate server settings
+    (rounds recorded before that were scored on llama.LEGACY_GPU_DRIVER): a new driver waits until the answers are set
+    aside, the no-worse checks' base rows carry it in their fingerprint, and EvalPlus answers the base once again on it
+    (no adapter, the same server) and reuses that while the driver stays. Scored rows keep the reasoning text."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _gpu_driver(tmp)
+    finally:
+        L.llama.gpu_driver = _legacy_driver
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _gpu_driver(tmp):
+    import yaml
+    legacy, new = L.llama.LEGACY_GPU_DRIVER, "32.0.32015.7029"
+    if os.name != "nt":
+        assert _real_gpu_driver() is None
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    # the legacy driver: recorded, nothing new in the no-worse checks' fingerprint, EvalPlus pairs with the first run
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"]["gpu_driver"] == legacy
+    assert "gpu_driver" not in state()["base_guards"]["bfcl"]["fingerprint"] and "evalplus_base" not in state()
+    assert not [name for name, _ in w.served if name.endswith("-evalplus-base")]
+    ms = json.load(open(os.path.join(run_dir, "rounds", "r002", "stages", "milestone.done.json")))
+    assert ms["guard"]["n"] and "missing" not in ms["guard"], ms
+    # a state recorded before the driver was is read as the legacy driver: no wait, and the driver is recorded
+    st = state()
+    st["gate_server"].pop("gpu_driver")
+    stub = types.SimpleNamespace(state=st, dir=run_dir, save=lambda: None)
+    L.Loop.require_gate_server(stub, L.load_config(cpath))
+    assert stub.state["gate_server"]["gpu_driver"] == legacy
+    # a new driver: waits, naming both drivers, and starts no server
+    L.llama.gpu_driver = lambda: new
+    n = len(w.served)
+    assert run_main(args) == 0
+    det = status()["detail"]
+    assert status()["state"] == "waiting" and len(w.served) == n, status()
+    assert f"graphics driver {new}" in det and f"graphics driver {legacy}" in det, det
+    assert "settings and the graphics driver back" in det, det
+    # answers set aside (a new run folder): every check is answered on the new driver, EvalPlus's base included
+    run_dir = os.path.join(tmp, "results", "loop-driver")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"]["gpu_driver"] == new
+    assert state()["base_guards"]["bfcl"]["fingerprint"]["gpu_driver"] == new
+    eb = state()["evalplus_base"]
+    assert eb["gpu_driver"] == new and os.path.exists(eb["result"]), eb
+    assert eb["result"] == os.path.join(run_dir, "rounds", "r000", "evalplus-base", new, "result.json"), eb
+    served = w.served[n:]
+    base = [f for name, f in served if name.endswith("-evalplus-base")]
+    adapter = [f for name, f in served if name.endswith("-evalplus")]
+    assert len(base) == 1 and "--lora" not in base[0], base
+    assert adapter and all("--lora" in f for f in adapter), adapter
+    assert base[0] == [x for x in adapter[0] if x not in ("--lora", adapter[0][adapter[0].index("--lora") + 1])]
+    ms = json.load(open(os.path.join(run_dir, "rounds", "r002", "stages", "milestone.done.json")))
+    assert ms["guard"]["n"] and "missing" not in ms["guard"], ms
+    # reused while the driver stays: nothing answered again
+    stub = types.SimpleNamespace(state=state(), dir=run_dir, rnum=3, read_json=lambda p: json.load(open(p)),
+                                 evalplus_pass=lambda *a: (_ for _ in ()).throw(AssertionError("answered again")))
+    res, path = L.Loop.evalplus_base(stub, L.load_config(cpath))
+    assert path == eb["result"] and res["datasets"], (path, res)
+    # scored rows keep the reasoning text, whole
+    rows = E.read_jsonl(os.path.join(run_dir, "rounds", "r000", "gate.seed1.jsonl"))
+    assert rows and all(r.get("reasoning") for r in rows), rows[:2]
+    assert E.REASONING_CHARS >= 4 * 40960 and E.ANSWER_CHARS >= 4 * 40960
 
 
 def test_gate_speed_bench():

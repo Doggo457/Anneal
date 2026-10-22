@@ -246,6 +246,10 @@ class Stopped(Exception):
     pass
 
 
+REASONING_CHARS = 250000  # a 32,768-token thinking budget is about 130,000 characters; kept whole with room to spare
+ANSWER_CHARS = 250000  # an answer that stops thinking early can take most of the 40,960 tokens; 20,000 before 22 Oct
+
+
 def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, budget, concurrency=4,
           stop_check=None, log=print, on_row=None, request_retries=1, order=None, request=None, judge=None):
     """One answer per item for this seed, checked by check(item, content) -> bool. Resumable: items already in
@@ -254,7 +258,9 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
     from its index in items either way, so it gets the same seed whatever the order. Returns the rows of this seed
     (old and new). For items that are not one user message (a tool-calling check, anneal/bfcl.py):
     request(url, item, seed, max_tokens) stands in for chat and judge(item, response) -> (passed, verdict) for
-    check, and sees the whole response (finish reason, tool calls)."""
+    check, and sees the whole response (finish reason, tool calls). Each row keeps the answer and, since 22 Oct 2026,
+    the reasoning, both whole (up to ANSWER_CHARS and REASONING_CHARS), so answers can be judged again later; neither
+    affects the verdict."""
     done = {(r["id"], r["seed"]) for r in read_jsonl(out_path)}
     want = range(len(items)) if order is None else order
     todo = [(i, items[i]) for i in want if (items[i]["id"], seed) not in done]
@@ -300,7 +306,9 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
         row = {"id": it["id"], "seed": seed, "pass": ok, "finish_reason": r["finish_reason"],
                 "completion_tokens": r["completion_tokens"], "reasoning_tokens": n_reason,
                 "budget_hit": bool(budget) and n_reason >= 0.97 * budget, "seconds": r["seconds"],
-                "answer": (r.get("answer", r["content"]) or "")[:20000]}
+                "answer": (r.get("answer", r["content"]) or "")[:ANSWER_CHARS]}
+        if r.get("reasoning"):  # 22 Oct 2026: kept to tell a wrong idea from running out of thinking
+            row["reasoning"] = r["reasoning"][:REASONING_CHARS]
         if verdict is not None:
             row["verdict"] = verdict
         return row

@@ -38,6 +38,24 @@ def ollama_gguf():
 
 
 SCORING_CTX = 262144  # the scoring server's whole KV cache, split evenly between its slots
+LEGACY_GPU_DRIVER = "32.0.12078.30"  # the Radeon driver every score before 22 Oct 2026 was answered on
+
+
+def gpu_driver():
+    """The Radeon graphics driver's version on Windows (Device Manager's driver version, e.g. 32.0.12078.30); None
+    elsewhere or when it can't be read. Answers depend on it: the driver compiles llama.cpp's Vulkan shaders, so a
+    new one changes the numbers slightly, and the loop never mixes answers from two drivers. Read afresh each call."""
+    if os.name != "nt":
+        return None
+    cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+           "(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -like '*Radeon*' } | "
+           "Select-Object -First 1).DriverVersion"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=120, creationflags=CREATE_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    v = out.stdout.strip()
+    return v if out.returncode == 0 and v else None
 
 
 def server_binary(build=DEFAULT_BUILD):
