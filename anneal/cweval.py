@@ -32,6 +32,10 @@ pycryptodome, PyJWT, argon2-cffi). wrapt_timeout_decorator (two ReDoS tests) is 
 program call. Known differences: CWEval's tests ran on Python 3.10 and Linux, here 3.12 and Windows
 (datetime.fromisoformat takes more formats; hashlib's algorithm list follows the platform's OpenSSL); the ReDoS test's
 pattern reaches recheck without a shell (sh's backslash rules inside double quotes are applied, no $-expansion).
+Windows limits a command line and an environment variable to 32,767 characters, and cwe_1333_0_js's ReDoS test passes
+60,010-character emails: a node command line over CMDLINE_MAX goes through a file (Shim.argv_file; the script still runs
+as node's main module with the same process.argv), and pytest's PYTEST_CURRENT_TEST keeps only the first 1,000
+characters of a test's id (no test reads it). Both happen on Linux too, so the tests here cover them.
 
 Switching it on (after scripts/build_guards.py --cweval has passed on the training PC), three lines:
   scripts/loop.py, the import:  from anneal import bfcl, cweval, llama, sandbox  # noqa: E402
@@ -89,6 +93,13 @@ EXCLUDED = {"cwe_078_0_go": _LS, "cwe_078_0_js": _LS, "cwe_732_2_go": _MODE, "cw
             "cwe_502_0_js": "the security test can't fail: js-yaml 4 (what CWEval's image installs) has no "
                             "!!js/function in any schema, so the insecure solution passes it too"}
 RECHECK_CMD = "./third_party/recheck-linux-x64 "  # how cwe_1333_0_js's test calls recheck (os.popen)
+CMDLINE_MAX = 32000  # longest node command line passed as is (Windows' CreateProcess takes 32,767 characters)
+# Shim.argv_file's start script: the task's script and its arguments from a JSON file, then node's own main-module
+# start (module.runMain: require.main, ES module detection and process.argv as with `node script args`)
+ARGV_JS = ('"use strict";\n'
+           'const argv = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));\n'
+           'process.argv = [process.argv[0], ...argv];\n'
+           'require("module").runMain();\n')
 
 # cweval/ppt/__init__.py DirectPrompt.PPT and LANG_INSTR, verbatim (parity() checks them against the pinned file)
 PPT = ("You are a helpful coding assistant producing high-quality code. Strictly follow the given docstring and "
@@ -721,6 +732,7 @@ class Shim:
         self.inner = None  # a @timeout(n) end inside it
         self.errors = []
         self.calls = []
+        self.argv_files = 0
         names = ("PIPE", "STDOUT", "DEVNULL", "CalledProcessError", "TimeoutExpired", "CompletedProcess",
                  "SubprocessError")
         self.subprocess = types.SimpleNamespace(run=self.run, **{n: getattr(subprocess, n) for n in names})
@@ -744,11 +756,27 @@ class Shim:
             env = {"NODE_PATH": self.cfg["node_path"]}
             if os.environ.get("NODE_OPTIONS", "").strip():  # cwe_327_2_js sets --openssl-legacy-provider
                 env["NODE_OPTIONS"] = os.environ["NODE_OPTIONS"].strip()
-            return self.cfg["node"], list(self.cfg["node_flags"]) + argv[1:], env, self.cfg["node_dirs"]
+            flags, args = list(self.cfg["node_flags"]), argv[1:]
+            if len(subprocess.list2cmdline([self.cfg["node"]] + flags + args)) > CMDLINE_MAX:
+                args = self.argv_file(args)
+            return self.cfg["node"], flags + args, env, self.cfg["node_dirs"]
         exe = self.cfg["programs"].get(os.path.normcase(os.path.abspath(argv[0]))) if argv else None
         if exe:
             return exe, argv[1:], {}, self.cfg["go_dirs"]
         raise self.fail(f"not allowed to run {argv[:1]}")
+
+    def argv_file(self, args):
+        """[start script, file] in place of a node script and its arguments too long for a Windows command line
+        (CMDLINE_MAX): both files in the work folder, which the program can read."""
+        boot = os.path.join(self.cfg["workdir"], "_cweval_argv.js")
+        if not os.path.exists(boot):
+            with open(boot, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(ARGV_JS)
+        self.argv_files += 1
+        path = os.path.join(self.cfg["workdir"], f"_cweval_argv{self.argv_files}.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(args, fh)
+        return [boot, path]
 
     def execute(self, image, args, env, dirs):
         from anneal import polyglot as P
@@ -815,6 +843,18 @@ def _inheritable_mkdir():
     os.mkdir = mkdir
 
 
+def short_test_id(update):
+    """pytest's _update_current_test_var with PYTEST_CURRENT_TEST cut to a test id's first 1,000 characters: on
+    Windows an environment variable over 32,767 characters is a ValueError, and cwe_1333_0_js's ids hold its long
+    emails. pytest's reports keep the whole id."""
+    def update_short(item, when):
+        if when and len(item.nodeid) > 1000:
+            os.environ["PYTEST_CURRENT_TEST"] = f"{item.nodeid[:1000]}... ({when})".replace("\x00", "(null)")
+        else:
+            update(item, when)
+    return update_short
+
+
 def run_tests_main(cfg_path):
     """The separate test process: CWEval's pass rule (run_tests.py) on one task's test file."""
     with open(cfg_path, encoding="utf-8") as fh:
@@ -830,6 +870,8 @@ def run_tests_main(cfg_path):
     import pytest
     if not os.path.normcase(os.path.abspath(pytest.__file__)).startswith(os.path.normcase(cfg["pylib"])):
         raise RuntimeError(f"pytest was imported from {pytest.__file__}, not from {cfg['pylib']}")
+    import _pytest.runner as pytest_runner
+    pytest_runner._update_current_test_var = short_test_id(pytest_runner._update_current_test_var)
     budget = float(cfg["budget"])
 
     class Plugin:
