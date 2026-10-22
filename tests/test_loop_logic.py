@@ -1711,7 +1711,8 @@ def _gate_slots(tmp):
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
     cfg["gate"]["slots"] = 8
-    cfg["gate"].pop("concurrency", None)
+    for k in ("concurrency", "build", "spec"):  # b11435 without speculative decoding, whatever loop.yaml has now
+        cfg["gate"].pop(k, None)
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     run_dir = os.path.join(tmp, "results", "loop")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
@@ -1827,6 +1828,8 @@ def _gate_build_and_spec(tmp):
     w.pause_train_once = set()
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
+    for k in ("build", "spec"):  # starts on b11435 without speculative decoding, whatever loop.yaml has now
+        cfg["gate"].pop(k, None)
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     slots = L.gate_slots(cfg)
     run_dir = os.path.join(tmp, "results", "loop")
@@ -1855,13 +1858,14 @@ def _gate_build_and_spec(tmp):
     det = status()["detail"]
     assert status()["state"] == "waiting" and len(w.served) == n, status()
     assert "with build b11796-vulkan, MTP draft 1, but" in det and "with build b11435-vulkan, no speculative" in det, det
-    # answers set aside (a new run folder): the build's llama-server is missing, so it waits
+    # answers set aside (a new run folder): the build's llama-server is missing (llama.cpp/ here is the test's own,
+    # since the training PC has b11796), so it waits
+    lc.ROOT = tmp
     run_dir = os.path.join(tmp, "results", "loop-b11796")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
     assert run_main(args) == 0
     assert status()["state"] == "waiting" and "gate.build is b11796-vulkan" in status()["detail"], status()
     assert len(w.served) == n
-    lc.ROOT = tmp
     exe = os.path.join(tmp, "llama.cpp", "b11796-vulkan", "llama-server.exe")
     os.makedirs(os.path.dirname(exe))
     open(exe, "wb").close()
