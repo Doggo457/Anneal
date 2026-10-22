@@ -137,6 +137,7 @@ GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None, "budget": 16384
                      "budget_message": None}
 LEGACY_GATE_SERVER = dict(GATE_SERVER_ADDED, slots=4, ctx=llama.SCORING_CTX)
 PROMPT_MARGIN = 64
+TOOLS_MARGIN = 512  # a no-worse check's tool-calling instructions around its tools' JSON (chat template), generous
 
 
 class Waiting(Exception):
@@ -546,6 +547,16 @@ def describe_gate_server(srv, keys):
     return ", ".join(words[k](srv.get(k)) for k in keys)
 
 
+def room_text(item):
+    """The text a slot room check counts for an item: its prompt, its multiple-choice message, or for a no-worse
+    check's chat (messages, and tools for BFCL) their JSON, which counts more tokens than the chat template renders."""
+    if "prompt" in item:
+        return item["prompt"]
+    if "messages" in item:
+        return json.dumps({"messages": item["messages"], "tools": item.get("tools")}, ensure_ascii=False)
+    return E.mc_message(item)
+
+
 def guard_names(cfg):
     """The no-worse checks before EvalPlus that loop.yaml switches on (guards), in GUARDS order."""
     g = cfg.get("guards") or {}
@@ -886,11 +897,11 @@ class Loop(fr.Controller):
         items, max_tokens) with a whole answer must fit, or long answers would be cut short. Raises Waiting."""
         room = llama.SCORING_CTX // gate_slots(cfg)
         for label, items, max_tokens in sets:
-            texts = sorted((it["prompt"] if "prompt" in it else E.mc_message(it) for it in items), key=len,
-                           reverse=True)[:3]
+            texts = sorted((room_text(it) for it in items), key=len, reverse=True)[:3]
             if not texts:
                 continue
-            need = max(ew.count_tokens(url, t) for t in texts) + PROMPT_MARGIN + int(max_tokens)
+            need = (max(ew.count_tokens(url, t) for t in texts) + PROMPT_MARGIN + int(max_tokens)
+                    + (TOOLS_MARGIN if any(it.get("tools") for it in items) else 0))
             if need > room:
                 raise Waiting(f"the longest {label} prompt with a whole answer needs {need} tokens, over the {room} "
                               f"each of the {gate_slots(cfg)} gate server slots holds: lower gate.slots in "
@@ -1493,6 +1504,7 @@ class Loop(fr.Controller):
                     raise RuntimeError(err)
         self.serve_gate(cfg, gguf, name)
         try:
+            self.slot_room_check(self.server.url, cfg, [(GUARDS[name]["label"], items, g["max_tokens"])])
             return E.score(self.server.url, items, path, seed, g["max_tokens"], None, None, ew.count_tokens,
                            g["budget"], concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
                            request=lambda u, it, sd, mt: mod.request(u, it, sd, mt, ew.SAMPLING), judge=mod.judge,
