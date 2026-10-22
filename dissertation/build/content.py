@@ -101,7 +101,7 @@ BLOCKS = [
 ("bt", "Small test fixtures caught four silent bugs, all fixed, including a unit-test filter that passed every answer and targets that missed the 48 DeltaNet layers' projections."),
 
 ("h2", "Bring-up and First Run"),
-("bf", "Bring-up and the first run raised the issues in Table 3. The run trained on 7.40 million tokens at about 100 tokens per second, and held-out loss fell from 0.593 to 0.498. Over all 542 EvalPlus problems with extra tests the base scored 86.2% and the adapter 85.4% (−0.7 points, 95% CI −2.6 to +1.1, p = 0.57); HumanEval+ rose 1.8 points and MBPP+ fell 1.9, neither significant, and leaving out five unreliable or overlapping problems does not change this. So there was no significant regression, and no measurable gain this near the ceiling (base 97% on HumanEval); a probably weaker teacher may also have contributed. EvalPlus is therefore now only a regression check."),
+("bf", "Bring-up and the first run raised the issues in Table 3. The run trained on 7.40 million tokens, and held-out loss fell from 0.593 to 0.498. Over all 542 EvalPlus problems with extra tests the base scored 86.2% and the adapter 85.4% (−0.7 points, 95% CI −2.6 to +1.1, p = 0.57); HumanEval+ rose 1.8 points and MBPP+ fell 1.9, neither significant, and leaving out five unreliable or overlapping problems does not change this. So there was no significant regression, and no measurable gain this near the ceiling (base 97% on HumanEval); a probably weaker teacher may also have contributed. EvalPlus is therefore now only a regression check."),
 ("table", "Table 3. Issues found during bring-up and the first run.", [2200, 2900, 3196],
   ["Issue", "Cause", "Resolution"],
   [
@@ -113,14 +113,14 @@ BLOCKS = [
   ]),
 
 ("h2", "Export and Evaluation"),
-("bf", "The evaluation script serves the model through llama.cpp at the full 262k context with thinking on, and every model is scored with identical settings. Six parallel answers measured about 19% faster than four, so every check but EvalPlus runs six, and the base's gate pass restarted to match; EvalPlus keeps four, as for its base score, at 10 to 12 hours a pass."),
-("bt", "The adapter is converted alone to GGUF and loaded over the same base, avoiding a 55 GB merged model. Trained against NF4 but served over Q4_K_M, a smoke-test adapter gave close losses (0.756 in training, 0.728 in llama.cpp, 96% top-1 agreement), suggesting the adapter carries over to the deployed base."),
+("bf", "The evaluation script serves the model through llama.cpp at the full 262k context with thinking on, and every model is scored with identical settings. Five parallel answers, the most with room for 40,960-token answers, measured about 13% faster than four, so every check but EvalPlus runs five, and the base's gate pass restarted to match; EvalPlus keeps its base score's four (10 to 12 hours a pass)."),
+("bt", "The adapter is converted alone to GGUF and loaded over the same base, avoiding a 55 GB merged model. Trained against NF4 but served over Q4_K_M, a smoke-test adapter gave close losses (0.756 in training, 0.728 in llama.cpp, 96% top-1 agreement), suggesting it carries over to the deployed base."),
 
 ("h2", "Critical Assessment"),
-("bf", "Measuring first helped: the parity test caught a wrong fix before any real run used it. Speed and memory were measured only at rank 16. One gate pass takes an estimated 55 hours, which limits how many rounds fit. With 20 to 50 personal tasks, confidence intervals will be wide. Round 0 showed that a working pipeline can still fail to improve a strong base, and that near-ceiling Python benchmarks cannot show small gains."),
+("bf", "Measuring first helped: the parity test caught a wrong fix before any real run used it. Speed and memory were measured only at rank 16. One gate pass takes several days, which limits how many rounds fit. With 20 to 50 personal tasks, confidence intervals will be wide. Round 0 showed that a working pipeline can still fail to improve a strong base."),
 
 ("h1", "Evaluation Plan"),
-("bf", "Each objective has a success criterion (Table 4). The base (B) and adapted (A) models run on the same Q4_K_M GGUF with identical settings and seeds. The model card recommends temperature 1.0 and a longer reasoning allowance for thinking mode [@qwen]; Anneal keeps 0.6 and caps reasoning at 16,384 tokens on the gate and 32,768 on EvalPlus to bound evaluation time, so absolute scores may sit below the card's."),
+("bf", "Each objective has a success criterion (Table 4). The base (B) and adapted (A) models run on the same Q4_K_M GGUF with identical settings and seeds. The model card recommends temperature 1.0 and a longer reasoning allowance for thinking mode [@qwen]; Anneal keeps 0.6 and caps reasoning at 32,768 tokens to bound evaluation time, ending it with Qwen's stop-thinking sentence on all but EvalPlus, so absolute scores may sit below the card's."),
 ("table", "Table 4. Objectives, measures and success criteria.", [800, 4300, 3196],
   ["Obj.", "Measure", "Success criterion"],
   [
