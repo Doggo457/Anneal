@@ -15,7 +15,9 @@ Method
               (lm-sys/llm-decontaminator, 164 pairs, pinned), so 95% of known rewordings score at or above it;
        t_neg  the 95th percentile of each test problem's cosine to its nearest *other* problem in the same set
               (distinct problems by construction), so a row is flagged only when it is closer to a test problem than
-              different problems in that set usually are to each other. Sets under 20 problems use t_pos alone.
+              different problems in that set usually are to each other. Easy and hard versions of one Codeforces
+              problem (1561_D1, 1561_D2) count as one problem here (version_groups). Sets under 20 problems use t_pos
+              alone.
   3. A training question is flagged when it is among a test problem's --k nearest and at or above that set's cut-off.
      Every row with that question is flagged.
 
@@ -48,6 +50,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -148,6 +151,23 @@ def gate_statement(item):
     suffix = write_suffix(item["lang"])
     p = item["prompt"]
     return p[:-len(suffix)] if p.endswith(suffix) else p
+
+
+def version_group(problem_id, name):
+    """The problem a gate problem is a version of: easy and hard versions of one Codeforces problem ("1561_D1. Up the
+    Strip (simplified version)", "1561_D2. Up the Strip") share a label; any other problem is its own."""
+    m = re.match(r"(\d+)_([A-Z]+)\d+\.", name or "")
+    return f"cf{m.group(1)}{m.group(2)}" if m else problem_id
+
+
+def version_groups(test_sets):
+    """{set name: [version label per problem]} for the six-language gate, from its problems' Codeforces names.
+    Versions of one problem have near-identical statements (cosine 0.97-0.99 on the 22 Oct 2026 run), so counted as
+    different problems they set the gate's t_neg (0.9151 there) above every calibration rewording (recall 0%)."""
+    if "gate" not in test_sets or not os.path.exists(E.GATE_PATH):
+        return {}
+    names = {g["problem"]: g.get("name") for g in E.read_jsonl(E.GATE_PATH) if "problem" in g}
+    return {"gate": [version_group(pid, names.get(pid)) for pid, _ in test_sets["gate"]]}
 
 
 def load_test_sets(extra=(), use_evalplus=True):
@@ -455,13 +475,29 @@ def calibrate(orig, reworded):
             "t_pos": round(float(np.percentile(pos, POS_PERCENTILE)), 4), "_pos": pos, "_neg": neg}
 
 
-def set_threshold(T, t_pos):
-    """(cut-off, t_neg) for one test set."""
+def versioned(groups):
+    """How many problems share their version label with another problem (0 without labels)."""
+    if not groups:
+        return 0
+    counts = {}
+    for g in groups:
+        counts[g] = counts.get(g, 0) + 1
+    return sum(c for c in counts.values() if c > 1)
+
+
+def set_threshold(T, t_pos, groups=None):
+    """(cut-off, t_neg) for one test set. groups: a label per problem; problems sharing a label (versions of one
+    problem) are not each other's nearest other problem."""
     if T.shape[0] < MIN_SET_FOR_NEG:
         return t_pos, None
     s = T @ T.T
-    np.fill_diagonal(s, -np.inf)
-    t_neg = float(np.percentile(s.max(axis=1), NEG_PERCENTILE))
+    if groups is None:
+        np.fill_diagonal(s, -np.inf)
+    else:
+        _, label = np.unique(np.asarray(groups, dtype=str), return_inverse=True)
+        s[label[:, None] == label[None, :]] = -np.inf  # includes the diagonal
+    nearest = s.max(axis=1)
+    t_neg = float(np.percentile(nearest[np.isfinite(nearest)], NEG_PERCENTILE))
     return max(t_pos, t_neg), round(t_neg, 4)
 
 
@@ -627,9 +663,10 @@ def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
         for idx, key, h in items:
             rows_by_hash.setdefault(h, []).append((src, idx, key))
     flags, pairs, per_set = [], [], {}
+    groups = version_groups(test_sets)
     for n, items in test_sets.items():
         T = cache.matrix(t_hash[n])
-        thr, t_neg = set_threshold(T, t_pos)
+        thr, t_neg = set_threshold(T, t_pos, groups.get(n))
         vals, idx = topk(T, X, args.k)
         hit_items = 0
         for qi, (tid, ttext) in enumerate(items):
@@ -649,6 +686,7 @@ def _run(args, out_dir, started, report, ctx, calib_pairs, test_sets, sources):
         per_set[n] = {"problems": len(items), "t_neg": t_neg, "cutoff": round(thr, 4),
                       "reworded_recall_at_cutoff": round(recall, 4),
                       "problems_with_a_flagged_row": hit_items,
+                      "problems_with_a_version": versioned(groups.get(n)),
                       "flagged_test_ids": sorted({f["test_id"] for f in flags if f["test_set"] == n})}
         log(f"{n}: cut-off {thr:.4f} (t_pos {t_pos}, t_neg {t_neg}), recall on rewordings {recall:.1%}, "
             f"{hit_items}/{len(items)} problems with a flagged training row")
@@ -694,6 +732,10 @@ def write_outputs(report, out_dir, results_dir):
     for n, s in report["per_set"].items():
         lines.append(f"| {n} | {s['problems']} | {s['t_neg']} | {s['cutoff']} | {s['reworded_recall_at_cutoff']:.1%} | "
                      f"{s['problems_with_a_flagged_row']} |")
+    merged = [f"{n} {s['problems_with_a_version']}" for n, s in report["per_set"].items() if s.get("problems_with_a_version")]
+    if merged:
+        lines += ["", "t_neg counts easy and hard versions of one Codeforces problem as one problem (problems with a "
+                      f"version: {', '.join(merged)})."]
     flagged = [(n, s["flagged_test_ids"]) for n, s in report["per_set"].items() if s["flagged_test_ids"]]
     if flagged:
         lines += ["", "Test problems with a flagged training row (report EvalPlus with and without these):"]

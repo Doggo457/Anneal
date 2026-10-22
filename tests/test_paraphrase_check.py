@@ -219,6 +219,37 @@ def test_six_language_gate_one_text_per_problem():
             E.GATE_PATH, E.NONCODING_PATH = saved
 
 
+def test_versions_count_as_one_problem():
+    assert P.version_group("cc/valid/76", "1561_D1. Up the Strip (simplified version)") == "cf1561D"
+    assert P.version_group("cc/valid/77", "1561_D2. Up the Strip") == "cf1561D"
+    assert P.version_group("cc/test/75", "1600_E. Array Game") == "cc/test/75"
+    assert P.version_group("cc/test/1", None) == "cc/test/1"
+    # 24 near-orthogonal problems, two of them easy/hard pairs at cosine ~0.99
+    rng = np.random.default_rng(0)
+    T = np.eye(24, 64) + rng.normal(0, 0.05, (24, 64))
+    T[1], T[3] = T[0] + rng.normal(0, 0.01, 64), T[2] + rng.normal(0, 0.01, 64)
+    T /= np.linalg.norm(T, axis=1, keepdims=True)
+    groups = ["p0", "p0", "p2", "p2"] + [f"q{i}" for i in range(20)]
+    thr_split, t_neg_split = P.set_threshold(T, 0.5)
+    thr_one, t_neg_one = P.set_threshold(T, 0.5, groups)
+    assert t_neg_split > 0.98 and thr_split > 0.98, t_neg_split
+    assert t_neg_one < 0.5 and thr_one == 0.5, t_neg_one
+    assert P.versioned(groups) == 4 and P.versioned(None) == 0
+    saved = E.GATE_PATH
+    with tempfile.TemporaryDirectory() as tmp:
+        try:
+            E.GATE_PATH = os.path.join(tmp, "gate.jsonl")
+            assert P.version_groups({"gate": [("cc/valid/76", "a")]}) == {}
+            E.write_jsonl(E.GATE_PATH, [
+                {"id": "write/cpp/cc/valid/76", "problem": "cc/valid/76", "name": "1561_D1. Up the Strip (simplified version)"},
+                {"id": "write/go/cc/valid/77", "problem": "cc/valid/77", "name": "1561_D2. Up the Strip"},
+                {"id": "fix/java/cc/test/75", "problem": "cc/test/75", "name": "1600_E. Array Game"}])
+            sets = {"gate": [("cc/test/75", "a"), ("cc/valid/76", "b"), ("cc/valid/77", "c")], "mmlu-pro": [("m/1", "d")]}
+            assert P.version_groups(sets) == {"gate": ["cc/test/75", "cf1561D", "cf1561D"]}
+        finally:
+            E.GATE_PATH = saved
+
+
 def test_broken_embedders_stop():
     for mode in ("random", "collapsed"):
         srv = Server(mode)
