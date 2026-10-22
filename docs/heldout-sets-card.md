@@ -152,8 +152,11 @@ gets the task's entry point appended, as CWEval does; Go code goes through goimp
 functionality test and every security test of the task passes, each within 3 s (CWEval's func-sec@1). An answer that
 didn't finish fails. Go is built in the build container and every program the tests start runs in the code sandbox;
 CWEval's pinned pytest files run in a separate Python with only the pinned test libraries, and may start only the
-task's own program (or recheck, for the ReDoS task). Before it is used, the check passes its self-test on the
-training PC: every reference passes and every insecure solution fails security.
+task's own program (or recheck, for the ReDoS task). A sandbox that refuses to start a program is retried and never
+counts as a failed test, and an answer that fails only on time is judged once more, for base and adapter alike. Before
+it was used, the check passed its self-test on the training PC on 22 Oct 2026: all 32 references pass and all 32
+insecure solutions fail security. No training row in the loop's 8 pools is an exact or near copy of a task (the
+overlap rules below), checked the same day.
 
 Answers come from the six-language test's server settings with thinking on, one per task (seed 1), like BFCL. With
 32 tasks it only catches large drops: a round is blocked when it is more than 12 points (about 4 tasks) below the base,

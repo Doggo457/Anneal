@@ -1354,8 +1354,9 @@ def test_bfcl_harness():
 
 
 def cweval_switched_on():
-    """CWEval as a loop check, as its 3-line switch-on makes it (anneal/cweval.py docstring): its GUARDS entry after
-    BFCL, so the stage lists get it too (already there once it is switched on). Returns what to restore."""
+    """CWEval as a loop check, as scripts/loop.py has it since 22 Oct 2026: its GUARDS entry after BFCL, and the stage
+    lists with it (a no-op while loop.py has the entry; kept so the test also covers a loop.py without it). Returns
+    what to restore."""
     from anneal import cweval as C
     saved = (dict(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES), C.prepare, C.request, C.judge_program)
     L.GUARDS.setdefault("cweval", {"label": "CWEval Go and JavaScript", "module": C,
@@ -1589,8 +1590,84 @@ def test_cweval_harness():
             except C.HarnessError:
                 pass
         assert len(sh.errors) == 6
+        # a program start the code sandbox refuses (nothing ran) is tried again, SANDBOX_TRIES times in all, and is
+        # then a harness fault, never a failed test; any other executor error is raised as it is
+
+        class SandboxUnavailable(Exception):  # anneal.sandbox's, matched by name (that module imports on Windows only)
+            pass
+
+        class Ex:
+            def __init__(self, refusals, other=None):
+                self.refusals, self.other, self.starts = refusals, other, 0
+
+            def run(self, wd_, image, args, env, stdin, timeout, mem, path_dirs=None):
+                self.starts += 1
+                if self.other:
+                    raise self.other
+                if self.starts <= self.refusals:
+                    raise SandboxUnavailable("AppContainer profile: HRESULT 0x8000FFFF")
+                return types.SimpleNamespace(wall_s=0.1, timed_out=False, returncode=0, stdout=b"ok\r\n", stderr=b"")
+        pause, C.RETRY_PAUSE_S = C.RETRY_PAUSE_S, 0.0
+        try:
+            ex = Ex(C.SANDBOX_TRIES - 1)
+            sh = C.Shim(cfg, ex)
+            assert sh.run([exe], capture_output=True, text=True).stdout == "ok\n" and ex.starts == C.SANDBOX_TRIES
+            assert not sh.errors and sh.calls == [0.1]
+            for ex, err in ((Ex(C.SANDBOX_TRIES), C.HarnessError), (Ex(0, OSError("disk")), OSError)):
+                sh = C.Shim(cfg, ex)
+                try:
+                    sh.run([exe], capture_output=True)
+                    raise AssertionError("no error")
+                except err:
+                    pass
+                assert ex.starts == (C.SANDBOX_TRIES if err is C.HarnessError else 1) and not sh.calls
+                refused = f"refused {C.SANDBOX_TRIES} program starts"
+                assert len(sh.errors) == (err is C.HarnessError) and all(refused in e for e in sh.errors), sh.errors
+        finally:
+            C.RETRY_PAUSE_S = pause
     finally:
         shutil.rmtree(wd, ignore_errors=True)
+    # judge_steady (what judge() uses): a harness fault is judged again, HARNESS_TRIES times in all, before it is
+    # raised; a result that failed only on time (the whole run, a build, or every failed test) is judged once more and
+    # the second result stands; any other result is judged once
+    fault, other = RuntimeError("CWEval harness fault on x: no results"), RuntimeError("something else")
+    ok = (True, "ok", {"failed": {}})
+    slow = (False, "not_functional", {"failed": {"test_a": "Failed: Timeout >3.0s", "test_b": "E   TimeoutError: f "
+                                                 "timed out after 2 seconds"}})
+    insecure = (False, "insecure", {"failed": {"test_sec": "assert 'x' not in out"}})
+    mixed = (False, "not_functional", {"failed": {"test_a": "Failed: Timeout >3.0s", "test_b": "AssertionError"}})
+    build_slow = (False, "compile_error", {"detail": "timed out; "})
+    build_bad = (False, "compile_error", {"detail": "x"})
+    cases = [([fault, fault, ok], ok, 3), ([fault] * 3, fault, 3), ([other], other, 1),
+             ([slow, ok], (True, "ok", {"failed": {}, "judged_twice": True}), 2),
+             ([slow, slow], (False, "not_functional", dict(slow[2], judged_twice=True)), 2),
+             ([(False, "timeout", {}), ok], (True, "ok", {"failed": {}, "judged_twice": True}), 2),
+             ([build_slow, build_bad], (False, "compile_error", {"detail": "x", "judged_twice": True}), 2),
+             ([slow, fault, insecure], (False, "insecure", dict(insecure[2], judged_twice=True)), 3),
+             ([insecure], insecure, 1), ([mixed], mixed, 1), ([build_bad], build_bad, 1), ([ok], ok, 1)]
+    real, pause, C.RETRY_PAUSE_S = C.judge_program, C.RETRY_PAUSE_S, 0.0
+    try:
+        for results, want, n in cases:
+            todo, seen = list(results), []
+
+            def judge_program(item_, code_, fix_imports=False):
+                seen.append(fix_imports)
+                r = todo.pop(0)
+                if isinstance(r, Exception):
+                    raise r
+                return r
+            C.judge_program = judge_program
+            try:
+                got = C.judge_steady(item, "code")
+            except RuntimeError as exc:
+                got = exc
+            assert got is want if isinstance(want, Exception) else got == want, (results, got)
+            assert len(seen) == n and not todo and all(seen), (results, seen)
+        todo, seen = [slow, ok], []
+        assert C.judge(item, {"finish_reason": "stop", "content": "```go\nA\n```"}) == (True, "ok")
+        assert seen == [True, True] and not todo  # judge() completes Go imports (fix_imports), as CWEval does
+    finally:
+        C.judge_program, C.RETRY_PAUSE_S = real, pause
     if not (C.assets_ready() and shutil.which("go") and shutil.which("node") and os.name != "nt"):
         print(f"  (CWEval judging skipped: {C.ASSETS} not built for this Python, or go / node not on PATH)")
         return
