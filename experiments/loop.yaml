@@ -26,7 +26,16 @@ pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe i
 reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
 # NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
 
-gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 6, early_reject: {looks: [0.3334, 0.6667], max_diff: 0}}
+gate: {seed: 1, budget: 32768, max_tokens: 40960, slots: 5, early_reject: {looks: [0.3334, 0.6667], max_diff: 0},
+       budget_message: "\n\nConsidering the limited time by the user, I have to give the solution based on the thinking directly now.\n"}
+# budget, max_tokens and budget_message (22 Oct 2026): of the base's first 42 gate answers at a 16,384-token thinking
+# budget and 20,480 tokens an answer, 25 reached the budget and 7 then ran out before finishing (all write items,
+# Codeforces 2,200 to 3,400), and an answer cut short fails. For the best scores, every gate-settings check (gate,
+# non-coding, BFCL, CWEval) gives 32,768 thinking tokens and 8,192 for the answer, the evaluation budget set on
+# 19 Sep 2026 (EvalPlus's), and at the budget llama-server adds the sentence Qwen's documentation uses to end
+# thinking (qwen.readthedocs.io quickstart, "Thinking Budget"), so the model writes its answer rather than stopping
+# mid-thought. 40,960 tokens an answer don't fit 6 slots (43,690 tokens each; the longest gate prompt with a whole
+# answer needs 43,992), so the checks run 5 (52,428 each), and the base's answers from 6 slots were set aside.
 # early_reject (21 Oct 2026): a pass takes about 2 days (answers average about 8,700 tokens at about 26 tokens/s
 # over 4 slots), so a training round whose held-out loss paths are closed answers the gate in a fixed shuffled order
 # and stops, rejected, at the first look (after a third, then after two thirds) where it is not ahead of the best on
@@ -40,8 +49,8 @@ gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 6, early_reject: {looks
 # whole answer must fit a slot. Measured 21 Oct 2026 (llama-batched-bench, the scoring server's settings), tokens/s
 # decoded in all at 1,024 and 8,192 tokens of context: 4 slots 33.4 and 29.7, 5 slots 37.6 and 33.8, 6 slots 39.7 and
 # 35.3, 7 slots 29.3 and 26.5, 8 slots 29.9 and 27.2. 6 is about 19% faster than 4 overall (the rule set beforehand was
-# at least 10%), so the loop uses 6, and the base's first answers, from 4 slots, were set aside. EvalPlus keeps the
-# first run's 4 slots.
+# at least 10%), so the loop used 6, and the base's first answers, from 4 slots, were set aside; from 22 Oct 2026 it
+# uses 5 (above). EvalPlus keeps the first run's 4 slots.
 # build and spec (optional, 21 Oct 2026; not set = b11435 without speculative decoding): another llama.cpp build for
 # the gate server (build: a folder under llama.cpp/) and MTP speculative decoding (spec: {type: draft-mtp,
 # draft_n_max: 1}; the model's own MTP block drafts a token and every token is still sampled from the model).
@@ -50,7 +59,7 @@ gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 6, early_reject: {looks
 # C++, Java, Go, Rust, JavaScript or TypeScript (one language per problem, in turn); fix items show a wrong C++ or Java
 # submission and ask for the fixed program. Built and run in the sandbox (anneal/polyglot.py,
 # scripts/setup_toolchains.py).
-noncoding: {seeds: [1, 2], max_tokens: 20480}
+noncoding: {seeds: [1, 2], max_tokens: 40960}   # 22 Oct 2026: room to reach the gate's 32,768-token thinking budget
 rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false, loss_rule: true, loss_alpha: 0.05,
         evalplus_guard: true, evalplus_tolerance: 0.03}
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,

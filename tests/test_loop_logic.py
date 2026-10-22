@@ -1714,6 +1714,7 @@ def _gate_slots(tmp):
     for k in ("concurrency", "build", "spec", "budget_message"):  # b11435, no speculative decoding, no budget message,
         cfg["gate"].pop(k, None)                                   # whatever loop.yaml has now
     cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
+    cfg["noncoding"]["max_tokens"] = 20480
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     run_dir = os.path.join(tmp, "results", "loop")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
@@ -1730,7 +1731,8 @@ def _gate_slots(tmp):
     os.rename(r0, r0 + ".4-slots")
     assert run_main(args) == 0, status()
     assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None,
-                                      "budget": 16384, "max_tokens": 20480, "budget_message": None}
+                                      "budget": 16384, "max_tokens": 20480, "budget_message": None,
+                                      "nc_max_tokens": 20480}
     assert state()["rounds"][0]["status"] == "reference"
     # every gate-settings server (round 0 and r002: evaluate, BFCL, confirm) had 8 slots; EvalPlus kept 4
     slots = [(name.split("-", 1)[1], f[f.index("-np") + 1], f[f.index("-c") + 1]) for name, f in w.served]
@@ -1833,6 +1835,7 @@ def _gate_build_and_spec(tmp):
     for k in ("build", "spec", "budget_message"):  # starts on b11435 without speculative decoding or a budget
         cfg["gate"].pop(k, None)                   # message, whatever loop.yaml has now
     cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
+    cfg["noncoding"]["max_tokens"] = 20480
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     slots = L.gate_slots(cfg)
     run_dir = os.path.join(tmp, "results", "loop")
@@ -1840,7 +1843,7 @@ def _gate_build_and_spec(tmp):
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
     default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None, "budget": 16384,
-               "max_tokens": 20480, "budget_message": None}
+               "max_tokens": 20480, "budget_message": None, "nc_max_tokens": 20480}
     # the default settings: b11435, no speculative decoding, the build's binary not looked for, nothing new in the
     # no-worse checks' fingerprint
     assert run_main(args) == 0, status()
@@ -1959,7 +1962,8 @@ def test_gate_speed_bench():
         assert 3000 < res["tokens_per_s"] < 5000, res["tokens_per_s"]  # 4 slots x 1,000 a second
         gate_rows = E.read_jsonl(gate)
         order = E.shuffled_order(gate_rows, "gate-speed-bench")
-        assert sorted(calls) == sorted((gate_rows[i]["prompt"], 100000 + i, 20480) for i in order[:4]), calls
+        mt = int(L.load_config(L.CONFIG)["gate"]["max_tokens"])  # loop.yaml's answer length
+        assert sorted(calls) == sorted((gate_rows[i]["prompt"], 100000 + i, mt) for i in order[:4]), calls
     finally:
         (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, E.GATE_PATH, B.OUT_DIR,
          sys.argv) = saved
@@ -2002,6 +2006,7 @@ def _budget_message(tmp):
     for k in ("build", "spec", "budget_message"):  # whatever loop.yaml has now
         cfg["gate"].pop(k, None)
     cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
+    cfg["noncoding"]["max_tokens"] = 20480
     assert "--reasoning-budget-message" not in L.Loop.gate_flags(None, cfg)
 
     def write(c):
@@ -2030,6 +2035,12 @@ def _budget_message(tmp):
     assert status()["state"] == "waiting" and len(w.served) == n, status()
     assert "a 32768-token thinking budget, 36864 tokens an answer" in det, det
     assert "a 16384-token thinking budget, 20480 tokens an answer" in det, det
+    # and a longer non-coding answer (it shares the server's thinking budget)
+    write(dict(cfg, gate=dict(cfg["gate"], budget_message=None), noncoding=dict(cfg["noncoding"], max_tokens=40960)))
+    assert run_main(args) == 0
+    det = status()["detail"]
+    assert status()["state"] == "waiting" and len(w.served) == n, status()
+    assert "with 40960 tokens a non-coding answer" in det and "with 20480 tokens a non-coding answer" in det, det
     # answers set aside (a new run folder): every gate-settings server has the sentence right after the budget;
     # EvalPlus doesn't
     write(cfg)
