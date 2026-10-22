@@ -58,7 +58,8 @@ Rounds (results/loop/rounds/rNNN):
                checks after it, EvalPlus and the confirm pass. Every check must pass either way, so the order changes no
                decision.
     milestone  (passed decide and the checks above) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact
-               scoring server, paired against the base's first-run EvalPlus answers. Since 21 Oct 2026 a no-worse
+               scoring server, paired against the base's first-run EvalPlus answers (on another graphics driver,
+               against the base's answers on that driver, answered once, 22 Oct 2026). Since 21 Oct 2026 a no-worse
                check only (the base already passes about 86% of the plus tests, so it can't show much gain): with
                rules.evalplus_guard a drop beyond evalplus_tolerance, or a significant one, rejects the round
                (evalsets.guard_check). It runs before confirm, so a blocked round skips the second gate pass.
@@ -135,7 +136,7 @@ MAX_ROUND_FAILURES = 3
 # budget message; a record from before a key was added means its value here. PROMPT_MARGIN: the chat template's
 # tokens around a prompt.
 GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None, "budget": 16384, "max_tokens": 20480,
-                     "budget_message": None, "nc_max_tokens": 20480}
+                     "budget_message": None, "nc_max_tokens": 20480, "gpu_driver": llama.LEGACY_GPU_DRIVER}
 LEGACY_GATE_SERVER = dict(GATE_SERVER_ADDED, slots=4, ctx=llama.SCORING_CTX)
 PROMPT_MARGIN = 64
 TOOLS_MARGIN = 512  # a no-worse check's tool-calling instructions around its tools' JSON (chat template), generous
@@ -531,14 +532,15 @@ def gate_budget_message(cfg):
 def gate_server(cfg):
     """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server):
     the slot count, the cache, the llama.cpp build, speculative decoding, the thinking budget, the tokens an answer may
-    take, the budget message and the tokens a non-coding answer may take (the non-coding check shares the server's
-    thinking budget, so its answers must have room to reach it)."""
+    take, the budget message, the tokens a non-coding answer may take (the non-coding check shares the server's
+    thinking budget, so its answers must have room to reach it) and the graphics driver (llama.gpu_driver)."""
     g = cfg.get("gate") or {}
     return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg),
             "budget": int(g.get("budget", GATE_SERVER_ADDED["budget"])),
             "max_tokens": int(g.get("max_tokens", GATE_SERVER_ADDED["max_tokens"])),
             "budget_message": gate_budget_message(cfg),
-            "nc_max_tokens": int((cfg.get("noncoding") or {}).get("max_tokens", GATE_SERVER_ADDED["nc_max_tokens"]))}
+            "nc_max_tokens": int((cfg.get("noncoding") or {}).get("max_tokens", GATE_SERVER_ADDED["nc_max_tokens"])),
+            "gpu_driver": llama.gpu_driver()}
 
 
 def describe_gate_server(srv, keys):
@@ -547,7 +549,8 @@ def describe_gate_server(srv, keys):
              "budget": lambda v: f"a {v}-token thinking budget", "max_tokens": lambda v: f"{v} tokens an answer",
              "budget_message": lambda v: (f"the budget message {' '.join(v.split())[:60]!r}" if v
                                           else "no budget message"),
-             "nc_max_tokens": lambda v: f"{v} tokens a non-coding answer"}
+             "nc_max_tokens": lambda v: f"{v} tokens a non-coding answer",
+             "gpu_driver": lambda v: f"graphics driver {v or 'unknown'}"}
     return ", ".join(words[k](srv.get(k)) for k in keys)
 
 
@@ -873,9 +876,10 @@ class Loop(fr.Controller):
     def require_gate_server(self, cfg):
         """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
         settings (loop.yaml gate: slots, build and spec, 21 Oct 2026; budget, max_tokens and budget_message, and
-        noncoding: max_tokens, 22 Oct 2026): answers differ with them, so a change part way would compare rounds
-        scored differently. Recorded at the first check; rows scored before it was recorded came from
-        LEGACY_GATE_SERVER's settings. Raises Waiting on a change, or when the build's llama-server is missing."""
+        noncoding: max_tokens, 22 Oct 2026) on the same graphics driver (22 Oct 2026): answers differ with them, so a
+        change part way would compare rounds scored differently. Recorded at the first check; rows scored before it
+        was recorded came from LEGACY_GATE_SERVER's settings, and before the driver was recorded from
+        llama.LEGACY_GPU_DRIVER. Raises Waiting on a change, or when the build's llama-server is missing."""
         want = gate_server(cfg)
         known = self.state.get("gate_server")
         if known is None:
@@ -886,9 +890,11 @@ class Loop(fr.Controller):
             known = dict(GATE_SERVER_ADDED, **known)
         if known != want:
             diff = [k for k in want if known.get(k) != want[k]]
-            raise Waiting(f"experiments/loop.yaml asks for a gate server with {describe_gate_server(want, diff)}, but "
-                          f"the rounds so far were scored with {describe_gate_server(known, diff)}: put loop.yaml's "
-                          "gate settings back, or set every round's gate answers aside to score again from round 0")
+            raise Waiting(f"experiments/loop.yaml and this PC ask for a gate server with "
+                          f"{describe_gate_server(want, diff)}, but the rounds so far were scored with "
+                          f"{describe_gate_server(known, diff)}: put loop.yaml's gate settings"
+                          + (" and the graphics driver" if "gpu_driver" in diff else "") + " back, or set every "
+                          "round's gate answers aside to score again from round 0")
         binary = llama.server_binary(want["build"])
         if want["build"] != llama.DEFAULT_BUILD and not os.path.exists(binary):
             raise Waiting(f"loop.yaml's gate.build is {want['build']}, but {binary} is missing")
@@ -1428,27 +1434,59 @@ class Loop(fr.Controller):
                                           "n": len(rows), "vs_previous_best": vs, "net_win_required": need,
                                           "confirmed": (not need) or vs["wins"] > vs["losses"]})
 
-    def milestone(self, cfg):
-        """EvalPlus seed 1 with the first run's exact scoring server, paired against the base's first-run answers."""
+    def evalplus_pass(self, cfg, lora, d, label):
+        """EvalPlus seed 1 with the first run's exact scoring server (lora None: the base), answers in d (resumable by
+        problem), checked; returns the result (first_run's score/MODEL.json layout), also written to d/result.json."""
         fdir = cfg.get("first_run_dir") or os.path.join(RESULTS_DIR, "first-run")
         cal = self.read_json(os.path.join(fdir, "stages", "calibrate.done.json")) or {}
-        flags = llama.scoring_flags(lora=self.round_gguf(), extra=["--reasoning-budget", str(fr.BUDGET_SCORE)]
+        flags = llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(fr.BUDGET_SCORE)]
                                     + fr.SAMPLER_FLAGS + cal.get("chosen_extra_flags", []))
-        d = os.path.join(self.rdir, "evalplus")
         raw = {ds: os.path.join(d, f"{ds}.raw.jsonl") for ds in ew.DATASETS}
         jobs = [(ds, t) for ds in ew.DATASETS for t in ew.load_problems(ds)]
-        self.serve(flags, "evalplus")
+        self.serve(flags, "evalplus" if lora else "evalplus-base")
         try:
             ew.generate_tasks(jobs, self.server.url, raw, seed=1, concurrency=4, max_tokens=ew.MAX_TOKENS,
                               reasoning_budget=fr.BUDGET_SCORE, log=self.log, stop_check=self.stopping,
-                              on_row=lambda r, n, tot, tps: self.status("milestone", f"EvalPlus {n}/{tot}"))
+                              on_row=lambda r, n, tot, tps: self.status("milestone", f"EvalPlus{label} {n}/{tot}"))
         finally:
             self.unserve()
         res = {"datasets": {}}
         for ds in ew.DATASETS:
             res["datasets"][ds] = ew.evaluate(ds, ew.sanitize_file(ds, raw[ds]), parallel=8)
         write_json(os.path.join(d, "result.json"), res)
-        base = self.read_json(os.path.join(fdir, "score", "base.json"))
+        return res
+
+    def evalplus_base(self, cfg):
+        """The base's EvalPlus answers a round's are paired against, and their file: the first run's (score/base.json)
+        on the graphics driver they were answered on (llama.LEGACY_GPU_DRIVER); on any other driver, answered once
+        again on it with the same server and no adapter, and reused while the driver stays (22 Oct 2026: the driver
+        compiles llama.cpp's shaders, so base and rounds are answered on one driver)."""
+        drv = llama.gpu_driver()
+        if drv is None or drv == llama.LEGACY_GPU_DRIVER:
+            fdir = cfg.get("first_run_dir") or os.path.join(RESULTS_DIR, "first-run")
+            path = os.path.join(fdir, "score", "base.json")
+            return self.read_json(path), path
+        have = self.state.get("evalplus_base")
+        if have and have.get("gpu_driver") == drv and os.path.exists(have["result"]):
+            return self.read_json(have["result"]), have["result"]
+        d = os.path.join(self.dir, "rounds", "r000", "evalplus-base", "".join(
+            ch if ch.isalnum() or ch in "._-" else "_" for ch in drv))
+        t0 = time.time()
+        res = self.evalplus_pass(cfg, None, d, " base")
+        path = os.path.join(d, "result.json")
+        self.state["evalplus_base"] = {"gpu_driver": drv, "result": path, "scored_in_round": self.rnum,
+                                       "hours": round((time.time() - t0) / 3600, 2),
+                                       "finished": time.strftime("%Y-%m-%d %H:%M:%S")}
+        self.save()
+        self.log("base on EvalPlus, graphics driver " + drv + ": " + ", ".join(
+            f"{ds} plus {r['plus']:.4f}" for ds, r in res["datasets"].items()))
+        return res, path
+
+    def milestone(self, cfg):
+        """EvalPlus seed 1 with the first run's exact scoring server, paired against the base's answers on the same
+        graphics driver (evalplus_base)."""
+        base, base_path = self.evalplus_base(cfg)
+        res = self.evalplus_pass(cfg, self.round_gguf(), os.path.join(self.rdir, "evalplus"), "")
         out = {}
         bp, cp = {}, {}  # every problem of both sets, plus tests: the no-worse check against the base
         for ds in ew.DATASETS:
@@ -1464,7 +1502,7 @@ class Loop(fr.Controller):
         rules = cfg["rules"]
         guard = E.guard_check(bp, cp, float(rules.get("evalplus_tolerance", 0.03)), rules["alpha"])
         if not base:
-            guard.update(ok=False, missing=f"{os.path.join(fdir, 'score', 'base.json')} not found")
+            guard.update(ok=False, missing=f"{base_path} not found")
         self.log(f"round {self.rnum}: EvalPlus plus tests vs the base {guard['base']} -> {guard['candidate']} on "
                  f"{guard['n']} problems ({guard['wins']} won / {guard['losses']} lost, p worse {guard['p_worse']:.4f}): "
                  + ("no worse" if guard["ok"] else "WORSE") + ("" if rules.get("evalplus_guard") else " (guard off)"))
@@ -1482,6 +1520,9 @@ class Loop(fr.Controller):
               "sampling": ew.SAMPLING, "harness": GUARDS[name]["module"].HARNESS}
         if gate_build(cfg) != llama.DEFAULT_BUILD:  # (speculative decoding is in the flags)
             fp["build"] = gate_build(cfg)
+        drv = llama.gpu_driver()
+        if drv != llama.LEGACY_GPU_DRIVER:  # 22 Oct 2026; earlier rows came from the legacy driver
+            fp["gpu_driver"] = drv
         return fp
 
     def guard_pass(self, cfg, name, gguf, path):
