@@ -1711,8 +1711,9 @@ def _gate_slots(tmp):
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
     cfg["gate"]["slots"] = 8
-    for k in ("concurrency", "build", "spec"):  # b11435 without speculative decoding, whatever loop.yaml has now
-        cfg["gate"].pop(k, None)
+    for k in ("concurrency", "build", "spec", "budget_message"):  # b11435, no speculative decoding, no budget message,
+        cfg["gate"].pop(k, None)                                   # whatever loop.yaml has now
+    cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     run_dir = os.path.join(tmp, "results", "loop")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
@@ -1728,7 +1729,8 @@ def _gate_slots(tmp):
     # set aside: round 0 is scored on 8 slots and that is recorded
     os.rename(r0, r0 + ".4-slots")
     assert run_main(args) == 0, status()
-    assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None}
+    assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None,
+                                      "budget": 16384, "max_tokens": 20480, "budget_message": None}
     assert state()["rounds"][0]["status"] == "reference"
     # every gate-settings server (round 0 and r002: evaluate, BFCL, confirm) had 8 slots; EvalPlus kept 4
     slots = [(name.split("-", 1)[1], f[f.index("-np") + 1], f[f.index("-c") + 1]) for name, f in w.served]
@@ -1828,22 +1830,25 @@ def _gate_build_and_spec(tmp):
     w.pause_train_once = set()
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
-    for k in ("build", "spec"):  # starts on b11435 without speculative decoding, whatever loop.yaml has now
-        cfg["gate"].pop(k, None)
+    for k in ("build", "spec", "budget_message"):  # starts on b11435 without speculative decoding or a budget
+        cfg["gate"].pop(k, None)                   # message, whatever loop.yaml has now
+    cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
     slots = L.gate_slots(cfg)
     run_dir = os.path.join(tmp, "results", "loop")
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
-    default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None}
+    default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None, "budget": 16384,
+               "max_tokens": 20480, "budget_message": None}
     # the default settings: b11435, no speculative decoding, the build's binary not looked for, nothing new in the
     # no-worse checks' fingerprint
     assert run_main(args) == 0, status()
     assert state()["gate_server"] == default and "build" not in state()["base_guards"]["bfcl"]["fingerprint"]
     assert {(name.endswith("-evalplus"), b) for name, b in w.binaries} == {(False, lc.SERVER), (True, None)}
     assert not any("--spec-type" in f for _, f in w.served)
-    # a record from before build and spec were kept counts as b11435 without: the next round runs, and it is filled in
+    # a record from before build and spec (and the budget settings) were kept counts as b11435 without speculative
+    # decoding, a 16,384-token budget, 20,480 tokens and no message: the next round runs, and it is filled in
     st = state()
     st["gate_server"] = {"slots": slots, "ctx": 262144}
     json.dump(st, open(os.path.join(run_dir, "state.json"), "w"))
@@ -1959,6 +1964,155 @@ def test_gate_speed_bench():
         (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, E.GATE_PATH, B.OUT_DIR,
          sys.argv) = saved
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_budget_message():
+    """22 Oct 2026: loop.yaml gate.budget_message adds a stop-thinking sentence at the thinking budget
+    (--reasoning-budget-message) on every gate-settings server, not on EvalPlus's. The thinking budget, the tokens an
+    answer may take and the sentence are recorded with the other gate server settings: rounds scored without the
+    sentence, or with another budget, wait on a change until their answers are set aside. tests/budget_message_check.py
+    answers chosen gate items again with the sentence, against a fake server."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _budget_message(tmp)
+    finally:
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _budget_message(tmp):
+    import yaml
+    import budget_message_check as B
+    msg = B.QWEN_STOP
+    assert msg.startswith("\n\nConsidering the limited time") and msg.endswith("directly now.\n")
+    assert L.gate_budget_message({"gate": {}}) is None and L.gate_budget_message({"gate": {"budget_message": ""}}) is None
+    assert L.gate_budget_message({"gate": {"budget_message": msg}}) == msg
+    for bad in (3, "   ", "a" * 1001, "a\0b", ["x"]):
+        try:
+            L.gate_budget_message({"gate": {"budget_message": bad}})
+            raise AssertionError(f"message {bad!r} accepted")
+        except ValueError:
+            pass
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    for k in ("build", "spec", "budget_message"):  # whatever loop.yaml has now
+        cfg["gate"].pop(k, None)
+    cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
+    assert "--reasoning-budget-message" not in L.Loop.gate_flags(None, cfg)
+
+    def write(c):
+        yaml.safe_dump(c, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    write(cfg)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    assert run_main(args) == 0, status()
+    gs = state()["gate_server"]
+    assert (gs["budget"], gs["max_tokens"], gs["budget_message"]) == (16384, 20480, None), gs
+    # the sentence on rounds scored without it: waits, naming both, and starts no server
+    cfg["gate"]["budget_message"] = msg
+    write(cfg)
+    assert L.load_config(cpath)["gate"]["budget_message"] == msg  # real newlines survive loop.yaml
+    n = len(w.served)
+    assert run_main(args) == 0
+    det = status()["detail"]
+    assert status()["state"] == "waiting" and len(w.served) == n, status()
+    assert "with the budget message 'Considering the limited time" in det and "with no budget message" in det, det
+    # so does another thinking budget
+    write(dict(cfg, gate=dict(cfg["gate"], budget_message=None, budget=32768, max_tokens=36864)))
+    assert run_main(args) == 0
+    det = status()["detail"]
+    assert status()["state"] == "waiting" and len(w.served) == n, status()
+    assert "a 32768-token thinking budget, 36864 tokens an answer" in det, det
+    assert "a 16384-token thinking budget, 20480 tokens an answer" in det, det
+    # answers set aside (a new run folder): every gate-settings server has the sentence right after the budget;
+    # EvalPlus doesn't
+    write(cfg)
+    run_dir = os.path.join(tmp, "results", "loop-message")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"]["budget_message"] == msg
+    new = w.served[n:]
+    gate = [(name, f) for name, f in new if not name.endswith("-evalplus")]
+    assert "evaluate" in {name.split("-", 1)[1] for name, _ in gate}, gate
+    for name, f in gate:
+        i = f.index("--reasoning-budget")
+        assert f[i + 1] == "16384" and f[i + 2:i + 4] == ["--reasoning-budget-message", msg], (name, f)
+    evalplus = [f for name, f in new if name.endswith("-evalplus")]
+    assert evalplus and all("--reasoning-budget-message" not in f for f in evalplus), evalplus
+    # the check script: the rows that ran out, answered again with their gate seeds and the sentence
+    saved = (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, B.ew.count_tokens, B.OUT_DIR,
+             B.make_check, B.sandbox, sys.argv)
+    calls, lock = [], threading.Lock()
+    gate_items = E.read_jsonl(E.GATE_PATH)
+
+    class FakeServer:
+        def __init__(self, flags, log_path, port=0, binary=None, **k):
+            self.flags, self.binary, self.url, self.load_s = flags, binary, "http://fake", 1.0
+
+        def describe(self):
+            return " ".join([self.binary] + self.flags)
+
+        def start(self):
+            return self
+
+        def stop(self):
+            pass
+    flags_seen = []
+
+    def server(*a, **k):
+        srv = FakeServer(*a, **k)
+        flags_seen.append(srv.flags)
+        return srv
+
+    def http(url, body=None, timeout=600):
+        raise ConnectionRefusedError(111, "refused")  # nothing on the loop's port
+
+    def chat(url, message, seed, max_tokens):
+        with lock:
+            calls.append((message, seed, max_tokens))
+        if message == gate_items[3]["prompt"]:  # thinks to the budget, gets the sentence, writes code
+            return {"content": "Here:\n```go\npackage main\n```\n", "reasoning": "x " * 50 + msg.rstrip(),
+                    "finish_reason": "stop", "completion_tokens": 17000, "seconds": 1.0}
+        return {"content": "Still: so the answer", "reasoning": "y", "finish_reason": "length",
+                "completion_tokens": 20480, "seconds": 1.0}
+    try:
+        exe = os.path.join(tmp, "llama-server.exe")
+        open(exe, "wb").close()
+        B.llama.Server, B.llama.http, B.llama.server_binary = server, http, lambda build="b11435-vulkan": exe
+        B.ew.chat_request, B.ew.count_tokens = chat, lambda url, text: 16384 if text.startswith("x") else 10
+        B.OUT_DIR, B.make_check = os.path.join(tmp, "bm"), lambda: (lambda item, content: (True, "ok"))
+        B.sandbox = types.SimpleNamespace(ensure_private_folder_closed=lambda log: False)
+        rows = os.path.join(tmp, "gate.seed1.jsonl")
+        E.write_jsonl(rows, [{"id": gate_items[3]["id"], "finish_reason": "length"},
+                             {"id": gate_items[5]["id"], "finish_reason": "stop"},
+                             {"id": gate_items[8]["id"], "finish_reason": "length"}])
+        sys.argv = ["budget_message_check.py", "--config", cpath, "--rows", rows, "--label", "t"]
+        assert B.main() == 0
+        res = json.load(open(os.path.join(tmp, "bm", "t.json")))
+        f = res["flags"]
+        assert f[f.index("--reasoning-budget-message") + 1] == msg and res["message"] == msg, f
+        assert sorted(calls) == sorted((gate_items[i]["prompt"], 100000 + i, 20480) for i in (3, 8)), calls
+        assert (res["items"], res["budget_hits"], res["budget_hits_with_code_block"], res["budget_hits_sentence_seen"],
+                res["ran_out"], res["passed"]) == (2, 1, 1, 1, 1, 1), res
+        a = {x["id"]: x for x in res["answers"]}
+        assert a[gate_items[8]["id"]]["fences"] == 0 and not a[gate_items[8]["id"]]["code_block"]
+        assert len(E.read_jsonl(os.path.join(tmp, "bm", "t.jsonl"))) == 2
+        # the control: no sentence, chosen ids
+        sys.argv = ["budget_message_check.py", "--config", cpath, "--ids", gate_items[3]["id"], "--no-message",
+                    "--label", "c"]
+        assert B.main() == 0
+        res = json.load(open(os.path.join(tmp, "bm", "c.json")))
+        assert res["message"] is None and "--reasoning-budget-message" not in res["flags"], res["flags"]
+        assert res["budget_hits_sentence_seen"] == 0 and res["budget_hits_with_code_block"] == 1, res
+    finally:
+        (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, B.ew.count_tokens, B.OUT_DIR,
+         B.make_check, B.sandbox, sys.argv) = saved
 
 
 def test_second_early_look():
