@@ -873,9 +873,9 @@ class Loop(fr.Controller):
     def require_gate_server(self, cfg):
         """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
         settings (loop.yaml gate: slots, build and spec, 21 Oct 2026; budget, max_tokens and budget_message, and
-        noncoding: max_tokens, 22 Oct 2026): answers differ with them, so a change part way would compare rounds scored differently. Recorded at the
-        first check; rows scored before it was recorded came from LEGACY_GATE_SERVER's settings. Raises Waiting on a
-        change, or when the build's llama-server is missing."""
+        noncoding: max_tokens, 22 Oct 2026): answers differ with them, so a change part way would compare rounds
+        scored differently. Recorded at the first check; rows scored before it was recorded came from
+        LEGACY_GATE_SERVER's settings. Raises Waiting on a change, or when the build's llama-server is missing."""
         want = gate_server(cfg)
         known = self.state.get("gate_server")
         if known is None:
