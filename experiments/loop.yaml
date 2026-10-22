@@ -35,12 +35,17 @@ gate: {seed: 1, budget: 16384, max_tokens: 20480, slots: 6, early_reject: {looks
 # real 1.5 to 3 point gain; the second look (21 Oct 2026) cuts the share of the gate answered when nothing improved
 # from 64% to 60%, with no measurable further loss of keeps. The non-coding check is skipped after an early stop.
 # slots: answers the gate server decodes side by side (llama-server -np), one request in flight per slot; the
-# 262,144-token cache is split between them. Every gate, non-coding and BFCL score of the loop's life must come from
-# the same count (the loop waits on a change), and before each pass the longest prompt plus a whole answer must fit
-# a slot. Measured 21 Oct 2026 (llama-batched-bench, the scoring server's settings), tokens/s decoded in all at 1,024
-# and 8,192 tokens of context: 4 slots 33.4 and 29.7, 5 slots 37.6 and 33.8, 6 slots 39.7 and 35.3, 7 slots 29.3 and
-# 26.5, 8 slots 29.9 and 27.2. 6 is about 19% faster than 4 overall (the rule set beforehand was at least 10%), so the
-# loop uses 6, and the base's first answers, from 4 slots, were set aside. EvalPlus keeps the first run's 4 slots.
+# 262,144-token cache is split between them. Every gate, non-coding and no-worse-check score of the loop's life must
+# come from the same count, build and spec (the loop waits on a change), and before each pass the longest prompt plus a
+# whole answer must fit a slot. Measured 21 Oct 2026 (llama-batched-bench, the scoring server's settings), tokens/s
+# decoded in all at 1,024 and 8,192 tokens of context: 4 slots 33.4 and 29.7, 5 slots 37.6 and 33.8, 6 slots 39.7 and
+# 35.3, 7 slots 29.3 and 26.5, 8 slots 29.9 and 27.2. 6 is about 19% faster than 4 overall (the rule set beforehand was
+# at least 10%), so the loop uses 6, and the base's first answers, from 4 slots, were set aside. EvalPlus keeps the
+# first run's 4 slots.
+# build and spec (optional, 21 Oct 2026; not set = b11435 without speculative decoding): another llama.cpp build for
+# the gate server (build: a folder under llama.cpp/) and MTP speculative decoding (spec: {type: draft-mtp,
+# draft_n_max: 1}; the model's own MTP block drafts a token and every token is still sampled from the model).
+# EvalPlus stays on b11435 without them.
 # The gate (21 Oct 2026, scripts/build_gate.py): 495 CodeContests items, no Python. Write items ask for a program in
 # C++, Java, Go, Rust, JavaScript or TypeScript (one language per problem, in turn); fix items show a wrong C++ or Java
 # submission and ask for the fixed program. Built and run in the sandbox (anneal/polyglot.py,
@@ -60,17 +65,18 @@ rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: 
 # more than evalplus_tolerance or significantly (one-sided sign test on the problems it lost vs won, p <= alpha), the
 # non-coding check's test. At the first run's rate of changed answers (28 of 542: 12 won, 16 lost) the sign test
 # flags a net loss of 10 problems (1.8 points); the 0.03 tolerance (about 3 standard errors there) only catches a
-# large drop when far more answers change. It runs before the confirm pass, so a blocked round costs no second gate
-# pass.
+# large drop when far more answers change. It runs after the other no-worse checks below and before the confirm
+# pass, so a blocked round costs no second gate pass.
 guards:
   bfcl: {file: data/eval/bfcl_java_js.jsonl, seed: 1, tolerance: 0.06}
 guards_base_in_round_0: true
-# More no-worse checks (21 Oct 2026), run like EvalPlus: only on a round that passes the rule above, after EvalPlus,
-# in the order listed (a blocked round skips the rest and the confirm pass); a drop beyond the check's tolerance, or a
-# significant one (the same sign test, p <= alpha), rejects the round; the scores are recorded in the round's report
-# and the summary. One answer per item (seed), on the gate's server settings, paired per item against the base. The
-# base is scored once, after its gate pass in round 0 (guards_base_in_round_0; a failure there never stops the loop
-# and is retried when a round first needs it), and again only if the set or the settings change.
+# More no-worse checks (21 Oct 2026), run like EvalPlus: only on a round that passes the rule above, before EvalPlus
+# (they take less time; every check must pass, so the order changes no decision), in the order listed (a blocked round
+# skips the rest, EvalPlus and the confirm pass); a drop beyond the check's tolerance, or a significant one (the same
+# sign test, p <= alpha), rejects the round; the scores are recorded in the round's report and the summary. One answer
+# per item (seed), on the gate's server settings, paired per item against the base. The base is scored once, after its
+# gate pass in round 0 (guards_base_in_round_0; a failure there never stops the loop and is retried when a round first
+# needs it), and again only if the set or the settings change.
 #   bfcl: the Berkeley Function Calling Leaderboard's Java (100) and JavaScript (50) items, asked as tool calls and
 #         judged by BFCL's own AST checker (anneal/bfcl.py; scripts/build_guards.py --bfcl builds the set from the
 #         pinned bfcl-eval 2026.3.23 wheel, Apache-2.0). Tolerance 0.06: the 3 standard errors of EvalPlus's 0.03 at

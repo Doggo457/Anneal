@@ -13,7 +13,7 @@ Rounds (results/loop/rounds/rNNN):
   r001 first-run    the first run's adapter on the same sets, for the record (it trained on self-generated rows, so it
                     never becomes the best).
   r002 onwards      plan -> data -> train -> convert -> valloss -> sweloss -> termloss -> evaluate -> decide
-                    [-> milestone -> bfcl -> confirm] -> finish
+                    [-> bfcl -> cweval -> milestone -> confirm] -> finish
     plan       recipe: the next unused entry of `recipes` in experiments/loop.yaml whose condition holds (after_kept,
                after_dropped_stacks), else `default_recipe`. Init: the best adapter (training continues from it), or
                the base when the best is the base or the recipe changes the LoRA shape ("base_lineage": retrain from
@@ -50,16 +50,18 @@ Rounds (results/loop/rounds/rNNN):
                held-out terminal loss lower on more steps than chance, Holm-adjusted across the two, p <= loss_alpha).
                Either way the write and fix parts and the non-coding check are not worse beyond tolerance nor
                significantly worse, and the samples are clean.
-    milestone  (passed decide) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact scoring server, paired
-               against the base's first-run EvalPlus answers. Since 21 Oct 2026 a no-worse check only (the base
-               already passes about 86% of the plus tests, so it can't show much gain): with rules.evalplus_guard a
-               drop beyond evalplus_tolerance, or a significant one, rejects the round (evalsets.guard_check). It runs
-               before confirm, so a blocked round skips the second gate pass.
-    bfcl       (passed decide and EvalPlus) the other no-worse checks in loop.yaml's guards, 21 Oct 2026, in
-               GUARDS order: BFCL's 150 Java and JavaScript function calls (anneal/bfcl.py). Same rule as EvalPlus,
-               on the gate's server settings, paired per item against the base's rows (scored once, in round 0 or
-               the first round that needs them, and again only if the settings change). A blocked round skips the
-               checks after it and the confirm pass.
+    bfcl       (passed decide) the no-worse checks in loop.yaml's guards, 21 Oct 2026, in GUARDS order: BFCL's 150
+    cweval     Java and JavaScript function calls (anneal/bfcl.py), then CWEval's 33 Go and JavaScript secure-coding
+               tasks (anneal/cweval.py) once switched on. Same rule as EvalPlus, on the gate's server settings, paired
+               per item against the base's rows (scored once, in round 0 or the first round that needs them, and
+               again only if the settings change). They run before EvalPlus, the longest check (21 Oct 2026): a
+               blocked round skips the checks after it, EvalPlus and the confirm pass. Every check must pass either
+               way, so the order changes no decision.
+    milestone  (passed decide and the checks above) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact
+               scoring server, paired against the base's first-run EvalPlus answers. Since 21 Oct 2026 a no-worse
+               check only (the base already passes about 86% of the plus tests, so it can't show much gain): with
+               rules.evalplus_guard a drop beyond evalplus_tolerance, or a significant one, rejects the round
+               (evalsets.guard_check). It runs before confirm, so a blocked round skips the second gate pass.
     confirm    (kept) the gate again with a fresh seed; those rows become the best's reference, so the next round is
                compared against an unbiased score, not the lucky draw that got this one kept. With
                rules.confirm_net_win the fresh-seed rows of a round kept on the gate path must also win more problems
@@ -106,14 +108,14 @@ from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 PY = sys.executable
 CONFIG = os.path.join(ROOT, "experiments", "loop.yaml")
 POOLS = os.path.join(ROOT, "data", "processed", "loop")
-# No-worse checks after EvalPlus (loop.yaml guards, 21 Oct 2026), in the order they run. Each module gives
+# No-worse checks before EvalPlus (loop.yaml guards, 21 Oct 2026), in the order they run. Each module gives
 # HARNESS, prepare(), request(url, item, seed, max_tokens, sampling), judge(item, response) -> (passed, verdict),
 # language(item), and optionally probe(first rows) -> error or None. Each check is a stage of its own.
 GUARDS = {
     "bfcl": {"label": "BFCL Java and JavaScript tool calls", "module": bfcl, "build": "scripts/build_guards.py --bfcl"},
 }
-ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate", "decide",
-                "milestone"] + list(GUARDS) + ["confirm", "finish"]
+ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate",
+                "decide"] + list(GUARDS) + ["milestone", "confirm", "finish"]
 # Held-out loss sets (sweloss, termloss): the loop.yaml key, the stage, the default file, what a report calls it.
 HELDOUT = {"swe": {"key": "swe_loss", "stage": "sweloss", "file": os.path.join("data", "eval", "swe_heldout.jsonl"),
                    "label": "held-out bug-fix steps", "build": "scripts/build_swe_heldout.py"},
@@ -126,9 +128,11 @@ GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); 
 REF_STAGES = ["evaluate", "decide"] + list(GUARDS) + ["finish"]
 GUARD_PROBE_ROWS = 8
 MAX_ROUND_FAILURES = 3
-# The gate server's slots (answers decoded side by side, loop.yaml gate.slots; 21 Oct 2026). Rows scored before the
-# loop recorded them came from 4 slots. PROMPT_MARGIN: the chat template's tokens around a prompt.
-LEGACY_GATE_SERVER = {"slots": 4, "ctx": llama.SCORING_CTX}
+# The gate server's settings (loop.yaml gate: slots, build, spec; 21 Oct 2026). Rows scored before the loop recorded
+# them came from 4 slots on b11435 without speculative decoding; a record from before build and spec were added means
+# b11435 and none. PROMPT_MARGIN: the chat template's tokens around a prompt.
+LEGACY_GATE_SERVER = {"slots": 4, "ctx": llama.SCORING_CTX, "build": llama.DEFAULT_BUILD, "spec": None}
+GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None}
 PROMPT_MARGIN = 64
 
 
@@ -492,24 +496,51 @@ def gate_concurrency(cfg):
     return int((cfg.get("gate") or {}).get("concurrency", gate_slots(cfg)))
 
 
+def gate_build(cfg):
+    """The llama.cpp build of the gate server (loop.yaml gate.build: a folder under llama.cpp/; default b11435)."""
+    build = (cfg.get("gate") or {}).get("build") or llama.DEFAULT_BUILD
+    llama.server_binary(build)  # a plain folder name, or ValueError
+    return build
+
+
+def gate_spec(cfg):
+    """Speculative decoding on the gate server (loop.yaml gate.spec, llama.spec_flags), or None."""
+    spec = (cfg.get("gate") or {}).get("spec") or None
+    llama.spec_flags(spec)  # valid, or ValueError
+    return dict(spec) if spec else None
+
+
 def gate_server(cfg):
-    """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server)."""
-    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX}
+    """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server):
+    the slot count, the cache, the llama.cpp build and speculative decoding."""
+    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg)}
+
+
+def describe_gate_server(srv, keys):
+    words = {"slots": lambda v: f"{v} slots", "ctx": lambda v: f"a {v}-token cache", "build": lambda v: f"build {v}",
+             "spec": lambda v: (f"MTP draft {v['draft_n_max']}" if v else "no speculative decoding")}
+    return ", ".join(words[k](srv.get(k)) for k in keys)
 
 
 def guard_names(cfg):
-    """The no-worse checks after EvalPlus that loop.yaml switches on (guards), in GUARDS order."""
+    """The no-worse checks before EvalPlus that loop.yaml switches on (guards), in GUARDS order."""
     g = cfg.get("guards") or {}
     return [n for n in GUARDS if isinstance(g.get(n), dict) and g[n].get("on", True)]
 
 
+def guards_blocked(guards):
+    """The guards in guards ({name: its stage result}) that are worse than the base."""
+    return [n for n, g in (guards or {}).items() if not (g.get("guard") or {}).get("ok")]
+
+
 def guards_failed(cfg, mile, guards):
-    """The no-worse checks a round that passed decide has failed so far: "evalplus" (rules.evalplus_guard; missing
-    counts as failed) and each guard in guards ({name: its stage result}) that is worse than the base."""
-    bad = []
-    if cfg["rules"].get("evalplus_guard") and not (mile and (mile.get("guard") or {}).get("ok")):
-        bad.append("evalplus")
-    return bad + [n for n, g in (guards or {}).items() if not (g.get("guard") or {}).get("ok")]
+    """The no-worse checks a round that passed decide has failed so far: "evalplus" (rules.evalplus_guard) and each
+    guard in guards ({name: its stage result}) that is worse than the base. EvalPlus runs after the guards (21 Oct
+    2026), so without a result it counts as failed only when no guard blocked the round first."""
+    bad = guards_blocked(guards)
+    if cfg["rules"].get("evalplus_guard") and not (mile and (mile.get("guard") or {}).get("ok")) and (mile or not bad):
+        bad.insert(0, "evalplus")
+    return bad
 
 
 def guard_ok(cfg, mile, guards=None):
@@ -560,8 +591,12 @@ class Loop(fr.Controller):
         finally:
             self.dir = saved
 
-    def serve(self, flags, name, coopmat=False):
-        return super().serve(flags, f"r{self.rnum:03d}-{name}", coopmat)
+    def serve(self, flags, name, coopmat=False, binary=None):
+        return super().serve(flags, f"r{self.rnum:03d}-{name}", coopmat, binary)
+
+    def serve_gate(self, cfg, lora, name):
+        """A server on the gate's settings (gate_flags, and loop.yaml's llama.cpp build)."""
+        return self.serve(self.gate_flags(cfg, lora=lora), name, binary=llama.server_binary(gate_build(cfg)))
 
     def round_record(self):
         for r in self.state["rounds"]:
@@ -582,8 +617,8 @@ class Loop(fr.Controller):
 
     def gate_flags(self, cfg, lora=None):
         g = cfg["gate"]
-        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS,
-                                   slots=gate_slots(cfg))
+        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS
+                                   + llama.spec_flags(gate_spec(cfg)), slots=gate_slots(cfg))
 
     def run_stage(self, name, fn, *a):
         if self.done(name) is not None:
@@ -702,7 +737,7 @@ class Loop(fr.Controller):
             raise RuntimeError("held-out sets missing: run scripts/build_gate.py")
         out["toolchains"] = self.toolchain_check(gate)
         g = cfg["gate"]
-        self.serve(self.gate_flags(cfg, lora=gguf), "evaluate")
+        self.serve_gate(cfg, gguf, "evaluate")
         try:
             url = self.server.url
             self.slot_room_check(url, cfg, [("gate", gate, g["max_tokens"]),
@@ -796,22 +831,29 @@ class Loop(fr.Controller):
 
     def require_gate_server(self, cfg):
         """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
-        slot count (loop.yaml gate.slots, 21 Oct 2026): answers differ a little with it, so a change part way would
-        compare rounds scored differently. Recorded at the first check; rows scored before it was recorded came from
-        4 slots. Raises Waiting on a change."""
+        settings (loop.yaml gate: slots, build and spec, 21 Oct 2026): answers differ a little with them, so a change
+        part way would compare rounds scored differently. Recorded at the first check; rows scored before it was
+        recorded came from 4 slots on b11435 without speculative decoding. Raises Waiting on a change, or when the
+        build's llama-server is missing."""
         want = gate_server(cfg)
         known = self.state.get("gate_server")
         if known is None:
             scored = [p for p in glob.glob(os.path.join(self.dir, "rounds", "r*", "gate.seed*.jsonl"))
                       if E.read_jsonl(p)]
             known = dict(LEGACY_GATE_SERVER) if scored else want
-            if known == want:
-                self.state["gate_server"] = known
-                self.save()
+        else:
+            known = dict(GATE_SERVER_ADDED, **known)
         if known != want:
-            raise Waiting(f"experiments/loop.yaml asks for {want['slots']} gate server slots, but the rounds so far "
-                          f"were scored with {known['slots']}: set gate.slots back to {known['slots']}, or set every "
-                          "round's gate answers aside to score again from round 0")
+            diff = [k for k in want if known.get(k) != want[k]]
+            raise Waiting(f"experiments/loop.yaml asks for a gate server with {describe_gate_server(want, diff)}, but "
+                          f"the rounds so far were scored with {describe_gate_server(known, diff)}: put loop.yaml's "
+                          "gate settings back, or set every round's gate answers aside to score again from round 0")
+        binary = llama.server_binary(want["build"])
+        if want["build"] != llama.DEFAULT_BUILD and not os.path.exists(binary):
+            raise Waiting(f"loop.yaml's gate.build is {want['build']}, but {binary} is missing")
+        if self.state.get("gate_server") != want:
+            self.state["gate_server"] = want
+            self.save()
 
     def slot_room_check(self, url, cfg, sets):
         """Each gate server slot holds llama.SCORING_CTX / slots tokens: the longest prompts of each set (label,
@@ -1031,13 +1073,14 @@ class Loop(fr.Controller):
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
         conf = mile = None
         guards = {}
-        if d["keep"]:
-            if cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard"):
-                mile = self.run_stage("milestone", self.milestone, cfg)
+        if d["keep"]:  # the cheaper checks first (21 Oct 2026); a block skips the rest, as every check must pass
             for name in guard_names(cfg):
-                if guards_failed(cfg, mile, guards):
-                    break  # already rejected: the other checks can't change that
+                if guards_blocked(guards):
+                    break
                 guards[name] = self.run_stage(name, self.guard, cfg, name)
+            evalplus = cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard")
+            if evalplus and not guards_blocked(guards):
+                mile = self.run_stage("milestone", self.milestone, cfg)
             if guard_ok(cfg, mile, guards):
                 conf = self.run_stage("confirm", self.confirm, cfg, d)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile, guards)
@@ -1327,7 +1370,7 @@ class Loop(fr.Controller):
         g = cfg["gate"]
         gate = E.read_jsonl(E.GATE_PATH)
         self.toolchain_check(gate)
-        self.serve(self.gate_flags(cfg, lora=self.round_gguf()), "confirm")
+        self.serve_gate(cfg, self.round_gguf(), "confirm")
         try:
             path = os.path.join(self.rdir, f"gate.seed{seed}.jsonl")
             rows = E.score(self.server.url, gate, path, seed, g["max_tokens"], self.gate_checker(),
@@ -1393,9 +1436,12 @@ class Loop(fr.Controller):
         """What a pass of a no-worse check depends on besides the model: rows scored under another fingerprint are
         never paired."""
         g, gc = cfg["gate"], cfg["guards"][name]
-        return {"file_sha": file_sha(self.guard_file(cfg, name)), "seed": int(gc.get("seed", 1)),
-                "max_tokens": int(g["max_tokens"]), "budget": int(g["budget"]), "flags": self.gate_flags(cfg),
-                "sampling": ew.SAMPLING, "harness": GUARDS[name]["module"].HARNESS}
+        fp = {"file_sha": file_sha(self.guard_file(cfg, name)), "seed": int(gc.get("seed", 1)),
+              "max_tokens": int(g["max_tokens"]), "budget": int(g["budget"]), "flags": self.gate_flags(cfg),
+              "sampling": ew.SAMPLING, "harness": GUARDS[name]["module"].HARNESS}
+        if gate_build(cfg) != llama.DEFAULT_BUILD:  # (speculative decoding is in the flags)
+            fp["build"] = gate_build(cfg)
+        return fp
 
     def guard_pass(self, cfg, name, gguf, path):
         """One pass of a no-worse check on the gate's server settings (gguf None: the base); resumable by item.
@@ -1419,7 +1465,7 @@ class Loop(fr.Controller):
                 err = probe(first) if len(first) == GUARD_PROBE_ROWS else None
                 if err:
                     raise RuntimeError(err)
-        self.serve(self.gate_flags(cfg, lora=gguf), name)
+        self.serve_gate(cfg, gguf, name)
         try:
             return E.score(self.server.url, items, path, seed, g["max_tokens"], None, None, ew.count_tokens,
                            g["budget"], concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,

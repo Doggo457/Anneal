@@ -7,7 +7,8 @@ Scoring server (base and adapter alike; results/lora_testing_findings.md, result
   and --cache-ram 0 (nothing rolls back; each checkpoint costs ~5 s here), --reasoning-format deepseek, and
   --lora <gguf> for an adapter. -np is the number of answers decoded side by side; the 262,144-token cache is split
   evenly between them. The first run and EvalPlus use 4; the loop's gate server takes its count from loop.yaml
-  (gate.slots).
+  (gate.slots), and may name another llama.cpp build (gate.build: a folder under llama.cpp/) and MTP speculative
+  decoding (gate.spec, spec_flags); EvalPlus always runs on b11435.
 """
 
 import json
@@ -17,7 +18,8 @@ import time
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SERVER = os.path.join(ROOT, "llama.cpp", "b11435-vulkan", "llama-server.exe")
+DEFAULT_BUILD = "b11435-vulkan"  # the first run's and EvalPlus's build, and the loop's unless loop.yaml names another
+SERVER = os.path.join(ROOT, "llama.cpp", DEFAULT_BUILD, "llama-server.exe")
 OLLAMA_MANIFEST = os.path.expanduser(r"~\.ollama\models\manifests\registry.ollama.ai\library\qwen3.8\27b")
 SNAPSHOT = os.path.join(ROOT, "models", "hf", "hub", "models--unsloth--Qwen3.8-27B-unsloth-bnb-4bit", "snapshots",
                         "8aa5f05d26b7205477066e1449e0af13f762a299")
@@ -36,6 +38,29 @@ def ollama_gguf():
 
 
 SCORING_CTX = 262144  # the scoring server's whole KV cache, split evenly between its slots
+
+
+def server_binary(build=DEFAULT_BUILD):
+    """llama-server.exe of a llama.cpp build: its folder under llama.cpp/ (a plain folder name)."""
+    if not isinstance(build, str) or not build or build in (".", "..") or os.path.basename(build) != build \
+            or "/" in build or "\\" in build:
+        raise ValueError(f"a llama.cpp build is a folder name under llama.cpp/, got {build!r}")
+    return os.path.join(ROOT, "llama.cpp", build, "llama-server.exe")
+
+
+def spec_flags(spec):
+    """llama-server flags for speculative decoding: none for None, or {"type": "draft-mtp", "draft_n_max": N} for the
+    MTP block built into the base GGUF (no separate draft file; results/mtp_findings.md). llama.cpp samples every
+    position from the model being scored and keeps a draft token only if it matches, so answers come from the same
+    distribution; the text for a given seed differs (at greedy, results/mtp_findings.md: only at near-ties)."""
+    if not spec:
+        return []
+    if not isinstance(spec, dict) or spec.get("type") != "draft-mtp" or set(spec) - {"type", "draft_n_max"}:
+        raise ValueError(f"gate.spec must be {{type: draft-mtp, draft_n_max: N}}, got {spec!r}")
+    n = spec.get("draft_n_max", 1)
+    if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 4:
+        raise ValueError(f"gate.spec draft_n_max must be a whole number from 1 to 4, got {n!r}")
+    return ["--spec-type", "draft-mtp", "--spec-draft-n-max", str(n)]
 
 
 def scoring_flags(lora=None, extra=(), slots=4):
@@ -57,11 +82,11 @@ class Server:
     """A llama-server process on 127.0.0.1:port with its own log file. Use as a context manager."""
 
     def __init__(self, flags, log_path, port=18090, coopmat=False, model=None, chat_template_file=None,
-                 timeout_s=900, retries=1):
+                 timeout_s=900, retries=1, binary=None):
         self.port, self.log_path, self.timeout_s, self.retries = port, log_path, timeout_s, retries
         self.url = f"http://127.0.0.1:{port}"
-        self.cmd = [SERVER, "-m", model or ollama_gguf(), "--host", "127.0.0.1", "--port", str(port), "--no-webui",
-                    "-to", "21600"] + list(flags)
+        self.cmd = [binary or SERVER, "-m", model or ollama_gguf(), "--host", "127.0.0.1", "--port", str(port),
+                    "--no-webui", "-to", "21600"] + list(flags)
         if chat_template_file:
             self.cmd += ["--chat-template-file", chat_template_file]
         self.env = dict(os.environ)

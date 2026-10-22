@@ -552,6 +552,7 @@ class World:
         self.bfcl_requests = []  # (model, item id, request seed) for each BFCL request
         self.cweval_requests = []  # the same for CWEval
         self.served = []  # (stage, flags) for each server the loop started
+        self.binaries = []  # (stage, llama-server binary or None for the default build) for the same servers
 
     def model(self):
         lora = self.server.lora if self.server else None
@@ -799,10 +800,11 @@ def setup_world(tmp):
     L.POOLS = os.path.join(tmp, "data", "processed", "loop")
     L.RESULTS_DIR = os.path.join(tmp, "results")
 
-    def serve(self, flags, name, coopmat=False):
+    def serve(self, flags, name, coopmat=False, binary=None):
         self.server = FakeServer(flags)
         w.server = self.server
         w.served.append((name, list(flags)))
+        w.binaries.append((name, binary))
         return self.server
 
     def unserve(self):
@@ -1111,7 +1113,8 @@ def _loss_path_and_guards(tmp):
 
 def test_terminal_path_and_evalplus_guard():
     """21 Oct 2026: the held-out terminal loss is a second loss path (Holm-adjusted with the bug-fix one), and
-    EvalPlus is a no-worse check that runs on rounds that pass the keep rule, before the confirm pass."""
+    EvalPlus is a no-worse check that runs on rounds that pass the keep rule and the other no-worse checks, before the
+    confirm pass."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(SWE_LOSS), dict(TERM_LOSS), set(EVALPLUS_WORSE)
     try:
@@ -1176,19 +1179,21 @@ def _terminal_path_and_evalplus_guard(tmp):
     assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and state()["best"]["round"] == 2
     assert "worse than the base" in open(os.path.join(rd(3), "report.md")).read()
     assert w.term_calls == [("r002", False), ("r003", True)]
-    # EvalPlus blocked it, so BFCL never ran; with both checks off it would have been kept
-    assert not os.path.exists(os.path.join(rd(3), "stages", "bfcl.done.json"))
+    # BFCL ran first (the cheaper checks come before EvalPlus) and passed; with both checks off it would have been kept
+    assert done(3, "bfcl")["guard"]["ok"]
     assert L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False), guards={}), done(3, "milestone"))
     assert not L.guard_ok(dict(cfg, rules=dict(cfg["rules"], evalplus_guard=False)), done(3, "milestone"))
     assert not L.guard_ok(cfg, None) and not L.guard_ok(cfg, {"guard": {"ok": False}})
     assert L.guards_failed(cfg, done(3, "milestone"), {"bfcl": {"guard": {"ok": False}}}) == ["evalplus", "bfcl"]
+    assert L.guards_failed(cfg, None, {}) == ["evalplus"]  # passed every check but EvalPlus never ran
 
 
 def test_bfcl_guard():
-    """21 Oct 2026: BFCL's Java and JavaScript tool calls are a no-worse check after EvalPlus. A training round waits
-    until the set is built; the base is scored once (here lazily, in the first round that needs it, since the set was
-    built after round 0) and again only when the settings change; a round worse on it is rejected before the confirm
-    pass; a pass whose first answers make no tool call at all stops (the round fails, its adapter kept)."""
+    """21 Oct 2026: BFCL's Java and JavaScript tool calls are a no-worse check, run before EvalPlus. A training round
+    waits until the set is built; the base is scored once (here lazily, in the first round that needs it, since the set
+    was built after round 0) and again only when the settings change; a round worse on it is rejected before EvalPlus
+    and the confirm pass; a pass whose first answers make no tool call at all stops (the round fails, its adapter
+    kept)."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(BFCL_PASSING), set(BFCL_NO_CALLS)
     before = world_patches()
@@ -1239,11 +1244,16 @@ def _bfcl_guard(tmp):
     rep2 = open(os.path.join(rd(2), "report.md")).read()
     assert "BFCL Java and JavaScript tool calls: no-worse check" in rep2 and "| JavaScript | 4 |" in rep2, rep2
     assert "bfcl 0.750 -> 0.750" in open(os.path.join(run_dir, "summary.md")).read()
-    # r003 keeps on the gate, passes EvalPlus, but loses 7 BFCL items: rejected before the confirm pass
+    order = [n for n, _ in w.served]  # the cheaper check first, then EvalPlus, then the confirm pass
+    assert order.index("r002-bfcl") < order.index("r002-evalplus") < order.index("r002-confirm"), order
+    # r003 keeps on the gate but loses 7 BFCL items: rejected before EvalPlus and the confirm pass
     PASSING["r003"], BFCL_PASSING["r003"] = 35, 2
     assert run_main(args) == 0
     g3 = done(3, "bfcl")["guard"]
-    assert done(3, "decide")["keep"] and done(3, "milestone")["guard"]["ok"] and not g3["ok"], g3
+    assert done(3, "decide")["keep"] and not g3["ok"], g3
+    assert not os.path.exists(os.path.join(rd(3), "stages", "milestone.done.json")) and "r003-evalplus" not in \
+        [n for n, _ in w.served]
+    assert L.guards_failed(cfg, None, {"bfcl": done(3, "bfcl")}) == ["bfcl"]  # EvalPlus didn't run: not a failure
     assert g3["losses"] == 7 and g3["wins"] == 0 and g3["p_worse"] < 0.01, g3
     assert rec(3)["status"] == "rejected" and any(x.startswith("BFCL") for x in rec(3)["reasons"]), rec(3)
     assert not os.path.exists(os.path.join(rd(3), "stages", "confirm.done.json")) and state()["best"]["round"] == 2
@@ -1349,8 +1359,8 @@ def cweval_switched_on():
     saved = (dict(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES), C.prepare, C.request, C.judge_program)
     L.GUARDS.setdefault("cweval", {"label": "CWEval Go and JavaScript", "module": C,
                                    "build": "scripts/build_guards.py --cweval"})
-    i = L.ROUND_STAGES.index("milestone") + 1
-    L.ROUND_STAGES[:] = L.ROUND_STAGES[:i] + list(L.GUARDS) + ["confirm", "finish"]
+    i = L.ROUND_STAGES.index("decide") + 1
+    L.ROUND_STAGES[:] = L.ROUND_STAGES[:i] + list(L.GUARDS) + ["milestone", "confirm", "finish"]
     L.REF_STAGES[:] = ["evaluate", "decide"] + list(L.GUARDS) + ["finish"]
     return saved
 
@@ -1365,11 +1375,11 @@ def cweval_switched_off(saved):
 
 def test_cweval_guard():
     """CWEval (anneal/cweval.py), switched on as a second no-worse check after BFCL: the base is scored on it in round
-    0, a round level on it is kept, a round worse on it alone is rejected before the confirm pass, and a pass whose
-    first answers have no text stops. The model and the judging of a program are faked; judge() itself is the real
+    0, a round level on it is kept, a round worse on it alone is rejected before EvalPlus and the confirm pass, and a
+    pass whose first answers have no text stops. The model and the judging of a program are faked; judge() itself is the real
     one (finish reason, empty answers, CWEval's program from the answer). Passes before and after the switch-on."""
     stages = (list(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES))
-    assert L.ROUND_STAGES[L.ROUND_STAGES.index("milestone") + 1:] == list(L.GUARDS) + ["confirm", "finish"]
+    assert L.ROUND_STAGES[L.ROUND_STAGES.index("decide") + 1:] == list(L.GUARDS) + ["milestone", "confirm", "finish"]
     assert L.REF_STAGES == ["evaluate", "decide"] + list(L.GUARDS) + ["finish"] and list(L.GUARDS)[0] == "bfcl"
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(CWEVAL_PASSING), set(CWEVAL_EMPTY)
@@ -1433,14 +1443,16 @@ def _cweval_guard(tmp):
     assert {s // 100000 for _, _, s in w.cweval_requests} == {1} and len(judged) == 24 and all(f for _, f in judged)
     order = [n for n, _ in w.served]
     assert order[0:3] == ["r000-evaluate", "r000-bfcl", "r000-cweval"], order
-    assert order.index("r002-bfcl") < order.index("r002-cweval") < order.index("r002-confirm"), order
+    assert order.index("r002-bfcl") < order.index("r002-cweval") < order.index("r002-evalplus") < \
+        order.index("r002-confirm"), order
     rep2 = open(os.path.join(rd(2), "report.md")).read()
     assert "CWEval Go and JavaScript: no-worse check" in rep2 and "| Go | 6 |" in rep2, rep2
-    # r003 keeps on the gate, passes EvalPlus and BFCL, but loses 5 CWEval items (0.42 > 0.12): rejected, no confirm
+    # r003 keeps on the gate, passes BFCL, but loses 5 CWEval items (0.42 > 0.12): rejected, no EvalPlus, no confirm
     PASSING["r003"], CWEVAL_PASSING["r003"] = 35, 4
     assert run_main(args) == 0
     g3 = done(3, "cweval")["guard"]
     assert done(3, "bfcl")["guard"]["ok"] and not g3["ok"] and g3["losses"] == 5 and g3["wins"] == 0, g3
+    assert not os.path.exists(os.path.join(rd(3), "stages", "milestone.done.json"))
     assert rec(3)["status"] == "rejected" and any(x.startswith("CWEval Go and JavaScript worse") for x in
                                                   rec(3)["reasons"]), rec(3)
     assert not os.path.exists(os.path.join(rd(3), "stages", "confirm.done.json")) and state()["best"]["round"] == 2
@@ -1637,7 +1649,8 @@ def _gate_slots(tmp):
     # set aside: round 0 is scored on 8 slots and that is recorded
     os.rename(r0, r0 + ".4-slots")
     assert run_main(args) == 0, status()
-    assert state()["gate_server"] == {"slots": 8, "ctx": 262144} and state()["rounds"][0]["status"] == "reference"
+    assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None}
+    assert state()["rounds"][0]["status"] == "reference"
     # every gate-settings server (round 0 and r002: evaluate, BFCL, confirm) had 8 slots; EvalPlus kept 4
     slots = [(name.split("-", 1)[1], f[f.index("-np") + 1], f[f.index("-c") + 1]) for name, f in w.served]
     assert {s for s in slots if s[0] != "evalplus"} == {(n, "8", "262144") for n in ("evaluate", "bfcl", "confirm")}
@@ -1689,6 +1702,102 @@ def _gate_slots(tmp):
             raise AssertionError("no error")
         except RuntimeError as exc:
             assert "x/2 failed: ZeroDivisionError" in str(exc), exc
+
+
+def test_gate_build_and_spec():
+    """21 Oct 2026: loop.yaml can name another llama.cpp build for the gate server (gate.build, a folder under
+    llama.cpp/) and MTP speculative decoding (gate.spec). Both are recorded with the slot count: rounds scored on
+    b11435 without speculative decoding (also a record from before build and spec were kept) wait on a change until
+    their answers are set aside, and a named build whose llama-server is missing waits. Every gate-settings server
+    (evaluate, the no-worse checks, confirm) runs the named build with the spec flags; EvalPlus stays on b11435
+    without them. The no-worse checks' base rows from b11435 keep their fingerprint."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    root = L.llama.ROOT
+    try:
+        _gate_build_and_spec(tmp)
+    finally:
+        L.llama.ROOT = root
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _gate_build_and_spec(tmp):
+    import yaml
+    lc = L.llama
+    mtp1 = ["--spec-type", "draft-mtp", "--spec-draft-n-max", "1"]
+    assert lc.spec_flags(None) == [] and lc.spec_flags({"type": "draft-mtp", "draft_n_max": 1}) == mtp1
+    assert lc.spec_flags({"type": "draft-mtp"}) == mtp1 and lc.spec_flags({"type": "draft-mtp", "draft_n_max": 4})[-1] == "4"
+    for bad in ({"type": "draft"}, {"type": "draft-mtp", "draft_n_max": 0}, {"type": "draft-mtp", "draft_n_max": 5},
+                {"type": "draft-mtp", "draft_n_max": True}, {"type": "draft-mtp", "draft_n_max": "2"},
+                {"type": "draft-mtp", "draft_n_max": 1, "model": "x.gguf"}, "draft-mtp"):
+        try:
+            lc.spec_flags(bad)
+            raise AssertionError(f"spec {bad!r} accepted")
+        except ValueError:
+            pass
+    assert lc.server_binary() == lc.SERVER
+    assert lc.server_binary("b11796-vulkan") == os.path.join(lc.ROOT, "llama.cpp", "b11796-vulkan", "llama-server.exe")
+    for bad in ("", ".", "..", "../b1", "a/b", "a\\b", None, 3):
+        try:
+            lc.server_binary(bad)
+            raise AssertionError(f"build {bad!r} accepted")
+        except ValueError:
+            pass
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    slots = L.gate_slots(cfg)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None}
+    # the default settings: b11435, no speculative decoding, the build's binary not looked for, nothing new in the
+    # no-worse checks' fingerprint
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"] == default and "build" not in state()["base_guards"]["bfcl"]["fingerprint"]
+    assert {(name.endswith("-evalplus"), b) for name, b in w.binaries} == {(False, lc.SERVER), (True, None)}
+    assert not any("--spec-type" in f for _, f in w.served)
+    # a record from before build and spec were kept counts as b11435 without: the next round runs, and it is filled in
+    st = state()
+    st["gate_server"] = {"slots": slots, "ctx": 262144}
+    json.dump(st, open(os.path.join(run_dir, "state.json"), "w"))
+    n = len(w.served)
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"] == default and len(w.served) > n and status()["state"] != "waiting", status()
+    # another build and MTP on these rounds: waits, naming both settings, and starts no server
+    cfg["gate"]["build"], cfg["gate"]["spec"] = "b11796-vulkan", {"type": "draft-mtp", "draft_n_max": 1}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    n = len(w.served)
+    assert run_main(args) == 0
+    det = status()["detail"]
+    assert status()["state"] == "waiting" and len(w.served) == n, status()
+    assert "with build b11796-vulkan, MTP draft 1, but" in det and "with build b11435-vulkan, no speculative" in det, det
+    # answers set aside (a new run folder): the build's llama-server is missing, so it waits
+    run_dir = os.path.join(tmp, "results", "loop-b11796")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and "gate.build is b11796-vulkan" in status()["detail"], status()
+    assert len(w.served) == n
+    lc.ROOT = tmp
+    exe = os.path.join(tmp, "llama.cpp", "b11796-vulkan", "llama-server.exe")
+    os.makedirs(os.path.dirname(exe))
+    open(exe, "wb").close()
+    assert run_main(args) == 0, status()
+    assert state()["gate_server"] == dict(default, build="b11796-vulkan", spec={"type": "draft-mtp", "draft_n_max": 1})
+    new = list(zip(w.served[n:], w.binaries[n:]))
+    gate = [(name, f, b) for (name, f), (_, b) in new if not name.endswith("-evalplus")]
+    assert {name.split("-", 1)[1] for name, _, _ in gate} == {"evaluate", "bfcl", "confirm"}, gate
+    assert all(b == exe and f[f.index("--spec-type"):f.index("--spec-type") + 4] == mtp1 for _, f, b in gate)
+    evalplus = [(f, b) for (name, f), (_, b) in new if name.endswith("-evalplus")]
+    assert evalplus and all(b is None and "--spec-type" not in f for f, b in evalplus), evalplus
+    fp = state()["base_guards"]["bfcl"]["fingerprint"]
+    assert fp["build"] == "b11796-vulkan" and fp["flags"][-4:] == mtp1, fp
+    assert L.describe_gate_server(state()["gate_server"], ["slots", "spec"]) == f"{slots} slots, MTP draft 1"
 
 
 def test_second_early_look():
