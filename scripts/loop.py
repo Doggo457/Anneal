@@ -129,11 +129,13 @@ GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); 
 REF_STAGES = ["evaluate", "decide"] + list(GUARDS) + ["finish"]
 GUARD_PROBE_ROWS = 8
 MAX_ROUND_FAILURES = 3
-# The gate server's settings (loop.yaml gate: slots, build, spec; 21 Oct 2026). Rows scored before the loop recorded
-# them came from 4 slots on b11435 without speculative decoding; a record from before build and spec were added means
-# b11435 and none. PROMPT_MARGIN: the chat template's tokens around a prompt.
-LEGACY_GATE_SERVER = {"slots": 4, "ctx": llama.SCORING_CTX, "build": llama.DEFAULT_BUILD, "spec": None}
-GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None}
+# The gate server's settings (loop.yaml gate: slots, build, spec, budget, max_tokens, budget_message; 21-22 Oct 2026).
+# Rows scored before the loop recorded them came from 4 slots on b11435 without speculative decoding, with a
+# 16,384-token thinking budget, 20,480 tokens an answer and no budget message; a record from before a key was added
+# means its value here. PROMPT_MARGIN: the chat template's tokens around a prompt.
+GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None, "budget": 16384, "max_tokens": 20480,
+                     "budget_message": None}
+LEGACY_GATE_SERVER = dict(GATE_SERVER_ADDED, slots=4, ctx=llama.SCORING_CTX)
 PROMPT_MARGIN = 64
 
 
@@ -511,15 +513,36 @@ def gate_spec(cfg):
     return dict(spec) if spec else None
 
 
+def gate_budget_message(cfg):
+    """The text llama-server adds before the end of thinking when a gate answer reaches its thinking budget (loop.yaml
+    gate.budget_message, --reasoning-budget-message), or None: the trace just ends there (the default). Passed as
+    written, so loop.yaml gives real newlines (YAML "\\n" in double quotes): llama.cpp's --escape processing covers
+    prompts, not this option."""
+    msg = (cfg.get("gate") or {}).get("budget_message")
+    if msg is None or msg == "":
+        return None
+    if not isinstance(msg, str) or "\0" in msg or len(msg) > 1000 or not msg.strip():
+        raise ValueError(f"gate.budget_message must be text of at most 1,000 characters, got {msg!r}")
+    return msg
+
+
 def gate_server(cfg):
     """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server):
-    the slot count, the cache, the llama.cpp build and speculative decoding."""
-    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg)}
+    the slot count, the cache, the llama.cpp build, speculative decoding, the thinking budget, the tokens an answer may
+    take and the budget message."""
+    g = cfg.get("gate") or {}
+    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg),
+            "budget": int(g.get("budget", GATE_SERVER_ADDED["budget"])),
+            "max_tokens": int(g.get("max_tokens", GATE_SERVER_ADDED["max_tokens"])),
+            "budget_message": gate_budget_message(cfg)}
 
 
 def describe_gate_server(srv, keys):
     words = {"slots": lambda v: f"{v} slots", "ctx": lambda v: f"a {v}-token cache", "build": lambda v: f"build {v}",
-             "spec": lambda v: (f"MTP draft {v['draft_n_max']}" if v else "no speculative decoding")}
+             "spec": lambda v: (f"MTP draft {v['draft_n_max']}" if v else "no speculative decoding"),
+             "budget": lambda v: f"a {v}-token thinking budget", "max_tokens": lambda v: f"{v} tokens an answer",
+             "budget_message": lambda v: (f"the budget message {' '.join(v.split())[:60]!r}" if v
+                                          else "no budget message")}
     return ", ".join(words[k](srv.get(k)) for k in keys)
 
 
@@ -618,7 +641,9 @@ class Loop(fr.Controller):
 
     def gate_flags(self, cfg, lora=None):
         g = cfg["gate"]
-        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])] + fr.SAMPLER_FLAGS
+        msg = gate_budget_message(cfg)
+        return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])]
+                                   + (["--reasoning-budget-message", msg] if msg else []) + fr.SAMPLER_FLAGS
                                    + llama.spec_flags(gate_spec(cfg)), slots=gate_slots(cfg))
 
     def run_stage(self, name, fn, *a):
@@ -832,10 +857,10 @@ class Loop(fr.Controller):
 
     def require_gate_server(self, cfg):
         """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
-        settings (loop.yaml gate: slots, build and spec, 21 Oct 2026): answers differ a little with them, so a change
-        part way would compare rounds scored differently. Recorded at the first check; rows scored before it was
-        recorded came from 4 slots on b11435 without speculative decoding. Raises Waiting on a change, or when the
-        build's llama-server is missing."""
+        settings (loop.yaml gate: slots, build and spec, 21 Oct 2026; budget, max_tokens and budget_message, 22 Oct
+        2026): answers differ with them, so a change part way would compare rounds scored differently. Recorded at the
+        first check; rows scored before it was recorded came from LEGACY_GATE_SERVER's settings. Raises Waiting on a
+        change, or when the build's llama-server is missing."""
         want = gate_server(cfg)
         known = self.state.get("gate_server")
         if known is None:
