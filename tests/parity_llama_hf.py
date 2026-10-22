@@ -79,6 +79,9 @@ def parse_args():
                     help="Vulkan cooperative-matrix kernels for llama-server: auto turns them off "
                          "(GGML_VK_DISABLE_COOPMAT=1) for every server of a run with --lora, since llama-server b11435 "
                          "with a LoRA dies on prompt batches over 8 tokens otherwise (results/lora-server-check)")
+    ap.add_argument("--build", default=None,
+                    help="the llama.cpp build for llama-server and llama-perplexity: a folder under llama.cpp/ "
+                         "(default b11435-vulkan)")
     ap.add_argument("--tag", default="parity_llama_hf")
     ap.add_argument("--run-dir", default=None)
     ap.add_argument("--resume", action="store_true", help="accepted for the Training page; starts over")
@@ -616,8 +619,20 @@ def child(args, phase, extra):
     return proc.wait()
 
 
+def use_build(build):
+    """Point SERVER and PERPLEXITY at another llama.cpp build (a folder under llama.cpp/)."""
+    global SERVER, PERPLEXITY
+    from anneal import llama
+    SERVER = llama.server_binary(build)
+    PERPLEXITY = os.path.join(os.path.dirname(SERVER), "llama-perplexity.exe")
+    if not os.path.exists(SERVER):
+        raise SystemExit(f"{SERVER} is missing")
+
+
 def main():
     args = parse_args()
+    if args.build:
+        use_build(args.build)
     args.run_dir = args.run_dir or os.path.join(RESULTS_DIR, args.tag)
     run = Run(args.run_dir)
     if args.phase != "all":

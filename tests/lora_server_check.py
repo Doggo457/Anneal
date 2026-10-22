@@ -30,7 +30,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
-from parity_llama_hf import SERVER, _json_default, http, ollama_gguf  # noqa: E402
+import parity_llama_hf  # noqa: E402
+from parity_llama_hf import _json_default, http, ollama_gguf  # noqa: E402
 
 LENGTHS = [1, 2, 8, 32, 128]
 
@@ -42,6 +43,7 @@ def parse_args():
     ap.add_argument("--variants", default="nolora,f16,f32,f16-ub1,f16-ub8,f16-fa-off,f16-nofuse,f16-nocoopmat,f16-verbose")
     ap.add_argument("--port", type=int, default=18096)
     ap.add_argument("--model", default="unsloth/Qwen3.8-27B-unsloth-bnb-4bit", help="tokenizer for the prompt IDs")
+    ap.add_argument("--build", default=None, help="a llama.cpp build folder under llama.cpp/ (default b11435-vulkan)")
     ap.add_argument("--tag", default="lora_server_check")
     ap.add_argument("--run-dir", default=None)
     ap.add_argument("--resume", action="store_true", help="accepted for the Training page; starts over")
@@ -65,6 +67,8 @@ def variants(args):
 
 def main():
     args = parse_args()
+    if args.build:
+        parity_llama_hf.use_build(args.build)
     run = Run(args.run_dir or os.path.join(RESULTS_DIR, args.tag))
     run.capture_output()
     names = [v for v in args.variants.split(",") if v]
@@ -82,7 +86,7 @@ def main():
             out[name] = {"skipped": "no F32 GGUF given"}
             continue
         run.write_status(state="running", step=vi, max_steps=len(names), phase=name)
-        cmd = [SERVER, "-m", ollama_gguf(), "--host", "127.0.0.1", "--port", str(args.port), "-c", "4096", "-ngl", "999",
+        cmd = [parity_llama_hf.SERVER, "-m", ollama_gguf(), "--host", "127.0.0.1", "--port", str(args.port), "-c", "4096", "-ngl", "999",
                "-np", "1", "--no-webui", "--ctx-checkpoints", "0", "--cache-ram", "0"] + flags
         env = dict(os.environ, **env_extra)
         log_path = os.path.join(run.dir, f"llama-server-{name}.log")
