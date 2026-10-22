@@ -24,14 +24,14 @@ other command). pytest's temporary folders sit inside the program's work folder,
 Pinned offline copies (anneal/cweval_lock.json, every file by sha256; scripts/build_guards.py --cweval downloads them to
 data/raw/cweval and unpacks them to sandbox/cweval, then nothing is fetched at judge time): CWEval's files at the commit
 (raw.githubusercontent.com); the Go modules of CWEval's go.mod (a file GOPROXY fills a module cache once, go.sum checks
-them; GOPROXY=off when judging); goimports' modules; the npm packages CWEval's image installs globally, resolved with
-npm --before 2025-09-10 (no install scripts run; argon2 ships its own prebuilt addon); recheck 4.5.0-beta.6 (the
-binary CWEval's ReDoS test calls, byte for byte the one in its third_party folder); the test-side wheels at the versions
-of CWEval's image (pytest 9.1.1, pycryptodome, PyJWT, argon2-cffi). wrapt_timeout_decorator (two ReDoS tests) is a
-stand-in here: its timeout bounds the program call. Known differences: CWEval's tests ran on Python 3.10 and Linux, here
-3.12 and Windows (datetime.fromisoformat takes more formats; hashlib's algorithm list follows the platform's OpenSSL);
-the ReDoS test's pattern reaches recheck without a shell (sh's backslash rules inside double quotes are applied, no
-$-expansion).
+them; GOPROXY=off when judging); goimports' modules (with golang.org/x/sys, which its telemetry module imports on
+Windows only); the npm packages CWEval's image installs globally, resolved with npm --before 2025-09-10 (no install
+scripts run; argon2 ships its own prebuilt addon); recheck 4.5.0-beta.6 (the binary CWEval's ReDoS test calls, byte for
+byte the one in its third_party folder); the test-side wheels at the versions of CWEval's image (pytest 9.1.1,
+pycryptodome, PyJWT, argon2-cffi). wrapt_timeout_decorator (two ReDoS tests) is a stand-in here: its timeout bounds the
+program call. Known differences: CWEval's tests ran on Python 3.10 and Linux, here 3.12 and Windows
+(datetime.fromisoformat takes more formats; hashlib's algorithm list follows the platform's OpenSSL); the ReDoS test's
+pattern reaches recheck without a shell (sh's backslash rules inside double quotes are applied, no $-expansion).
 
 Switching it on (after scripts/build_guards.py --cweval has passed on the training PC), three lines:
   scripts/loop.py, the import:  from anneal import bfcl, cweval, llama, sandbox  # noqa: E402
@@ -61,7 +61,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK_PATH = os.path.join(ROOT, "anneal", "cweval_lock.json")
-LOCK_SHA256 = "a50e63b17e1179ee1863a9b0aed57df3b280e9f423e057fd4e6790a4706a31d2"
+LOCK_SHA256 = "3dd700086f5dc2f6e41fbba2e6785c40b85738c9e59de6b987a6ca4a3f667a75"
 DOWNLOADS = os.path.join(ROOT, "data", "raw", "cweval")
 ASSETS = os.path.join(ROOT, "sandbox", "cweval")
 HARNESS = "cweval-func-sec-1-" + LOCK_SHA256[:8]  # changes when the request or the judging changes

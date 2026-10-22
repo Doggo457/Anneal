@@ -227,7 +227,7 @@
    "module": "golang.org/x/sys",
    "version": "v0.36.0",
    "mod": "f411814d83a96e86781b1dee41c125b9504da5422dba37cc1d63b016ae39cfe2",
-   "zip": null,
+   "zip": "894ee9a48e191265cd3d2200ddd81b8d75c554a0eabe9fc1a9afbab25a4b29c4",
    "licence": "BSD-3-Clause",
    "for": "goimports"
   }
