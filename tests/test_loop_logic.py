@@ -1464,7 +1464,7 @@ def test_cweval_harness():
     from anneal import cweval as C
     lk = C.lock()
     tasks = {f"cwe_{t}_{lg}" for lg, ts in C.TASKS.items() for t in ts}
-    assert len(tasks) == 34 and len(C.EXCLUDED) == 8 and not tasks & set(C.EXCLUDED)
+    assert len(tasks) == 33 and len(C.EXCLUDED) == 9 and not tasks & set(C.EXCLUDED)
     assert {f.split("/")[-1].rsplit("_", 1)[0] for f in lk["source"]["files"] if f.startswith("benchmark/core/")} \
         == tasks
     assert {w["name"] for w in C.wheels_here(lk, "win_amd64", "cp312", "win32")} == {w["name"] for w in lk["wheels"]}

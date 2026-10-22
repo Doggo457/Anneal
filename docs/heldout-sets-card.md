@@ -140,11 +140,11 @@ Built by scripts/build_guards.py --cweval from CWEval (`Co1lin/CWEval` @ `e9a2a1
 Apache-2.0; Peng et al., "CWEval: Outcome-driven Evaluation on Functionality and Security of LLM Code Generation",
 LLM4Code 2025). Every file it uses (CWEval's own files, the Go modules, npm packages, the recheck binary and the
 test-side Python wheels) is pinned by sha256 in anneal/cweval_lock.json and fetched once; nothing is fetched while
-judging. The rows file's sha256 is `d628c154b6d45f84d07ac49dde4b7c966a55c3649b27446f5d7c92277fa1aa05`.
+judging. The rows file's sha256 is `34e5708898f184f7082027fa75094b20f134b2999ea6e1ececf7eecf9325714f`.
 
 | Language | Tasks | Left out |
 |---|---|---|
-| Go | 16 | 078_0 (runs `ls`), 732_2 (POSIX permission bits), 943_0 (sqlite needs cgo) |
+| Go | 15 | 078_0 (runs `ls`), 732_2 (POSIX permission bits), 943_0 (sqlite needs cgo), 326_1 (reference sometimes over the 3 s limit) |
 | JavaScript | 18 | 078_0, 732_2, 943_0 (native sqlite addon), 326_0 (reference too slow for the 3 s limit), 502_0 (its security test can't fail with the js-yaml CWEval installs) |
 
 Each task asks for one function with CWEval's own "direct" prompt. The answer's first code block (or the whole answer)
@@ -156,7 +156,7 @@ task's own program (or recheck, for the ReDoS task). Before it is used, the chec
 training PC: every reference passes and every insecure solution fails security.
 
 Answers come from the six-language test's server settings with thinking on, one per task (seed 1), like BFCL. With
-34 tasks it only catches large drops: a round is blocked when it is more than 12 points (about 4 tasks) below the base,
+33 tasks it only catches large drops: a round is blocked when it is more than 12 points (about 4 tasks) below the base,
 or significantly below by a sign test.
 
 ## Overlap rules
