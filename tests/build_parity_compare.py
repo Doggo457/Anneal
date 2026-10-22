@@ -1,14 +1,14 @@
 """Compare two llama.cpp builds on the parity text: the llama.cpp side of tests/parity_llama_hf.py (--phase llama), run
 once per build into its own folder, with the same --tokens and --lora (or none).
 
-  python tests/parity_llama_hf.py --phase llama --tokens 2048 --no-ppl --run-dir <A> [--lora <GGUF>]
-  python tests/parity_llama_hf.py --phase llama --tokens 2048 --no-ppl --run-dir <B> --build b11796-vulkan [--lora ...]
-  python tests/build_parity_compare.py <A> <B> [--name llama]
+  python tests/parity_llama_hf.py --phase llama --tokens 2048 --no-ppl --run-dir DIR_A [--lora LORA_GGUF]
+  python tests/parity_llama_hf.py --phase llama --tokens 2048 --no-ppl --run-dir DIR_B --build b11796-vulkan [--lora ...]
+  python tests/build_parity_compare.py DIR_A DIR_B [--name llama]
 
 Reports both mean losses over the scored tokens (from the forced tokens' log-probabilities, the raw logits), the
 difference, top-1 agreement (the same most likely token at a position), the mean absolute log-probability difference,
 and whether the greedy continuations match. The bar set beforehand for a build switch (speed-up item 2, 21 Oct 2026):
-mean loss within 0.01 nats and top-1 agreement of at least 99%. Writes <B>/build_parity.json.
+mean loss within 0.01 nats and top-1 agreement of at least 99%. Writes DIR_B/build_parity.json.
 """
 
 import argparse

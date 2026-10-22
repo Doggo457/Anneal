@@ -9,10 +9,10 @@ every --sample-s seconds and each answer's n_decoded (tokens generated so far, t
 and task. After --warmup minutes (the prompts are processed and every slot is decoding), the tokens decoded over the
 next --minutes, divided by that time, is the result. An answer that finishes inside the window loses at most one
 sample interval of its tokens; the count of such answers is reported. Draft acceptance comes from the answers that
-finished (their timings: draft_n, draft_n_accepted). Writes results/gate-speed/<label>.json.
+finished (their timings: draft_n, draft_n_accepted). Writes results/gate-speed/LABEL.json.
 
   python tests/gate_speed_bench.py --slots 6
-  python tests/gate_speed_bench.py --slots 4 --mtp 1 [--build b11796-vulkan] [--lora <GGUF>] [--minutes 10]
+  python tests/gate_speed_bench.py --slots 4 --mtp 1 [--build b11796-vulkan] [--lora LORA_GGUF] [--minutes 10]
 """
 
 import argparse
