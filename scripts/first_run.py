@@ -142,8 +142,9 @@ class Controller:
         self.run.write_status(state="running", step=STAGES.index(stage) + 1, max_steps=len(STAGES), stage=stage,
                               detail=detail)
 
-    def serve(self, flags, name, coopmat=False):
-        srv = llama.Server(flags, os.path.join(self.dir, "servers", f"{name}.log"), PORT, coopmat=coopmat)
+    def serve(self, flags, name, coopmat=False, binary=None):
+        srv = llama.Server(flags, os.path.join(self.dir, "servers", f"{name}.log"), PORT, coopmat=coopmat,
+                           binary=binary)
         self.log(f"llama-server {name}: {srv.describe()}")
         srv.start()
         self.server = srv
