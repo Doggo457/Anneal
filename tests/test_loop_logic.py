@@ -1457,9 +1457,11 @@ def _cweval_guard(tmp):
 def test_cweval_harness():
     """anneal/cweval.py without the pinned files: CWEval's prompt, code extraction and program, the request body (the
     gate's), judge() on answers that never reach a program, the probe, the test-process shim's command mapping and
-    sh quoting, and the lock. With sandbox/cweval built (scripts/build_guards.py --cweval --local) and go and node on
-    PATH, a Go and a JavaScript task's reference and insecure solutions and one answer are judged for real on Linux
-    (LocalExecutor: no isolation, tests only); otherwise that part is skipped."""
+    sh quoting, the file route for a command line too long for Windows, the short pytest test id, and the lock. With
+    sandbox/cweval built (scripts/build_guards.py --cweval --local) and go and node on PATH, a Go and a JavaScript
+    task's reference and insecure solutions and one answer are judged for real on Linux (LocalExecutor: no
+    isolation, tests only); otherwise that part is skipped."""
+    import subprocess
     import urllib.request
     from anneal import cweval as C
     lk = C.lock()
@@ -1530,6 +1532,37 @@ def test_cweval_harness():
             if opts is not None:
                 os.environ["NODE_OPTIONS"] = opts
         assert sh.resolve([exe, "q"]) == (exe + ".exe", ["q"], {}, None)
+        # a node command line over CMDLINE_MAX (Windows' limit is 32,767): the script and its arguments go in a file
+        fit = "x" * (C.CMDLINE_MAX + 1 - len(subprocess.list2cmdline(["/n/node", "--x", js, "x"])))
+        assert len(subprocess.list2cmdline(["/n/node", "--x", js, fit])) == C.CMDLINE_MAX
+        assert sh.resolve(["node", js, fit])[1] == ["--x", js, fit] and not os.listdir(wd)
+        email = "aa@A" + ".AA.AA" * 10000 + ".c"  # cwe_1333_0_js's
+        for n, arg in ((1, fit + "x"), (2, email)):
+            img, args, env, _ = sh.resolve(["node", js, arg])
+            assert img == "/n/node" and args == ["--x", os.path.join(wd, "_cweval_argv.js"),
+                                                 os.path.join(wd, f"_cweval_argv{n}.json")], (n, args[:2])
+            assert json.load(open(args[2], encoding="utf-8")) == [js, arg] and env["NODE_PATH"] == "/m"
+        assert open(args[1], encoding="utf-8").read() == C.ARGV_JS
+        if shutil.which("node"):  # the start script runs the task's script as `node script args` would
+            os.makedirs(os.path.dirname(js))
+            open(js, "w").write("console.log(process.argv.length, process.argv[1], require.main === module, "
+                                "process.argv[2].length);\n")
+            out = subprocess.run(["node"] + args[1:], capture_output=True, text=True, check=True).stdout
+            assert out == f"3 {js} true {len(email)}\n", out
+        # pytest's PYTEST_CURRENT_TEST (Windows: an environment variable over 32,767 characters is a ValueError)
+        seen, saved = [], os.environ.pop("PYTEST_CURRENT_TEST", None)
+        update = C.short_test_id(lambda it, when: seen.append((it.nodeid, when)))
+        try:
+            long_id = types.SimpleNamespace(nodeid=f"core/js/t.py::test_check_email[{email}-False-security]")
+            update(long_id, "setup")
+            assert os.environ["PYTEST_CURRENT_TEST"] == long_id.nodeid[:1000] + "... (setup)" and not seen
+            update(long_id, None)
+            update(types.SimpleNamespace(nodeid="t.py::test_a"), "call")
+            assert seen == [(long_id.nodeid, None), ("t.py::test_a", "call")]
+        finally:
+            os.environ.pop("PYTEST_CURRENT_TEST", None)
+            if saved is not None:
+                os.environ["PYTEST_CURRENT_TEST"] = saved
         for bad in (["ls", "-l"], ["node", os.path.join(os.path.dirname(wd), "x.js")], ["node", "-e", "1"]):
             try:
                 sh.resolve(bad)
