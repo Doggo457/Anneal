@@ -1,5 +1,5 @@
 {
- "started": "2026-10-20 13:38:28",
+ "started": "2026-10-22 12:39:54",
  "tag": "flm0.9.43-embedgemma300m",
  "url": "http://127.0.0.1:52625",
  "model": "embed-gemma:300m",
@@ -38,41 +38,14 @@
    "problems_with_a_flagged_row": 0,
    "flagged_test_ids": []
   },
-  "gate-cc": {
-   "problems": 195,
-   "t_neg": 0.8631,
-   "cutoff": 0.8631,
-   "reworded_recall_at_cutoff": 0.0205,
-   "problems_with_a_flagged_row": 3,
+  "gate": {
+   "problems": 265,
+   "t_neg": 0.9151,
+   "cutoff": 0.9151,
+   "reworded_recall_at_cutoff": 0.0,
+   "problems_with_a_flagged_row": 1,
    "flagged_test_ids": [
-    "cc/test/63",
-    "cc/test/75",
-    "cc/valid/15"
-   ]
-  },
-  "gate-oci": {
-   "problems": 300,
-   "t_neg": 0.8165,
-   "cutoff": 0.8165,
-   "reworded_recall_at_cutoff": 0.0822,
-   "problems_with_a_flagged_row": 16,
-   "flagged_test_ids": [
-    "oci/0126fce66dadb1edee99c5c4b2aa3261",
-    "oci/28c329d1621eddf83c0f3ba69323d71a",
-    "oci/2dee880a2d6407b7be6db1fff0bd3604",
-    "oci/519d9c421c764dc6dcdc85b1a18b6238",
-    "oci/5dade6f55cd12befce35663decd09aba",
-    "oci/6ecef340a5c56d91c85bc28b8b0f3c6b",
-    "oci/727a188eb4b00e0fa89c9562e9fd7c78",
-    "oci/ae703f01ebdb9aa92886ec5b55d25450",
-    "oci/b037ee92f282ad19a2759221a8c78771",
-    "oci/b1819e4241cc6033310c851b93b3bf33",
-    "oci/c5654306060e5962369c153723f40d75",
-    "oci/e29f241b1fabafb75018920e0f575602",
-    "oci/ec527aff9774629a8c826fb7ddb69a60",
-    "oci/ee3fcdebfbf9a0182e4c1ad57364f8c5",
-    "oci/f4afb8075d11a3f647e91b8cbc619caf",
-    "oci/fddbacb171630cb36aba671de8d0850b"
+    "cc/test/75"
    ]
   },
   "mmlu-pro": {
@@ -93,7 +66,7 @@
  "per_source": {
   "mix_first_2k": {
    "rows_checked": 2000,
-   "rows_flagged": 30
+   "rows_flagged": 6
   },
   "ocr_first": {
    "rows_checked": 1000,
@@ -101,53 +74,57 @@
   },
   "ocr_first_b": {
    "rows_checked": 505,
-   "rows_flagged": 2
+   "rows_flagged": 0
   },
   "self_oci_r1": {
    "rows_checked": 512,
-   "rows_flagged": 27
+   "rows_flagged": 5
   },
   "loop/banaxi_v4pro": {
    "rows_checked": 915,
    "rows_flagged": 2
   },
-  "loop/agent_sessions": {
-   "rows_checked": 4,
+  "loop/banaxi_v4pro_nopy_12k": {
+   "rows_checked": 686,
+   "rows_flagged": 2
+  },
+  "loop/glm53_all_12k": {
+   "rows_checked": 28070,
+   "rows_flagged": 0
+  },
+  "loop/glm53_all_nopy_12k": {
+   "rows_checked": 24689,
    "rows_flagged": 0
   },
   "loop/math_v4_aops": {
    "rows_checked": 9800,
    "rows_flagged": 31
   },
+  "loop/openswe_v4flash_12k": {
+   "rows_checked": 26266,
+   "rows_flagged": 0
+  },
   "loop/tachibana4_v4pro": {
    "rows_checked": 4561,
    "rows_flagged": 0
+  },
+  "loop/tachibana4_v4pro_nopy_12k": {
+   "rows_checked": 8072,
+   "rows_flagged": 0
   }
  },
- "blocked_keys": 47,
- "flags": 101,
- "unique_training_questions": 13347,
+ "blocked_keys": 23,
+ "flags": 47,
+ "unique_training_questions": 31687,
  "embedder_speed": {
-  "texts": 14784,
-  "seconds": 22358.3,
-  "texts_per_s": 0.661,
-  "chars_per_s": 737.7
+  "texts": 6928,
+  "seconds": 26878.8,
+  "texts_per_s": 0.258,
+  "chars_per_s": 950.6
  },
- "min_free_ram_gb": 7.01,
- "minutes": 372.9,
- "training_speed": {
-  "metrics": "results\\first-run\\train\\metrics.jsonl",
-  "baseline_tok_s": 99.15,
-  "baseline_steps": 12,
-  "during_steps": 63,
-  "max_slowdown": 0.02,
-  "during_tok_s": 99.42,
-  "slowdown_pct": -0.27,
-  "slowdown_ci95_pct": [
-   -1.25,
-   0.71
-  ]
- },
- "started_epoch": 1792499908.0,
- "finished_epoch": 1792522280.4
+ "min_free_ram_gb": 14.88,
+ "minutes": 448.6,
+ "training_speed": null,
+ "started_epoch": 1792669194.7,
+ "finished_epoch": 1792696112.7
 }
