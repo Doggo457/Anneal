@@ -2045,6 +2045,23 @@ def _budget_message(tmp):
         assert f[i + 1] == "16384" and f[i + 2:i + 4] == ["--reasoning-budget-message", msg], (name, f)
     evalplus = [f for name, f in new if name.endswith("-evalplus")]
     assert evalplus and all("--reasoning-budget-message" not in f for f in evalplus), evalplus
+    # a bigger answer limit must leave room for the no-worse checks' chats too: their JSON is counted, plus a margin
+    # for the tool-calling instructions when they have tools (here 4 characters a token)
+    logs = []
+    stub = types.SimpleNamespace(log=logs.append)
+    chat = {"messages": [{"role": "user", "content": "x" * 4000}], "tools": [{"name": "f"}]}
+    assert L.room_text(chat).startswith('{"messages": [{"role": "user"') and L.room_text({"prompt": "p"}) == "p"
+    need = len(L.room_text(chat)) // 4 + L.PROMPT_MARGIN + L.TOOLS_MARGIN + 40448
+    L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 6}}, [("BFCL", [chat], 40448)])
+    assert f"needs {need} of the 43690" in logs[-1], logs
+    try:
+        L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 6}}, [("BFCL", [chat], 43690 - need + 40448 + 1)])
+        raise AssertionError("a chat one token too long fitted")
+    except L.Waiting as exc:
+        assert "longest BFCL prompt" in str(exc), exc
+    del chat["tools"]  # no tools (CWEval): no margin for them
+    L.Loop.slot_room_check(stub, "u", {"gate": {"slots": 6}}, [("CWEval", [chat], 40448)])
+    assert f"needs {len(L.room_text(chat)) // 4 + L.PROMPT_MARGIN + 40448} of the 43690" in logs[-1], logs
     # the check script: the rows that ran out, answered again with their gate seeds and the sentence
     saved = (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, B.ew.count_tokens, B.OUT_DIR,
              B.make_check, B.sandbox, sys.argv)
