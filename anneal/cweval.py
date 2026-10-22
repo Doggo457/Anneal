@@ -37,15 +37,12 @@ Windows limits a command line and an environment variable to 32,767 characters, 
 as node's main module with the same process.argv), and pytest's PYTEST_CURRENT_TEST keeps only the first 1,000
 characters of a test's id (no test reads it). Both happen on Linux too, so the tests here cover them. A Go answer
 that resolves symlinks (filepath.EvalSymlinks) fails in the code sandbox, as cwe_022_0_go's reference does, for base
-and adapter alike.
+and adapter alike. An answer that fails only on time is judged once more (judge_steady), and a sandbox error is a
+harness fault, never a failed test.
 
-Switching it on (after scripts/build_guards.py --cweval has passed on the training PC), three lines:
-  scripts/loop.py, the import:  from anneal import bfcl, cweval, llama, sandbox  # noqa: E402
-  scripts/loop.py, in GUARDS after bfcl:
-    "cweval": {"label": "CWEval Go and JavaScript", "module": cweval, "build": "scripts/build_guards.py --cweval"},
-  experiments/loop.yaml, under guards after bfcl:
-  cweval: {file: data/eval/cweval_go_js.jsonl, seed: 1, tolerance: 0.12}
-Tolerance 0.12: EvalPlus's 0.03 scaled to 32 items as BFCL's is to 150 (0.03 x sqrt(542 / 32)), about 4 items.
+Switched on 22 Oct 2026, after scripts/build_guards.py --cweval passed on the training PC: scripts/loop.py's GUARDS
+entry after bfcl, and experiments/loop.yaml's guards.cweval line. Tolerance 0.12: EvalPlus's 0.03 scaled to 32 items as
+BFCL's is to 150 (0.03 x sqrt(542 / 32)), about 4 items.
 """
 
 import ast
@@ -99,6 +96,9 @@ EXCLUDED = {"cwe_078_0_go": _LS, "cwe_078_0_js": _LS, "cwe_732_2_go": _MODE, "cw
                             "!!js/function in any schema, so the insecure solution passes it too"}
 RECHECK_CMD = "./third_party/recheck-linux-x64 "  # how cwe_1333_0_js's test calls recheck (os.popen)
 CMDLINE_MAX = 32000  # longest node command line passed as is (Windows' CreateProcess takes 32,767 characters)
+SANDBOX_TRIES = 3  # a program start the code sandbox refuses (SandboxUnavailable) is tried this many times in all
+HARNESS_TRIES = 3  # judge_steady: a harness fault is judged this many times in all before it is raised
+RETRY_PAUSE_S = 5.0  # between those tries (a tenth of it between program starts)
 # Shim.argv_file's start script: the task's script and its arguments from a JSON file, then node's own main-module
 # start (module.runMain: require.main, ES module detection and process.argv as with `node script args`)
 ARGV_JS = ('"use strict";\n'
@@ -582,8 +582,39 @@ def judge(item, r):
     content = r.get("content") or ""
     if not content.strip():
         return False, "empty"
-    ok, verdict, _ = judge_program(item, program(item, content), fix_imports=True)
+    ok, verdict, _ = judge_steady(item, program(item, content))
     return ok, verdict
+
+
+def timed_out_only(verdict, details):
+    """True when a failed result failed only on time: the whole run, a build, or every failed test."""
+    if verdict == "timeout":
+        return True
+    if verdict == "compile_error":
+        return str(details.get("detail", "")).startswith("timed out")
+    failed = details.get("failed") or {}
+    return bool(failed) and all("Timeout >" in e or "TimeoutError" in e for e in failed.values())
+
+
+def judge_steady(item, code, fix_imports=True):
+    """judge_program for an answer, steadied against the machine (the training PC's self-test, 22 Oct 2026, saw a
+    sandbox error inside a test and a reference whose every test ran out of time once, while the gate's judge shared
+    the sandbox): a harness fault is judged again, HARNESS_TRIES times in all, before it is raised, and a result that
+    failed only on time (timed_out_only) is judged once more, the second result standing. Base and every round get
+    the same rule; an answer that is slow every time still fails."""
+    def once():
+        for attempt in range(HARNESS_TRIES):
+            try:
+                return judge_program(item, code, fix_imports=fix_imports)
+            except RuntimeError as exc:
+                if "CWEval harness fault" not in str(exc) or attempt == HARNESS_TRIES - 1:
+                    raise
+                time.sleep(RETRY_PAUSE_S)
+    ok, verdict, details = once()
+    if not ok and timed_out_only(verdict, details):
+        ok, verdict, details = once()
+        details = dict(details, judged_twice=True)
+    return ok, verdict, details
 
 
 def probe(rows):
@@ -785,9 +816,18 @@ class Shim:
 
     def execute(self, image, args, env, dirs):
         from anneal import polyglot as P
-        ends = [d for d in (self.deadline, self.inner) if d is not None]
-        left = max(0.05, min(ends) - time.monotonic()) if ends else TESTS_TIMEOUT_S
-        r = self.ex.run(self.wd, image, args, env, b"", left, P.RUN_MEM, path_dirs=dirs)
+        for attempt in range(SANDBOX_TRIES):
+            ends = [d for d in (self.deadline, self.inner) if d is not None]
+            left = max(0.05, min(ends) - time.monotonic()) if ends else TESTS_TIMEOUT_S
+            try:
+                r = self.ex.run(self.wd, image, args, env, b"", left, P.RUN_MEM, path_dirs=dirs)
+                break
+            except Exception as exc:  # the sandbox refused to start the program (nothing ran): a harness fault
+                if type(exc).__name__ != "SandboxUnavailable":
+                    raise
+                if attempt == SANDBOX_TRIES - 1:
+                    raise self.fail(f"the code sandbox refused {SANDBOX_TRIES} program starts: {exc}")
+                time.sleep(RETRY_PAUSE_S / 10)
         self.calls.append(round(r.wall_s, 3))
         if r.timed_out:
             if self.inner is not None and (self.deadline is None or self.inner <= self.deadline):

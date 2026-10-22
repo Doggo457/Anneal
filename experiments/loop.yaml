@@ -69,6 +69,7 @@ rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: 
 # pass, so a blocked round costs no second gate pass.
 guards:
   bfcl: {file: data/eval/bfcl_java_js.jsonl, seed: 1, tolerance: 0.06}
+  cweval: {file: data/eval/cweval_go_js.jsonl, seed: 1, tolerance: 0.12}
 guards_base_in_round_0: true
 # More no-worse checks (21 Oct 2026), run like EvalPlus: only on a round that passes the rule above, before EvalPlus
 # (they take less time; every check must pass, so the order changes no decision), in the order listed (a blocked round
@@ -81,6 +82,12 @@ guards_base_in_round_0: true
 #         judged by BFCL's own AST checker (anneal/bfcl.py; scripts/build_guards.py --bfcl builds the set from the
 #         pinned bfcl-eval 2026.3.23 wheel, Apache-2.0). Tolerance 0.06: the 3 standard errors of EvalPlus's 0.03 at
 #         the first run's rate of changed answers, scaled to 150 items (0.03 x sqrt(542 / 150)).
+#   cweval: CWEval's Go (14) and JavaScript (18) secure-coding tasks (22 Oct 2026; anneal/cweval.py, Co1lin/CWEval at
+#         e9a2a12, Apache-2.0; scripts/build_guards.py --cweval builds the set and self-tests it): an answer passes
+#         only if every functionality and security test of its task passes (func-sec@1), with CWEval's own prompt and
+#         tests; the programs run in the code sandbox. 10 of the 42 Go and JavaScript tasks are left out (anneal/
+#         cweval.py EXCLUDED: Windows or the sandbox can't judge them fairly, or the reference fails at random).
+#         Tolerance 0.12: EvalPlus's 0.03 scaled to 32 items as BFCL's is (0.03 x sqrt(542 / 32)), about 4 items.
 swe_loss: {file: data/eval/swe_heldout.jsonl, max_rows: 200, seq_len: 8192}   # built at 8,192 and never changed
 term_loss: {file: data/eval/term_heldout.jsonl, max_rows: 200, seq_len: 12288}
 # Held-out terminal steps (21 Oct 2026; the six-language gate can't see terminal skill), built once by

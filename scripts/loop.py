@@ -52,11 +52,11 @@ Rounds (results/loop/rounds/rNNN):
                significantly worse, and the samples are clean.
     bfcl       (passed decide) the no-worse checks in loop.yaml's guards, 21 Oct 2026, in GUARDS order: BFCL's 150
     cweval     Java and JavaScript function calls (anneal/bfcl.py), then CWEval's 32 Go and JavaScript secure-coding
-               tasks (anneal/cweval.py) once switched on. Same rule as EvalPlus, on the gate's server settings, paired
-               per item against the base's rows (scored once, in round 0 or the first round that needs them, and
-               again only if the settings change). They run before EvalPlus, the longest check (21 Oct 2026): a
-               blocked round skips the checks after it, EvalPlus and the confirm pass. Every check must pass either
-               way, so the order changes no decision.
+               tasks (anneal/cweval.py). Same rule as EvalPlus, on the gate's server settings, paired per item against
+               the base's rows (scored once, in round 0 or the first round that needs them, and again only if the
+               settings change). They run before EvalPlus, the longest check (21 Oct 2026): a blocked round skips the
+               checks after it, EvalPlus and the confirm pass. Every check must pass either way, so the order changes no
+               decision.
     milestone  (passed decide and the checks above) EvalPlus HumanEval+ / MBPP+ seed 1 on the first run's exact
                scoring server, paired against the base's first-run EvalPlus answers. Since 21 Oct 2026 a no-worse
                check only (the base already passes about 86% of the plus tests, so it can't show much gain): with
@@ -101,7 +101,7 @@ import evalplus_win as ew  # noqa: E402
 import first_run as fr  # noqa: E402
 import generate_traces as gt  # noqa: E402
 from anneal import evalsets as E  # noqa: E402
-from anneal import bfcl, llama, sandbox  # noqa: E402
+from anneal import bfcl, cweval, llama, sandbox  # noqa: E402
 from anneal.rowkeys import reasoning_text, row_key  # noqa: E402,F401  (shared with paraphrase_check.py)
 from anneal.runtime import RESULTS_DIR, Run  # noqa: E402
 
@@ -113,6 +113,7 @@ POOLS = os.path.join(ROOT, "data", "processed", "loop")
 # language(item), and optionally probe(first rows) -> error or None. Each check is a stage of its own.
 GUARDS = {
     "bfcl": {"label": "BFCL Java and JavaScript tool calls", "module": bfcl, "build": "scripts/build_guards.py --bfcl"},
+    "cweval": {"label": "CWEval Go and JavaScript", "module": cweval, "build": "scripts/build_guards.py --cweval"},
 }
 ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate",
                 "decide"] + list(GUARDS) + ["milestone", "confirm", "finish"]
