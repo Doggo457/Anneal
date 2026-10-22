@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1798,6 +1799,85 @@ def _gate_build_and_spec(tmp):
     fp = state()["base_guards"]["bfcl"]["fingerprint"]
     assert fp["build"] == "b11796-vulkan" and fp["flags"][-4:] == mtp1, fp
     assert L.describe_gate_server(state()["gate_server"], ["slots", "spec"]) == f"{slots} slots, MTP draft 1"
+
+
+def test_gate_speed_bench():
+    """tests/gate_speed_bench.py (speed-up item 2): n_decoded found in either /slots form, the window count per slot
+    and task (a task finished inside the window keeps its last count, a task new inside it counts from 0), and a whole
+    run against a fake server: the gate flags with MTP, one request in flight per slot, the JSON it writes."""
+    import gate_speed_bench as B
+    assert B.find_decoded({"id": 0, "next_token": {"n_decoded": 5}}) == 5
+    assert B.find_decoded({"id": 0, "next_token": [{"n_remain": 3, "n_decoded": 7}]}) == 7
+    assert B.find_decoded({"id": 0, "next_token": []}) is None
+    s = [(0.0, [(0, 1, True, 100), (1, 2, True, 50)]), (5.0, [(0, 1, True, 130), (1, 2, True, 80)]),
+         (10.0, [(0, 1, False, 150), (1, 2, True, 110)]), (15.0, [(0, 3, True, 20), (1, 2, True, 140)]),
+         (16.0, [(0, 3, False, 0), (1, 2, True, 150)])]
+    assert B.window_tokens(s, 0.0, 15.0) == (50 + 90 + 20, 1, 15.0)
+    assert B.window_tokens(s, 0.0, 16.0) == (50 + 100 + 20, 2, 16.0)  # task 3's idle slot reads 0: its 20 stay
+    tmp = tempfile.mkdtemp(prefix="anneal-bench-test-")
+    saved = (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, E.GATE_PATH, B.OUT_DIR, sys.argv)
+    calls, lock = [], threading.Lock()
+    start = time.monotonic()
+
+    class FakeServer:
+        def __init__(self, flags, log_path, port=0, binary=None, **k):
+            self.flags, self.log_path, self.binary, self.url, self.load_s = flags, log_path, binary, "http://fake", 1.0
+            self.up = True
+
+        def describe(self):
+            return " ".join([self.binary] + self.flags)
+
+        def start(self):
+            return self
+
+        def alive(self):
+            return self.up
+
+        def stop(self):
+            self.up = False
+
+    def http(url, body=None, timeout=600):
+        if url.endswith("/health"):
+            raise ConnectionRefusedError(111, "refused")
+        n = int((time.monotonic() - start) * 1000)  # 1,000 tokens a second per slot
+        return [{"id": i, "id_task": 7 + i, "is_processing": True, "next_token": [{"n_decoded": n}]} for i in range(4)]
+
+    def chat(url, message, seed, max_tokens):
+        with lock:
+            calls.append((message, seed, max_tokens))
+        while bench.up:
+            time.sleep(0.005)
+        raise ConnectionResetError(10054, "closed")
+    bench = types.SimpleNamespace(up=True)
+    try:
+        gate = os.path.join(tmp, "gate.jsonl")
+        E.write_jsonl(gate, [{"id": f"write/go/{i}", "prompt": f"p{i}"} for i in range(10)])
+        exe = os.path.join(tmp, "llama-server.exe")
+        open(exe, "wb").close()
+        E.GATE_PATH, B.OUT_DIR, B.ew.chat_request = gate, os.path.join(tmp, "out"), chat
+        B.llama.http, B.llama.server_binary = http, lambda build="b11435-vulkan": exe
+
+        def server(*a, **k):
+            srv = FakeServer(*a, **k)
+            bench.up = True
+            srv.stop = lambda: setattr(bench, "up", False) or setattr(srv, "up", False)
+            return srv
+        B.llama.Server = server
+        sys.argv = ["gate_speed_bench.py", "--slots", "4", "--mtp", "1", "--build", "b11796-vulkan", "--warmup",
+                    "0.002", "--minutes", "0.005", "--sample-s", "0.02", "--label", "t"]
+        assert B.main() == 0
+        res = json.load(open(os.path.join(tmp, "out", "t.json")))
+        assert res["slots"] == 4 and res["mtp_draft_n_max"] == 1 and res["build"] == "b11796-vulkan", res
+        assert res["flags"][-4:] == ["--spec-type", "draft-mtp", "--spec-draft-n-max", "1"] and "-np" in res["flags"]
+        assert res["flags"][res["flags"].index("-np") + 1] == "4" and res["busy_slots_min"] == 4 and not res["errors"]
+        assert 3000 < res["tokens_per_s"] < 5000, res["tokens_per_s"]  # 4 slots x 1,000 a second
+        gate_rows = E.read_jsonl(gate)
+        order = E.shuffled_order(gate_rows, "gate-speed-bench")
+        assert sorted(calls) == sorted((gate_rows[i]["prompt"], 100000 + i, 20480) for i in order[:4]), calls
+    finally:
+        (B.llama.Server, B.llama.http, B.llama.server_binary, B.ew.chat_request, E.GATE_PATH, B.OUT_DIR,
+         sys.argv) = saved
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_second_early_look():
