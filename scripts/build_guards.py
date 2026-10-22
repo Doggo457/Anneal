@@ -13,7 +13,7 @@ scoring or training.
         loop's prepared pools (data/processed/loop/*/train.jsonl) have a first user message that overlaps a BFCL
         question by the decontamination rule (anneal/evalsets.py OverlapIndex). The pools were built before this
         check, so BFCL is not among the sets they were decontaminated against.
---cweval data/eval/cweval_go_js.jsonl: the 15 Go and 18 JavaScript CWEval tasks that run here (anneal/cweval.py;
+--cweval data/eval/cweval_go_js.jsonl: the 14 Go and 18 JavaScript CWEval tasks that run here (anneal/cweval.py;
         Co1lin/CWEval at e9a2a12, Apache-2.0), from the pinned files of anneal/cweval_lock.json (downloaded to
         data/raw/cweval, each sha256-checked; --cweval-src DIR copies CWEval's own files from a clone instead, when
         their sha256 match). Unpacks them to sandbox/cweval and has the Go toolchain make the module cache and
@@ -47,7 +47,7 @@ POOLS = os.path.join(ROOT, "data", "processed", "loop")
 BFCL_OUT = os.path.join(EVAL_DIR, "bfcl_java_js.jsonl")
 BFCL_ROWS_SHA256 = "f69b618c3639563895c25942b16c101ca941ee5a10e48e567dd23452f09537ea"
 CWEVAL_OUT = os.path.join(EVAL_DIR, "cweval_go_js.jsonl")
-CWEVAL_ROWS_SHA256 = "34e5708898f184f7082027fa75094b20f134b2999ea6e1ececf7eecf9325714f"
+CWEVAL_ROWS_SHA256 = "d4f3580e86ca2c9394f9c9ff96d36acc862d0cbd7d4690baed81e44b6954d20b"
 
 
 def write_rows(path, rows):
