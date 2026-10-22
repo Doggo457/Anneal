@@ -3,8 +3,8 @@
 CWEval (Co1lin/CWEval at e9a2a12, Apache-2.0; Peng et al., "CWEval: Outcome-driven Evaluation on Functionality and
 Security of LLM Code Generation", LLM4Code 2025) asks for one function per task and runs the task's pytest file on the
 program: functionality tests and security tests for the weakness the task invites (path traversal, injection, weak
-crypto, ReDoS, ...). An answer passes only if every test of both kinds passes, the paper's func-sec@1. 34 of its 42 Go
-and JavaScript tasks run here (16 Go, 18 JavaScript); EXCLUDED says why the other eight don't.
+crypto, ReDoS, ...). An answer passes only if every test of both kinds passes, the paper's func-sec@1. 33 of its 42 Go
+and JavaScript tasks run here (15 Go, 18 JavaScript); EXCLUDED says why the other nine don't.
 
 What is CWEval's own, rebuilt here (the prompt template and get_code_from are checked against the pinned source's
 syntax tree by parity()): the prompt (cweval/ppt DirectPrompt, the "direct" prompt the paper scores); the code taken
@@ -39,7 +39,7 @@ Switching it on (after scripts/build_guards.py --cweval has passed on the traini
     "cweval": {"label": "CWEval Go and JavaScript", "module": cweval, "build": "scripts/build_guards.py --cweval"},
   experiments/loop.yaml, under guards after bfcl:
   cweval: {file: data/eval/cweval_go_js.jsonl, seed: 1, tolerance: 0.12}
-Tolerance 0.12: EvalPlus's 0.03 scaled to 34 items as BFCL's is to 150 (0.03 x sqrt(542 / 34)), about 4 items.
+Tolerance 0.12: EvalPlus's 0.03 scaled to 33 items as BFCL's is to 150 (0.03 x sqrt(542 / 33)), about 4 items.
 """
 
 import ast
@@ -61,7 +61,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK_PATH = os.path.join(ROOT, "anneal", "cweval_lock.json")
-LOCK_SHA256 = "3dd700086f5dc2f6e41fbba2e6785c40b85738c9e59de6b987a6ca4a3f667a75"
+LOCK_SHA256 = "08bca752807f2a020ba59fe5c8a54dd4c550a37b3b30013b702232374d8347e3"
 DOWNLOADS = os.path.join(ROOT, "data", "raw", "cweval")
 ASSETS = os.path.join(ROOT, "sandbox", "cweval")
 HARNESS = "cweval-func-sec-1-" + LOCK_SHA256[:8]  # changes when the request or the judging changes
@@ -71,8 +71,8 @@ MAX_PARALLEL = 2  # answers judged at once
 GOIMPORTS = ("golang.org/x/tools/cmd/goimports", "v0.37.0")
 GO_PROXY = "https://proxy.golang.org/"
 LANGS = {"go": "go", "js": "javascript"}  # CWEval's file extension -> the loop's language name
-TASKS = {"go": ("020_0", "022_0", "022_2", "079_0", "113_0", "117_0", "326_0", "326_1", "327_0", "327_2", "329_0",
-                "347_0", "643_0", "760_0", "918_0", "918_1"),
+TASKS = {"go": ("020_0", "022_0", "022_2", "079_0", "113_0", "117_0", "326_0", "327_0", "327_2", "329_0", "347_0",
+                "643_0", "760_0", "918_0", "918_1"),
          "js": ("020_0", "022_0", "079_0", "095_0", "113_0", "117_0", "326_1", "327_0", "327_1", "327_2", "329_0",
                 "347_0", "400_0", "643_0", "760_0", "918_0", "918_1", "1333_0")}
 _LS = "runs `ls -l` in a child process: Windows has no ls, and the code sandbox allows one process"
@@ -84,6 +84,8 @@ EXCLUDED = {"cwe_078_0_go": _LS, "cwe_078_0_js": _LS, "cwe_732_2_go": _MODE, "cw
                             "node-gyp compiles) at install time",
             "cwe_326_0_js": "the reference makes a 2048-bit RSA key with node-rsa (plain JavaScript): 0.9 to 5.3 s on "
                             "Linux, so it fails the 3 s test limit at random (3 of 10 judged runs)",
+            "cwe_326_1_go": "the reference generates DSA L2048N256 parameters (prime search): 0.86 s median, up to "
+                            "3.95 s in 80 runs on Linux, 3 of them over the 3 s test limit, so it fails at random",
             "cwe_502_0_js": "the security test can't fail: js-yaml 4 (what CWEval's image installs) has no "
                             "!!js/function in any schema, so the insecure solution passes it too"}
 RECHECK_CMD = "./third_party/recheck-linux-x64 "  # how cwe_1333_0_js's test calls recheck (os.popen)
@@ -407,8 +409,10 @@ def _go_assets(lk, ex, tc, dest, log):
         env = go_env(tc, wd.path, os.path.join(wd.path, "gomod"))
         env.update(GOPROXY=proxy, GOFLAGS="-buildvcs=false -mod=mod")
         mods = [m["module"] for m in lk["go"] if m["for"] == "tasks" and m["zip"]]
+        # -p 4, as polyglot.build_plan: -trimpath builds the standard library afresh, and more compilers at once than
+        # the build job's process limit fail with "Not enough quota"
         steps = [(["-C", "mod", "mod", "download"] + mods, env),
-                 (["install", "-trimpath", "@".join(GOIMPORTS)],
+                 (["install", "-p", "4", "-trimpath", "@".join(GOIMPORTS)],
                   dict(env, GOMODCACHE=os.path.join(wd.path, "gomod-tools"), GOBIN=os.path.join(wd.path, "bin")))]
         for args, e in steps:
             r = ex.run(wd, tc.go, args, e, b"", 600.0, P.BUILD_MEM, phase="build", path_dirs=tc.path_dirs.get("go"))
