@@ -129,12 +129,13 @@ GATE_KINDS = ("write", "fix")  # the six-language gate (scripts/build_gate.py); 
 REF_STAGES = ["evaluate", "decide"] + list(GUARDS) + ["finish"]
 GUARD_PROBE_ROWS = 8
 MAX_ROUND_FAILURES = 3
-# The gate server's settings (loop.yaml gate: slots, build, spec, budget, max_tokens, budget_message; 21-22 Oct 2026).
-# Rows scored before the loop recorded them came from 4 slots on b11435 without speculative decoding, with a
-# 16,384-token thinking budget, 20,480 tokens an answer and no budget message; a record from before a key was added
-# means its value here. PROMPT_MARGIN: the chat template's tokens around a prompt.
+# The gate server's settings (loop.yaml gate: slots, build, spec, budget, max_tokens, budget_message, and noncoding:
+# max_tokens; 21-22 Oct 2026). Rows scored before the loop recorded them came from 4 slots on b11435 without
+# speculative decoding, with a 16,384-token thinking budget, 20,480 tokens an answer (non-coding answers too) and no
+# budget message; a record from before a key was added means its value here. PROMPT_MARGIN: the chat template's
+# tokens around a prompt.
 GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None, "budget": 16384, "max_tokens": 20480,
-                     "budget_message": None}
+                     "budget_message": None, "nc_max_tokens": 20480}
 LEGACY_GATE_SERVER = dict(GATE_SERVER_ADDED, slots=4, ctx=llama.SCORING_CTX)
 PROMPT_MARGIN = 64
 TOOLS_MARGIN = 512  # a no-worse check's tool-calling instructions around its tools' JSON (chat template), generous
@@ -530,12 +531,14 @@ def gate_budget_message(cfg):
 def gate_server(cfg):
     """What every gate, non-coding and no-worse-check score of the loop's life must share (Loop.require_gate_server):
     the slot count, the cache, the llama.cpp build, speculative decoding, the thinking budget, the tokens an answer may
-    take and the budget message."""
+    take, the budget message and the tokens a non-coding answer may take (the non-coding check shares the server's
+    thinking budget, so its answers must have room to reach it)."""
     g = cfg.get("gate") or {}
     return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg),
             "budget": int(g.get("budget", GATE_SERVER_ADDED["budget"])),
             "max_tokens": int(g.get("max_tokens", GATE_SERVER_ADDED["max_tokens"])),
-            "budget_message": gate_budget_message(cfg)}
+            "budget_message": gate_budget_message(cfg),
+            "nc_max_tokens": int((cfg.get("noncoding") or {}).get("max_tokens", GATE_SERVER_ADDED["nc_max_tokens"]))}
 
 
 def describe_gate_server(srv, keys):
@@ -543,7 +546,8 @@ def describe_gate_server(srv, keys):
              "spec": lambda v: (f"MTP draft {v['draft_n_max']}" if v else "no speculative decoding"),
              "budget": lambda v: f"a {v}-token thinking budget", "max_tokens": lambda v: f"{v} tokens an answer",
              "budget_message": lambda v: (f"the budget message {' '.join(v.split())[:60]!r}" if v
-                                          else "no budget message")}
+                                          else "no budget message"),
+             "nc_max_tokens": lambda v: f"{v} tokens a non-coding answer"}
     return ", ".join(words[k](srv.get(k)) for k in keys)
 
 
@@ -868,8 +872,8 @@ class Loop(fr.Controller):
 
     def require_gate_server(self, cfg):
         """Every gate, non-coding and no-worse-check score in the loop's life comes from a gate server with the same
-        settings (loop.yaml gate: slots, build and spec, 21 Oct 2026; budget, max_tokens and budget_message, 22 Oct
-        2026): answers differ with them, so a change part way would compare rounds scored differently. Recorded at the
+        settings (loop.yaml gate: slots, build and spec, 21 Oct 2026; budget, max_tokens and budget_message, and
+        noncoding: max_tokens, 22 Oct 2026): answers differ with them, so a change part way would compare rounds scored differently. Recorded at the
         first check; rows scored before it was recorded came from LEGACY_GATE_SERVER's settings. Raises Waiting on a
         change, or when the build's llama-server is missing."""
         want = gate_server(cfg)
