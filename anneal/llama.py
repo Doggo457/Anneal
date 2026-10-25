@@ -81,8 +81,8 @@ def spec_flags(spec):
     return ["--spec-type", "draft-mtp", "--spec-draft-n-max", str(n)]
 
 
-def scoring_flags(lora=None, extra=(), slots=4):
-    flags = ["-c", str(SCORING_CTX), "-np", str(int(slots)), "-ctk", "q8_0", "-ctv", "q8_0", "-fa", "on", "-ngl", "999",
+def scoring_flags(lora=None, extra=(), slots=4, ctx=SCORING_CTX):
+    flags = ["-c", str(int(ctx)), "-np", str(int(slots)), "-ctk", "q8_0", "-ctv", "q8_0", "-fa", "on", "-ngl", "999",
              "--ctx-checkpoints", "0", "--cache-ram", "0", "--reasoning-format", "deepseek"]
     if lora:
         flags += ["--lora", lora]

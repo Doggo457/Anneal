@@ -381,9 +381,64 @@ def polyglot_check(make_executor=None, make_toolchain=None, max_parallel=2):
                 state["tc"] = (make_toolchain or P.Toolchain.windows)()
         code = P.extract_code(content, item["lang"])
         with slots:
-            v = P.judge(item["lang"], code, item["cases"], state["ex"], state["tc"], case_timeout_s=IO_CASE_TIMEOUT_S)
+            v = P.judge(item["lang"], code, item_cases(item), state["ex"], state["tc"],
+                        case_timeout_s=IO_CASE_TIMEOUT_S, match=case_match(item))
         return v.ok, v.stage
     return judge
+
+
+_CASES = {}
+_CASES_LOCK = threading.Lock()
+
+
+def item_cases(item):
+    """A gate item's (stdin, expected) cases: inline on the 495-item gate; for the fixed 200, whose full CodeContests
+    test sets are too big to hold inline, in a file per problem under data/eval (item "cases_file"), checked against
+    the item's "cases_sha256" so gate.jsonl's own checksum pins them. The last few files read stay in memory."""
+    if "cases" in item:
+        return item["cases"]
+    path = os.path.join(EVAL_DIR, item["cases_file"])
+    with _CASES_LOCK:
+        hit = _CASES.get(path)
+    if hit is None:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        if hashlib.sha256(raw).hexdigest() != item["cases_sha256"]:
+            raise RuntimeError(f"{path} doesn't match {item['id']}'s cases_sha256: the test set changed")
+        hit = [tuple(c) for c in json.loads(raw.decode("utf-8"))["cases"]]
+        with _CASES_LOCK:
+            if len(_CASES) >= 16:
+                _CASES.pop(next(iter(_CASES)))
+            _CASES[path] = hit
+    return hit
+
+
+def case_match(item):
+    """How a case's output is decided for a gate item: None (polyglot.outputs_match) for the 495-item gate, whose
+    items carry no "judge"; for the fixed 200 (scripts/build_gate200.py, 25 Oct 2026) the item's judge spec:
+    {"checker": problem} -> that problem's validity checker (anneal/gate_checkers.py), which gets the input too,
+    else polyglot.gate_match with the statement's tolerance {"tol": 1e-6} or none. A checker that raises on an
+    output (garbage, a short line) counts it wrong. An item's "checker_sha256" pins gate_checkers.py: a checker
+    changed after the build stops the judging instead of scoring rounds by different rules."""
+    spec = item.get("judge")
+    if spec is None:
+        return None
+    from anneal import polyglot as P
+    if spec.get("checker"):
+        from anneal import gate_checkers
+        pin = spec.get("checker_sha256")
+        if pin and pin != gate_checkers.module_sha256():
+            raise RuntimeError(f"anneal/gate_checkers.py changed after {item.get('id')} was built (checker_sha256)")
+        fn = gate_checkers.CHECKERS[spec["checker"]]
+
+        def by_checker(stdin, out, expected):
+            try:
+                return bool(fn(stdin, out, expected))
+            except Exception:  # noqa: BLE001
+                return False
+        return by_checker
+    tol = spec.get("tol")
+    return lambda stdin, out, expected: P.gate_match(out, expected, tol)
 
 
 def mc_check(item, content):
