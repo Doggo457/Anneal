@@ -2,7 +2,8 @@
 
 The gate (scripts/build_gate.py, anneal/evalsets.py) asks the model to write or fix a program in one of these
 languages; this module pulls the program out of the answer, builds it, runs it on the problem's cases and compares
-the output token by token (numbers within 1e-6, as generate_traces.py outputs_match).
+the output token by token: on the 495-item gate numbers within 1e-6 (as generate_traces.py outputs_match); on the
+fixed 200 (25 Oct 2026) with gate_match, or with the problem's own checker where many answers are right.
 
 Where things run. On the training PC (Windows) every build and run goes through anneal/sandbox.py: builds run in the
 "Anneal.CodeBuild" AppContainer (read-only access to the toolchains, up to 16 processes, because compilers start
@@ -396,9 +397,38 @@ def outputs_match(got, want, rel=1e-6):
     return True
 
 
-def judge(lang, code, cases, executor, tc, case_timeout_s=CASE_TIMEOUT_S, all_cases=False):
+NUMBER = re.compile(r"[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?\Z")
+YES_NO = ("yes", "no")
+
+
+def gate_match(got, want, tol=None):
+    """The fixed 200's comparison (25 Oct 2026): token by token and exact, except that YES and NO match in any letter
+    case, and, only where the statement allows an error (tol, e.g. 1e-6 for "absolute or relative error does not
+    exceed 10^-6"), plain decimal numbers match when |got - want| <= tol * max(1, |want|). Elsewhere numbers must be
+    exact: outputs_match's 1e-6 accepts 1000000000001 for 1000000000000, and float() can't tell 64-bit values
+    apart."""
+    g, w = got.split(), want.split()
+    if g == w:
+        return True
+    if len(g) != len(w):
+        return False
+    for a, b in zip(g, w):
+        if a == b:
+            continue
+        if b.lower() in YES_NO and a.lower() == b.lower():
+            continue
+        if tol is None or not NUMBER.match(a) or not NUMBER.match(b):
+            return False
+        fa, fb = float(a), float(b)
+        if not (math.isfinite(fa) and math.isfinite(fb)) or abs(fa - fb) > tol * max(1.0, abs(fb)):
+            return False
+    return True
+
+
+def judge(lang, code, cases, executor, tc, case_timeout_s=CASE_TIMEOUT_S, all_cases=False, match=None):
     """Build the program once and run it on each (stdin, expected stdout) case; stops at the first failing case
-    unless all_cases. -> Verdict; ok only if every case ran and matched."""
+    unless all_cases. match(stdin, output, expected) -> bool decides a case that ran (default outputs_match).
+    -> Verdict; ok only if every case ran and matched."""
     if not (code or "").strip():
         return Verdict(False, "no_code", [], "", 0.0, 0.0)
     path_dirs = tc.path_dirs.get(lang)
@@ -424,7 +454,8 @@ def judge(lang, code, cases, executor, tc, case_timeout_s=CASE_TIMEOUT_S, all_ca
             elif r.returncode != 0:
                 st = "runtime_error"
                 detail = detail or f"exit {r.returncode}: " + (r.stderr or b"")[-1500:].decode("utf-8", "replace")
-            elif outputs_match(r.stdout.decode("utf-8", "replace"), expected):
+            elif (match(stdin, r.stdout.decode("utf-8", "replace"), expected) if match
+                  else outputs_match(r.stdout.decode("utf-8", "replace"), expected)):
                 st = "ok"
             else:
                 st = "wrong_answer"

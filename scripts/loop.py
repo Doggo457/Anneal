@@ -497,6 +497,15 @@ def gate_slots(cfg):
     return int((cfg.get("gate") or {}).get("slots", 4))
 
 
+def gate_ctx(cfg):
+    """The gate server's whole cache in tokens, split evenly between its slots (loop.yaml gate.ctx; default
+    llama.SCORING_CTX, 262,144). 25 Oct 2026: 8 slots need 8 x 44,032 = 352,256 for a 40,960-token answer each."""
+    ctx = int((cfg.get("gate") or {}).get("ctx", llama.SCORING_CTX))
+    if not 4096 <= ctx <= 1 << 20:
+        raise ValueError(f"gate.ctx must be between 4,096 and 1,048,576 tokens, got {ctx}")
+    return ctx
+
+
 def gate_concurrency(cfg):
     """Requests in flight on the gate server: one per slot unless loop.yaml says otherwise."""
     return int((cfg.get("gate") or {}).get("concurrency", gate_slots(cfg)))
@@ -535,7 +544,7 @@ def gate_server(cfg):
     take, the budget message, the tokens a non-coding answer may take (the non-coding check shares the server's
     thinking budget, so its answers must have room to reach it) and the graphics driver (llama.gpu_driver)."""
     g = cfg.get("gate") or {}
-    return {"slots": gate_slots(cfg), "ctx": llama.SCORING_CTX, "build": gate_build(cfg), "spec": gate_spec(cfg),
+    return {"slots": gate_slots(cfg), "ctx": gate_ctx(cfg), "build": gate_build(cfg), "spec": gate_spec(cfg),
             "budget": int(g.get("budget", GATE_SERVER_ADDED["budget"])),
             "max_tokens": int(g.get("max_tokens", GATE_SERVER_ADDED["max_tokens"])),
             "budget_message": gate_budget_message(cfg),
@@ -662,7 +671,7 @@ class Loop(fr.Controller):
         msg = gate_budget_message(cfg)
         return llama.scoring_flags(lora=lora, extra=["--reasoning-budget", str(g["budget"])]
                                    + (["--reasoning-budget-message", msg] if msg else []) + fr.SAMPLER_FLAGS
-                                   + llama.spec_flags(gate_spec(cfg)), slots=gate_slots(cfg))
+                                   + llama.spec_flags(gate_spec(cfg)), slots=gate_slots(cfg), ctx=gate_ctx(cfg))
 
     def run_stage(self, name, fn, *a):
         if self.done(name) is not None:
@@ -903,9 +912,9 @@ class Loop(fr.Controller):
             self.save()
 
     def slot_room_check(self, url, cfg, sets):
-        """Each gate server slot holds llama.SCORING_CTX / slots tokens: the longest prompts of each set (label,
+        """Each gate server slot holds gate_ctx / slots tokens: the longest prompts of each set (label,
         items, max_tokens) with a whole answer must fit, or long answers would be cut short. Raises Waiting."""
-        room = llama.SCORING_CTX // gate_slots(cfg)
+        room = gate_ctx(cfg) // gate_slots(cfg)
         for label, items, max_tokens in sets:
             texts = sorted((room_text(it) for it in items), key=len, reverse=True)[:3]
             if not texts:
@@ -914,7 +923,7 @@ class Loop(fr.Controller):
                     + (TOOLS_MARGIN if any(it.get("tools") for it in items) else 0))
             if need > room:
                 raise Waiting(f"the longest {label} prompt with a whole answer needs {need} tokens, over the {room} "
-                              f"each of the {gate_slots(cfg)} gate server slots holds: lower gate.slots in "
+                              f"each of the {gate_slots(cfg)} gate server slots holds: lower gate.slots or raise gate.ctx in "
                               "experiments/loop.yaml")
             self.log(f"{label}: the longest prompt with a whole answer needs {need} of the {room} tokens a slot holds")
 
