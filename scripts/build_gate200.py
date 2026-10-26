@@ -12,7 +12,9 @@ cases over 256 KB out, as build_gate.py), in that order. Each problem needs an i
 Codeforces id, e.g. 1575B) with validate(input_text) that returns True only for an input within the statement's
 limits. A public or private test (Codeforces' own) that fails it means the validator is wrong: the problem is refused.
 A generated test that fails it is set aside: CodeContests made those by changing real inputs, and some break the
-limits (values of -1, n = 6 with five numbers), where a correct program may do anything.
+limits (values of -1, n = 6 with five numbers) or the input format (26 Oct 2026: a whole number written with a leading
+zero, such as 011, which Codeforces never gives and Go's fmt.Fscan reads as octal 9), where a correct program may do
+anything. Validators accept a whole number only as 0 or -?[1-9][0-9]*.
 
 SPEC (JSON): {"items": [the 200 item ids], "problems": {CF: {"tol": 1e-4} or {"checker": CF}}}. tol: the error the
 statement allows on real numbers. checker: anneal/gate_checkers.py's checker for a problem where more than one output
@@ -321,7 +323,7 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
          f"Built {card['built']} by scripts/build_gate200.py from the 495-item gate: {len(items)} items on "
          f"{len(card_p)} problems, judged on their full CodeContests test sets: {card['tests']} tests, after "
          f"{card['tests_set_aside']} generated tests on {card['problems_with_tests_set_aside']} problems were set aside "
-         "because their input breaks the statement's limits (each problem's input validator)"
+         "because their input breaks the statement's limits or input format (each problem's input validator)"
          + ("" if not card["tests_added"] else "; the total includes " + ", ".join(
              f"{n} hand-checked test{'s' * (n > 1)} added to {cf}" for cf, n in sorted(card["tests_added"].items()))
             + " (a wrong method passed every official test there)") + ".", "",
