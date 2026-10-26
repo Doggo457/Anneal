@@ -211,6 +211,22 @@ def test_build():
         assert len(cases) == 70 and ("20", "40") not in cases and ("70", "140") not in cases
         assert items[0]["cases_sha256"] == items[1]["cases_sha256"]  # write and fix share the test file
         assert card["tests"] == 70 + 46 and card["tests_set_aside"] == 2 and card["problems_with_tests_set_aside"] == 1
+        assert card["tests_added"] == {} and "hand-checked" not in open(os.path.join(out, "card.md")).read()
+        plain_1000a = items[0]["cases_sha256"]
+
+        # 26 Oct 2026: hand-checked tests go after the official ones, through the same validator and judge
+        extra = [{"input": "500", "output": "1000", "why": "a wrong method passes every official test"}]
+        card = B.build(gate, dict(spec, problems={**spec["problems"], "1000A": {"added_tests": extra}}), rows, vd, out,
+                       log=quiet)
+        items = E.read_jsonl(os.path.join(out, "gate.jsonl"))
+        E._CASES.clear()  # item_cases keeps files read in this process; the rebuild rewrote 1000A.json
+        a = items[0]
+        assert a["n_cases"] == 71 and a["n_cases_added"] == 1 and a["n_cases_full"] == 72 and a["judge"] == {}
+        assert E.item_cases(a)[-1] == ("500", "1000") and E.item_cases(a)[:70] == [tuple(c) for c in json.load(
+            open(os.path.join(out, "cases", "1000A.json")))["cases"]][:70]
+        assert a["cases_sha256"] != plain_1000a and "n_cases_added" not in items[2]
+        assert card["tests"] == 71 + 46 and card["tests_added"] == {"1000A": 1}
+        assert "1 hand-checked test added to 1000A" in open(os.path.join(out, "card.md")).read()
 
         def fails(sp, g=gate, r=rows, v=vd, ex=None, tc=None):
             try:
@@ -228,9 +244,17 @@ def test_build():
         moved = {**rows, ("test", 1): cc_row("1000_B2. Hard", 1, 5, 40, out=lambda i: i)}  # another revision
         assert "first of" in fails({"items": [gate[2]["id"]]}, r=moved)
         assert "not both" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {"checker": "1000A", "tol": 1e-6}}})
+        assert "an added test fails the validator" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {
+            "added_tests": [{"input": "70", "output": "140", "why": "w"}]}}})
+        assert "not in the 200" in fails({"items": [gate[0]["id"]], "problems": {"1000B2": {
+            "added_tests": [{"input": "9", "output": "18", "why": "w"}]}}})
+        assert "needs a non-empty" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {
+            "added_tests": [{"input": "9", "output": "18"}]}}})
         fake_checkers(lambda i, o, e: int(o) == 2 * int(i) and int(i) != 7)
         assert "rejects expected" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {"checker": "1000A"}}})
         fake_checkers(lambda i, o, e: int(o) == 2 * int(i))
+        assert "rejects expected" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {  # a wrong added output
+            "checker": "1000A", "added_tests": [{"input": "9", "output": "19", "why": "w"}]}}})
         assert "not tested" in fails({"items": [gate[0]["id"]], "problems": {"1000A": {"checker": "1000A"}}})
         if P.WINDOWS or not shutil.which("g++"):
             print("skip the checker self-test: needs Linux g++")
