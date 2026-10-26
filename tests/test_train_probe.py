@@ -1,0 +1,173 @@
+"""Tests for the training speed checks (anneal/train_probe.py, scripts/compare_train_runs.py, train_longrun.py --set).
+The attention wrapper tests need torch (any build, CPU is enough) and are skipped without it.
+
+  python tests/test_train_probe.py        (or: python -m pytest tests/test_train_probe.py)
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+
+from anneal import train_probe as T  # noqa: E402
+import compare_train_runs as C  # noqa: E402
+
+try:
+    import torch  # noqa: F401
+    HAVE_TORCH = True
+except ImportError:
+    HAVE_TORCH = False
+
+
+def test_categorize_kernel_names():
+    cases = {
+        "Cijk_Alik_Bljk_BBS_BH_MT128x128x32": "matmul",
+        "aten::addmm": "matmul",
+        "kDequantizeBlockwise": "bnb_dequant",
+        "chunk_gated_delta_rule_fwd_kernel_h": "deltanet_fla",
+        "aten::_scaled_dot_product_flash_attention": "sdpa_attention",
+        "attn_fwd": "sdpa_attention",
+        "aten::conv1d": "short_conv",
+        "Memcpy HtoD (Pageable -> Device)": "offload_copy",
+        "_unsloth_cross_entropy_forward": "cross_entropy",
+        "aten::mul": "other",
+    }
+    for name, want in cases.items():
+        assert T.categorize(name) == want, (name, T.categorize(name), want)
+
+
+def test_summarize_events_shares():
+    s = T.summarize_events([("Cijk_gemm", 600.0, 1.0, 3), ("chunk_gated_delta_x", 300.0, 1.0, 1),
+                            ("aten::mul", 100.0, 1.0, 9)])
+    assert s["basis"] == "self_device_time"
+    assert s["share"] == {"matmul": 0.6, "deltanet_fla": 0.3, "other": 0.1}
+    cpu = T.summarize_events([("aten::addmm", 0.0, 30.0, 1), ("aten::mul", 0.0, 10.0, 1)])
+    assert cpu["basis"].startswith("self_cpu_time") and cpu["share"]["matmul"] == 0.75
+
+
+def test_install_sdpa_off_wraps_nothing():
+    assert T.install_sdpa(False, False) is None
+
+
+def _sdpa_case():
+    import torch
+    g = torch.Generator().manual_seed(0)
+    b, h, s, d = 1, 4, 16, 8
+    q = torch.randn(b, s, h, d, generator=g).transpose(1, 2)   # a transposed view, as the model hands it over
+    k = torch.randn(b, s, h, d, generator=g).transpose(1, 2)
+    v = torch.randn(b, s, h, d, generator=g).transpose(1, 2)
+    return q, k, v
+
+
+def test_sdpa_probe_and_contiguous_same_values():
+    if not HAVE_TORCH:
+        print("  skipped: no torch")
+        return
+    import torch
+    import torch.nn.functional as F
+    original = F.scaled_dot_product_attention
+    q, k, v = _sdpa_case()
+    want = original(q, k, v, is_causal=True)
+    logs = []
+    try:
+        rep = T.install_sdpa(contiguous=True, probe=True, log=logs.append)
+        got = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
+        again = F.scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), is_causal=True)
+    finally:
+        F.scaled_dot_product_attention = original
+        torch.nn.functional.scaled_dot_product_attention = original
+    assert torch.allclose(got, want, atol=1e-6, rtol=1e-5)
+    d = rep.as_dict()
+    assert d["calls"] == 2 and d["calls_with_a_copy"] == 1
+    assert d["first_call"]["query"]["contiguous"] is False
+    assert d["first_call"]["query"]["shape"] == [1, 4, 16, 8]
+    assert d["first_call"]["kwargs"] == {"is_causal": True}
+    assert again.shape == got.shape
+    assert any("first call" in x for x in logs)
+
+
+def test_sdpa_double_wrap_refused():
+    if not HAVE_TORCH:
+        print("  skipped: no torch")
+        return
+    import torch.nn.functional as F
+    original = F.scaled_dot_product_attention
+    try:
+        T.install_sdpa(probe=True, log=lambda *_: None)
+        try:
+            T.install_sdpa(probe=True, log=lambda *_: None)
+            raise AssertionError("second wrap allowed")
+        except RuntimeError:
+            pass
+    finally:
+        F.scaled_dot_product_attention = original
+
+
+def _write_run(folder, secs, losses, tokens=24000, reserved=27.5):
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "metrics.jsonl"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"event": "train_begin", "max_steps": len(secs)}) + "\n")
+        for i, (s, l) in enumerate(zip(secs, losses), 1):
+            f.write(json.dumps({"step": i, "seconds": s, "tokens": tokens, "loss": l, "grad_norm": 0.5,
+                                "peak_reserved_gib": reserved}) + "\n")
+            f.write(json.dumps({"event": "mem", "step": i, "hip_free_gib": 3.0}) + "\n")
+    with open(os.path.join(folder, "summary.json"), "w", encoding="utf-8") as f:
+        json.dump({"peak_reserved_gib": reserved}, f)
+
+
+def test_compare_runs_rule():
+    with tempfile.TemporaryDirectory() as tmp:
+        base, rep, fast, drift, big = (os.path.join(tmp, n) for n in ("a", "a2", "b", "c", "d"))
+        _write_run(base, [400, 260, 262, 258, 261, 259], [1.0, 0.9, 0.8, 0.85, 0.7, 0.75])
+        _write_run(rep, [395, 261, 261, 259, 260, 260], [1.0, 0.9, 0.8, 0.85, 0.7, 0.75])
+        _write_run(fast, [390, 240, 241, 239, 240, 240], [1.002, 0.901, 0.801, 0.851, 0.7005, 0.7504])
+        _write_run(drift, [390, 230, 230, 230, 230, 230], [1.0, 0.9, 0.85, 0.85, 0.7, 0.75])
+        _write_run(big, [390, 230, 230, 230, 230, 230], [1.0, 0.9, 0.8, 0.85, 0.7, 0.75], reserved=30.2)
+        b = C.read_run(base)
+        assert b["timed_steps"] == [2, 3, 4, 5, 6] and b["seconds_per_step"] == 260.0
+        assert b["tokens_per_second"] == round(24000 * 5 / 1300, 2)
+        res = {os.path.basename(r): C.compare(b, C.read_run(r)) for r in (rep, fast, drift, big)}
+        assert not res["a2"]["passes"] and res["a2"]["checks"]["loss_within_tol"]   # noise floor: no gain
+        assert res["b"]["passes"] and res["b"]["speed_ratio"] > 1.05
+        assert not res["c"]["passes"] and not res["c"]["checks"]["loss_within_tol"]  # 0.85 vs 0.8 = 6% drift
+        assert not res["d"]["passes"] and not res["d"]["checks"]["memory_ok"]
+        out = os.path.join(tmp, "cmp.json")
+        assert C.main([base, rep, fast, "--json", out]) == 0
+        with open(out, encoding="utf-8") as f:
+            assert [c["passes"] for c in json.load(f)["comparisons"]] == [False, True]
+
+
+def test_train_longrun_set_override_parses():
+    # --set must reach the config as YAML values; checked by the source rather than by a GPU run.
+    src = open(os.path.join(ROOT, "scripts", "train_longrun.py"), encoding="utf-8").read()
+    assert 'p.add_argument("--set", action="append"' in src
+    assert "cfg[key.strip()] = yaml.safe_load(value)" in src
+    assert src.index("train_probe.install_sdpa(") < src.index("import unsloth  # noqa")
+    r = subprocess.run([sys.executable, "-c", "import yaml; print(repr(yaml.safe_load('true')), "
+                        "repr(yaml.safe_load('hipblaslt')), repr(yaml.safe_load('2')))"],
+                       capture_output=True, text=True)
+    assert r.stdout.strip() == "True 'hipblaslt' 2", r.stdout
+
+
+def main():
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS {name}")
+        except Exception:
+            import traceback
+            failed += 1
+            print(f"FAIL {name}")
+            traceback.print_exc()
+    print(f"{len(tests) - failed}/{len(tests)} passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
