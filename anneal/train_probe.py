@@ -13,6 +13,7 @@ All of it is off unless a config key turns it on (scripts/train_longrun.py):
 install_sdpa must run before Unsloth and transformers are imported, so that any module that copies the function by
 name gets the wrapper too.
 """
+import functools
 import json
 import os
 import re
@@ -86,8 +87,10 @@ def install_sdpa(contiguous=False, probe=False, log=print):
             query, key, value = query.contiguous(), key.contiguous(), value.contiguous()
         return original(query, key, value, *args, **kwargs)
 
+    # Copy __doc__, __name__ and __wrapped__ from the original: Unsloth reads the docstring when it is imported
+    # ("enable_gqa" in scaled_dot_product_attention.__doc__), and a None docstring stops it with a TypeError.
+    functools.update_wrapper(wrapped, original)
     wrapped._anneal_wrapped = True
-    wrapped.__wrapped__ = original
     F.scaled_dot_product_attention = wrapped
     torch.nn.functional.scaled_dot_product_attention = wrapped
     log(f"scaled_dot_product_attention wrapped: contiguous={contiguous}, probe={probe}")
