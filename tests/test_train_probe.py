@@ -124,6 +124,96 @@ def test_sdpa_wrapper_keeps_doc_and_name():
                 sys.modules[k] = v
 
 
+class _FakeTensor:
+    """Just enough of a tensor for the probe: shape, stride, contiguity, dtype, device."""
+
+    def __init__(self, shape, contiguous=True):
+        self.shape, self._contig = tuple(shape), contiguous
+        self.dtype, self.device = "torch.bfloat16", "cuda:0"
+
+    def stride(self):
+        out, acc = [], 1
+        for n in reversed(self.shape):
+            out.append(acc)
+            acc *= n
+        st = list(reversed(out))
+        if not self._contig:  # a (B, L, H, D) buffer seen as (B, H, L, D)
+            st[-3], st[-2] = st[-2], st[-3]
+        return tuple(st)
+
+    def is_contiguous(self):
+        return self._contig
+
+    def contiguous(self):
+        return _FakeTensor(self.shape, True)
+
+    def dim(self):
+        return len(self.shape)
+
+
+def _with_fake_torch(fn):
+    import types
+    keys = ("torch", "torch.nn", "torch.nn.functional")
+    saved = {k: sys.modules.get(k) for k in keys}
+    seen = []
+
+    def sdpa(query, key, value, attn_mask=None, is_causal=False, enable_gqa=False):
+        """scaled_dot_product_attention(query, key, value, ..., enable_gqa=False) -> Tensor"""
+        seen.append((query.is_contiguous(), key.is_contiguous(), value.is_contiguous()))
+        return query
+
+    torch = types.ModuleType("torch")
+    torch.nn = types.ModuleType("torch.nn")
+    torch.nn.functional = types.ModuleType("torch.nn.functional")
+    torch.nn.functional.scaled_dot_product_attention = sdpa
+    torch.is_grad_enabled = lambda: True
+    try:
+        sys.modules.update({"torch": torch, "torch.nn": torch.nn, "torch.nn.functional": torch.nn.functional})
+        return fn(torch, sdpa, seen)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
+
+
+def test_sdpa_probe_records_the_model_calls_not_the_import_self_test():
+    """Unsloth's import runs a 2-head, 16-token attention call first; the model's own calls (thousands of tokens,
+    possibly strided views) must be what decides whether the contiguous-copy test runs."""
+    def body(torch, sdpa, seen):
+        logs = []
+        rep = T.install_sdpa(contiguous=False, probe=True, log=logs.append)
+        w = torch.nn.functional.scaled_dot_product_attention
+        w(_FakeTensor([1, 2, 16, 64]), _FakeTensor([1, 2, 16, 64]), _FakeTensor([1, 2, 16, 64]), is_causal=True)
+        assert rep.long_strided() is None and rep.as_dict()["first_long_call"] is None
+        for _ in range(3):
+            w(_FakeTensor([1, 24, 4096, 256], False), _FakeTensor([1, 4, 4096, 256], False),
+              _FakeTensor([1, 4, 4096, 256], False), is_causal=True, enable_gqa=True)
+        w(_FakeTensor([1, 24, 300, 256]), _FakeTensor([1, 4, 300, 256]), _FakeTensor([1, 4, 300, 256]), is_causal=True,
+          enable_gqa=True)
+        d = rep.as_dict()
+        assert d["calls"] == 5 and d["first_call"]["query"]["shape"] == [1, 2, 16, 64]
+        assert d["first_long_call"]["query"]["shape"] == [1, 24, 4096, 256] and d["long_strided"] is True
+        assert d["first_long_call"]["kwargs"] == {"is_causal": True, "enable_gqa": True}
+        assert d["long_layouts"] == {
+            "q:strided k:strided v:strided heads 24/4 dim 256 bfloat16 enable_gqa,is_causal": 3,
+            "q:contiguous k:contiguous v:contiguous heads 24/4 dim 256 bfloat16 enable_gqa,is_causal": 1}, d
+        assert sum(1 for x in logs if "first call with" in x) == 1
+        assert seen[1] == (False, False, False)  # probe only: the inputs reach the original unchanged
+        json.dumps(d)
+
+    _with_fake_torch(body)
+
+    def copy(torch, sdpa, seen):
+        rep = T.install_sdpa(contiguous=True, probe=False, log=lambda *_: None)
+        w = torch.nn.functional.scaled_dot_product_attention
+        w(_FakeTensor([1, 24, 4096, 256], False), _FakeTensor([1, 4, 4096, 256]), _FakeTensor([1, 4, 4096, 256]))
+        assert seen == [(True, True, True)] and rep.copied_calls == 1 and rep.first_long is None
+
+    _with_fake_torch(copy)
+
+
 def test_sdpa_double_wrap_refused():
     if not HAVE_TORCH:
         print("  skipped: no torch")

@@ -2,7 +2,9 @@
 attention inputs, the BLAS library in use, and a short torch.profiler pass with GPU time split by kind of work.
 
 All of it is off unless a config key turns it on (scripts/train_longrun.py):
-  sdpa_probe: [false]       record the shapes, strides and dtypes of the first scaled_dot_product_attention call
+  sdpa_probe: [false]       record the shapes, strides and dtypes of the first scaled_dot_product_attention call, of
+                            the first call with LONG_TOKENS+ query tokens (the model's own attention, not a library's
+                            import-time self-test), and a count of long calls per memory layout
   sdpa_contiguous: [false]  make q, k and v contiguous before scaled_dot_product_attention. A contiguous copy holds the
                             same values, so results change only by kernel choice (rounding-level), never by data
   blas_backend: []          torch.backends.cuda.preferred_blas_library(...) after Unsloth is imported ("hipblaslt",
@@ -42,21 +44,54 @@ def categorize(name):
     return "other"
 
 
+# Libraries run small attention self-tests while they are imported (Unsloth: 2 heads x 16 tokens), so the model's own
+# calls are told apart by length: the first call with at least this many query tokens is recorded separately.
+LONG_TOKENS = 256
+MAX_LAYOUTS = 16
+
+
 class SdpaReport:
     def __init__(self, contiguous, probe):
         self.contiguous, self.probe = contiguous, probe
         self.calls = 0
         self.copied_calls = 0
         self.first = None
+        self.first_long = None
+        self.layouts = {}  # layout -> calls, for calls with at least LONG_TOKENS query tokens
+
+    def long_strided(self):
+        """True when the first long call had a non-contiguous q, k or v; None when no long call was seen."""
+        if not self.first_long:
+            return None
+        return any(not self.first_long[k]["contiguous"] for k in ("query", "key", "value"))
 
     def as_dict(self):
         return {"contiguous": self.contiguous, "probe": self.probe, "calls": self.calls,
-                "calls_with_a_copy": self.copied_calls, "first_call": self.first}
+                "calls_with_a_copy": self.copied_calls, "first_call": self.first,
+                "long_tokens": LONG_TOKENS, "first_long_call": self.first_long, "long_strided": self.long_strided(),
+                "long_layouts": self.layouts}
 
 
 def _describe(t):
     return {"shape": list(t.shape), "stride": list(t.stride()), "contiguous": bool(t.is_contiguous()),
             "dtype": str(t.dtype).replace("torch.", ""), "device": str(t.device)}
+
+
+def _describe_call(torch, query, key, value, args, kwargs):
+    mask = kwargs.get("attn_mask", args[0] if args else None)
+    return {"query": _describe(query), "key": _describe(key), "value": _describe(value),
+            "attn_mask": None if mask is None else _describe(mask),
+            "kwargs": {k: (v if isinstance(v, (bool, int, float, str, type(None))) else type(v).__name__)
+                       for k, v in kwargs.items() if k != "attn_mask"},
+            "grad_enabled": torch.is_grad_enabled()}
+
+
+def _layout(query, key, value, kwargs):
+    """A short label for a call's memory layout and shape family (not its length)."""
+    lay = " ".join(f"{n}:{'contiguous' if t.is_contiguous() else 'strided'}"
+                   for n, t in (("q", query), ("k", key), ("v", value)))
+    heads = f"heads {query.shape[-3] if query.dim() >= 3 else 1}/{key.shape[-3] if key.dim() >= 3 else 1}"
+    return f"{lay} {heads} dim {query.shape[-1]} {str(query.dtype).replace('torch.', '')} {','.join(sorted(kwargs))}"
 
 
 def install_sdpa(contiguous=False, probe=False, log=print):
@@ -74,14 +109,17 @@ def install_sdpa(contiguous=False, probe=False, log=print):
 
     def wrapped(query, key, value, *args, **kwargs):
         rep.calls += 1
-        if rep.first is None and probe:
-            rep.first = {"query": _describe(query), "key": _describe(key), "value": _describe(value),
-                         "attn_mask": None if kwargs.get("attn_mask", args[0] if args else None) is None
-                         else _describe(kwargs.get("attn_mask", args[0] if args else None)),
-                         "kwargs": {k: (v if isinstance(v, (bool, int, float, str, type(None))) else type(v).__name__)
-                                    for k, v in kwargs.items() if k != "attn_mask"},
-                         "grad_enabled": torch.is_grad_enabled()}
-            log(f"sdpa probe, first call: {json.dumps(rep.first)}")
+        if probe:
+            if rep.first is None:
+                rep.first = _describe_call(torch, query, key, value, args, kwargs)
+                log(f"sdpa probe, first call: {json.dumps(rep.first)}")
+            if query.dim() >= 2 and query.shape[-2] >= LONG_TOKENS:
+                if rep.first_long is None:
+                    rep.first_long = _describe_call(torch, query, key, value, args, kwargs)
+                    log(f"sdpa probe, first call with {LONG_TOKENS}+ query tokens: {json.dumps(rep.first_long)}")
+                lay = _layout(query, key, value, kwargs)
+                if lay in rep.layouts or len(rep.layouts) < MAX_LAYOUTS:
+                    rep.layouts[lay] = rep.layouts.get(lay, 0) + 1
         if contiguous and not (query.is_contiguous() and key.is_contiguous() and value.is_contiguous()):
             rep.copied_calls += 1
             query, key, value = query.contiguous(), key.contiguous(), value.contiguous()
