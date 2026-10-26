@@ -153,6 +153,19 @@ def gate_statement(item):
     return p[:-len(suffix)] if p.endswith(suffix) else p
 
 
+def gate_fix_statement(item):
+    """A six-language fix item's problem statement: its prompt up to the program it asks to fix (anneal/polyglot.py
+    fix_prompt). Used only for a problem with no write item: the fixed 200 (25 Oct 2026) keeps just the fix items of
+    some problems."""
+    from anneal.polyglot import NAMES
+    marker = f"\n\nThis {NAMES[item['lang']]} program was written to solve the problem above."
+    p = item["prompt"]
+    cut = p.find(marker)
+    if cut <= 0:
+        raise Stop(EXIT_BAD_INPUT, f"gate item {item.get('id')}: no problem statement before the program to fix")
+    return p[:cut]
+
+
 def version_group(problem_id, name):
     """The problem a gate problem is a version of: easy and hard versions of one Codeforces problem ("1561_D1. Up the
     Strip (simplified version)", "1561_D2. Up the Strip") share a label; any other problem is its own."""
@@ -187,12 +200,17 @@ def load_test_sets(extra=(), use_evalplus=True):
     nc = E.read_jsonl(E.NONCODING_PATH)
     if not gate or not nc:
         raise Stop(EXIT_BAD_INPUT, f"{E.GATE_PATH} or {E.NONCODING_PATH} is missing: run scripts/build_evalsets.py first")
-    statements = {}
+    statements, fix_only = {}, {}
     for g in gate:
         if "problem" not in g:  # the archived Python gate: one item per problem, a set per part
             sets.setdefault(f"gate-{g['kind']}", []).append((g["id"], g["prompt"]))
-        elif g["kind"] == "write":  # every problem has a write item; fix items add the wrong program, not a problem
+        elif g["kind"] == "write":  # the statement as the write items give it
             statements.setdefault(g["problem"], gate_statement(g))
+        elif g["kind"] == "fix":  # the same statement, followed by a wrong program
+            fix_only.setdefault(g["problem"], g)
+    for pid, g in fix_only.items():  # a problem the gate tests only through fix items is still a test problem
+        if pid not in statements:
+            statements[pid] = gate_fix_statement(g)
     if statements:
         sets["gate"] = sorted(statements.items())
     sets["mmlu-pro"] = [(q["id"], q["question"]) for q in nc]
