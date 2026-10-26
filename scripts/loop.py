@@ -820,12 +820,23 @@ class Loop(fr.Controller):
             gpath = os.path.join(self.rdir, f"gate.seed{gate_seed}.jsonl")
             npath = os.path.join(self.rdir, "noncoding.jsonl")
 
-            def gate_pass(order=None):
-                E.score(url, gate, gpath, gate_seed, g["max_tokens"], check, chat, ew.count_tokens, g["budget"],
-                        concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log, order=order,
-                        on_row=lambda r, n, tot, tps: (self.run.metric(stage="gate", round=self.rnum, done=n, of=tot,
-                                                                       tok_s=round(tps, 2)),
-                                                       self.status("evaluate", f"gate {n}/{tot}")))
+            def gate_spec(order=None):
+                return dict(items=gate, out_path=gpath, seed=gate_seed, max_tokens=g["max_tokens"], check=check,
+                            chat=chat, count_tokens=ew.count_tokens, budget=g["budget"], order=order,
+                            on_row=lambda r, n, tot, tps: (self.run.metric(stage="gate", round=self.rnum, done=n,
+                                                                           of=tot, tok_s=round(tps, 2)),
+                                                           self.status("evaluate", f"gate {n}/{tot}")))
+
+            def nc_spec(s):
+                return dict(items=nc, out_path=npath, seed=s, max_tokens=cfg["noncoding"]["max_tokens"],
+                            check=E.mc_check, chat=chat, count_tokens=ew.count_tokens, budget=g["budget"],
+                            on_row=lambda r, n, tot, tps: self.status("evaluate", f"non-coding seed {s}: {n}/{tot}"))
+
+            def gate_pass(order=None, then=()):
+                # 26 Oct 2026: the passes that always follow go through the same slots, so they start in slots the
+                # gate's last long answers would leave idle (evalsets.score_many); each answer is unchanged
+                E.score_many(url, [gate_spec(order)] + list(then), concurrency=gate_concurrency(cfg),
+                             stop_check=self.stopping, log=self.log)
 
             order = None
             if early:
@@ -847,12 +858,7 @@ class Loop(fr.Controller):
                     if chk["stop"]:
                         break
             if not out.get("early_reject"):
-                gate_pass(order)
-                for s in cfg["noncoding"]["seeds"]:
-                    E.score(url, nc, npath, s, cfg["noncoding"]["max_tokens"], E.mc_check, chat, ew.count_tokens,
-                            g["budget"], concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
-                            on_row=lambda r, n, tot, tps, s=s: self.status("evaluate",
-                                                                            f"non-coding seed {s}: {n}/{tot}"))
+                gate_pass(order, then=[nc_spec(s) for s in cfg["noncoding"]["seeds"]])
         finally:
             self.unserve()
         gate_rows = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]

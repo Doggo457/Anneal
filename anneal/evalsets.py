@@ -261,20 +261,36 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
     check, and sees the whole response (finish reason, tool calls). Each row keeps the answer and, since 22 Oct 2026,
     the reasoning, both whole (up to ANSWER_CHARS and REASONING_CHARS), so answers can be judged again later; neither
     affects the verdict."""
-    done = {(r["id"], r["seed"]) for r in read_jsonl(out_path)}
-    want = range(len(items)) if order is None else order
-    todo = [(i, items[i]) for i in want if (items[i]["id"], seed) not in done]
-    log(f"score: {len(want)} items" + ("" if order is None else f" (of {len(items)}, in a set order)")
-        + f", seed {seed}, {len(want) - len(todo)} done, {len(todo)} to do")
-    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    lock = threading.Lock()
-    t0, n_done, tok = time.time(), [0], [0]
+    return score_many(url, [dict(items=items, out_path=out_path, seed=seed, max_tokens=max_tokens, check=check,
+                                 chat=chat, count_tokens=count_tokens, budget=budget, on_row=on_row, order=order,
+                                 request=request, judge=judge)],
+                      concurrency=concurrency, stop_check=stop_check, log=log, request_retries=request_retries)[0]
 
-    def one(i, it):
+
+def score_many(url, passes, concurrency=4, stop_check=None, log=print, request_retries=1):
+    """Several score() passes through one set of `concurrency` requests (26 Oct 2026). Every item of a pass is handed
+    out before the first item of the next, so the next pass fills the slots that would otherwise sit idle while the
+    last, longest answers of a pass finish. Each pass is a dict of score()'s arguments: items, out_path, seed,
+    max_tokens, check, chat, count_tokens, budget, and optionally on_row, order, request and judge. A pass keeps its
+    own request seeds, file and progress count, so its rows are the ones score() alone would give: only when each
+    request starts changes. Returns each pass's rows of its seed (old and new), in the order of passes."""
+    P = [dict(p) for p in passes]
+    for p in P:
+        done = {(r["id"], r["seed"]) for r in read_jsonl(p["out_path"])}
+        items, seed, order = p["items"], p["seed"], p.get("order")
+        want = range(len(items)) if order is None else order
+        p["todo"] = [(i, items[i]) for i in want if (items[i]["id"], seed) not in done]
+        p["n_done"], p["tok"], p["t0"] = 0, 0, None
+        log(f"score: {len(want)} items" + ("" if order is None else f" (of {len(items)}, in a set order)")
+            + f", seed {seed}, {len(want) - len(p['todo'])} done, {len(p['todo'])} to do")
+        os.makedirs(os.path.dirname(os.path.abspath(p["out_path"])), exist_ok=True)
+    lock = threading.Lock()
+
+    def one(p, i, it):
         if stop_check and stop_check():
             raise Stopped()
         try:
-            return answer(i, it)
+            return answer(p, i, it)
         except Stopped:
             raise
         except Exception:
@@ -282,7 +298,8 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
                 raise Stopped()
             raise
 
-    def answer(i, it):
+    def answer(p, i, it):
+        request, chat, seed, max_tokens = p.get("request"), p["chat"], p["seed"], p["max_tokens"]
         message = None if request else it["prompt"] if "prompt" in it else mc_message(it)
         for attempt in range(1 + request_retries):
             try:
@@ -293,62 +310,75 @@ def score(url, items, out_path, seed, max_tokens, check, chat, count_tokens, bud
                 if (stop_check and stop_check()) or attempt == request_retries:
                     raise RuntimeError(f"request for {it['id']} failed: {type(exc).__name__}: {exc}") from exc
                 time.sleep(5)
-        n_reason = count_tokens(url, r["reasoning"]) if r["reasoning"] else 0
+        n_reason = p["count_tokens"](url, r["reasoning"]) if r["reasoning"] else 0
         verdict = None
-        if judge:
-            ok, verdict = judge(it, r)
+        if p.get("judge"):
+            ok, verdict = p["judge"](it, r)
             ok = bool(ok)
         elif r["finish_reason"] == "stop" and r["content"]:
-            res = check(it, r["content"])
+            res = p["check"](it, r["content"])
             ok, verdict = (bool(res[0]), res[1]) if isinstance(res, tuple) else (bool(res), None)
         else:
             ok = False
+        budget = p["budget"]
         row = {"id": it["id"], "seed": seed, "pass": ok, "finish_reason": r["finish_reason"],
-                "completion_tokens": r["completion_tokens"], "reasoning_tokens": n_reason,
-                "budget_hit": bool(budget) and n_reason >= 0.97 * budget, "seconds": r["seconds"],
-                "answer": (r.get("answer", r["content"]) or "")[:ANSWER_CHARS]}
+               "completion_tokens": r["completion_tokens"], "reasoning_tokens": n_reason,
+               "budget_hit": bool(budget) and n_reason >= 0.97 * budget, "seconds": r["seconds"],
+               "answer": (r.get("answer", r["content"]) or "")[:ANSWER_CHARS]}
         if r.get("reasoning"):  # 22 Oct 2026: kept to tell a wrong idea from running out of thinking
             row["reasoning"] = r["reasoning"][:REASONING_CHARS]
         if verdict is not None:
             row["verdict"] = verdict
         return row
 
-    with ThreadPoolExecutor(max(1, concurrency)) as pool, open(out_path, "a", encoding="utf-8") as fh:
-        pending = {}
-        it_todo = iter(todo)
-        exhausted = False
-        while True:
-            while not exhausted and len(pending) < concurrency:
-                try:
-                    i, it = next(it_todo)
-                except StopIteration:
-                    exhausted = True
+    files = {}
+    try:
+        for p in P:
+            key = os.path.abspath(p["out_path"])
+            if key not in files:
+                files[key] = open(p["out_path"], "a", encoding="utf-8")
+            p["fh"] = files[key]
+        with ThreadPoolExecutor(max(1, concurrency)) as pool:
+            pending = {}
+            it_todo = ((p, i, it) for p in P for i, it in p["todo"])
+            exhausted = False
+            while True:
+                while not exhausted and len(pending) < concurrency:
+                    try:
+                        p, i, it = next(it_todo)
+                    except StopIteration:
+                        exhausted = True
+                        break
+                    if p["t0"] is None:
+                        p["t0"] = time.time()
+                    pending[pool.submit(one, p, i, it)] = p
+                if not pending:
                     break
-                pending[pool.submit(one, i, it)] = it["id"]
-            if not pending:
-                break
-            finished, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for fut in finished:
-                pending.pop(fut)
-                try:
-                    row = fut.result()
-                except Stopped:
-                    exhausted = True
-                    continue
-                except Exception:
-                    for f in pending:
-                        f.cancel()
-                    raise
-                with lock:
-                    fh.write(json.dumps(row, ensure_ascii=False) + "\n")
-                    fh.flush()
-                    n_done[0] += 1
-                    tok[0] += row["completion_tokens"] or 0
-                if on_row:
-                    on_row(row, n_done[0], len(todo), tok[0] / max(time.time() - t0, 1e-9))
+                finished, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for fut in finished:
+                    p = pending.pop(fut)
+                    try:
+                        row = fut.result()
+                    except Stopped:
+                        exhausted = True
+                        continue
+                    except Exception:
+                        for f in pending:
+                            f.cancel()
+                        raise
+                    with lock:
+                        p["fh"].write(json.dumps(row, ensure_ascii=False) + "\n")
+                        p["fh"].flush()
+                        p["n_done"] += 1
+                        p["tok"] += row["completion_tokens"] or 0
+                    if p.get("on_row"):
+                        p["on_row"](row, p["n_done"], len(p["todo"]), p["tok"] / max(time.time() - p["t0"], 1e-9))
+    finally:
+        for fh in files.values():
+            fh.close()
     if stop_check and stop_check():
         raise Stopped()
-    return [r for r in read_jsonl(out_path) if r["seed"] == seed]
+    return [[r for r in read_jsonl(p["out_path"]) if r["seed"] == p["seed"]] for p in P]
 
 
 def gate_check(run_io_tests, run_assert_tests, extract_code, polyglot_judge=None):
