@@ -211,6 +211,25 @@ def test_six_language_gate_one_text_per_problem():
             sets = P.load_test_sets(use_evalplus=False)
             assert sets["gate"] == [("cc/test/1", st["cc/test/1"]), ("cc/valid/2", st["cc/valid/2"])], sets["gate"]
             assert sorted(sets) == ["gate", "mmlu-pro"], sorted(sets)
+            # the fixed 200 tests some problems only through fix items: their statement still counts, without the
+            # program; a problem with a write item keeps the write item's text
+            st["cc/test/3"] = "Paint the fence.\nThe fence has n boards."
+            E.write_jsonl(E.GATE_PATH, [
+                {"id": "fix/java/cc/test/3", "problem": "cc/test/3", "kind": "fix", "lang": "java",
+                 "prompt": PG.fix_prompt(st["cc/test/3"], "java", "class Main {}")},
+                {"id": "fix/cpp/cc/valid/2", "problem": "cc/valid/2", "kind": "fix", "lang": "cpp",
+                 "prompt": PG.fix_prompt(st["cc/valid/2"], "cpp", "int main(){}")},
+                {"id": "write/go/cc/valid/2", "problem": "cc/valid/2", "kind": "write", "lang": "go",
+                 "prompt": st["cc/valid/2"] + PG.write_suffix("go")}])
+            sets = P.load_test_sets(use_evalplus=False)
+            assert sets["gate"] == [("cc/test/3", st["cc/test/3"]), ("cc/valid/2", st["cc/valid/2"])], sets["gate"]
+            E.write_jsonl(E.GATE_PATH, [{"id": "fix/cpp/cc/test/4", "problem": "cc/test/4", "kind": "fix",
+                                         "lang": "cpp", "prompt": "int main(){}"}])
+            try:
+                P.load_test_sets(use_evalplus=False)
+                raise AssertionError("a fix item without a statement was accepted")
+            except P.Stop as exc:
+                assert exc.code == P.EXIT_BAD_INPUT, exc.code
             E.write_jsonl(E.GATE_PATH, [{"id": "cc/test/1", "kind": "cc", "prompt": "a"},
                                         {"id": "oci/x", "kind": "oci", "prompt": "b"}])
             sets = P.load_test_sets(use_evalplus=False)
