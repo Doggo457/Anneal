@@ -19,10 +19,10 @@ statement allows on real numbers. checker: anneal/gate_checkers.py's checker for
 is right. Problems not listed are compared exactly (YES/NO in any letter case: anneal/evalsets.case_match).
 
 A problem may also carry "added_tests": [{"input", "output", "why"}], hand-checked tests for a wrong method that passes
-every official test (26 Oct 2026: 1615H, where merging the worst-violating groups passes all 204 valid official tests
-but misses the minimum on a 6-reindeer input). They go after the official tests, so the 495's cases still come first;
-each must pass the validator (else the problem is refused), the judge's self-test and, with a checker, the accepted
-solutions, like any other test. The card counts them.
+every official test (26 Oct 2026: 1615H, where merging the worst-violating groups passes all 93 official tests within
+the statement's limits, and 204 of its 205 in all, but misses the minimum on a 6-reindeer input). They go after the
+official tests, so the 495's cases still come first; each must pass the validator (else the problem is refused), the
+judge's self-test and, with a checker, the accepted solutions, like any other test. The card counts them.
 
 A problem is fit when, after setting tests aside, at least 30 remain, its judge accepts the expected output of every
 test, and, with a checker, no test has 2 or more of its accepted solutions (up to 3: C++ first, then Java, as the
