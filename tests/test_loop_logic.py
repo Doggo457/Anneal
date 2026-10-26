@@ -8,6 +8,8 @@ later rounds inherit, the two-pass round when the pools run short, and the wait 
 """
 
 import collections
+import copy
+import glob
 import hashlib
 import json
 import math
@@ -1696,9 +1698,10 @@ def test_cweval_harness():
 
 def test_gate_slots():
     """21 Oct 2026: the gate server's slot count comes from loop.yaml (gate.slots), one request in flight per slot,
-    and is recorded with the loop's first scores: a later change waits, and so does a loop whose gate answers came from
-    4 slots before it was recorded, until they are set aside. A prompt that can't fit a slot with a whole answer
-    waits too. EvalPlus keeps the first run's 4 slots. A pause that stops the server under answers in flight stops the
+    and is recorded with the loop's first scores. 26 Oct 2026: a later change of slots or cache size (also from the 4
+    slots of answers scored before it was recorded) is logged in state["gate_server_changes"] with the gate rows
+    scored before it, and the loop goes on; any other gate setting still waits. A prompt that can't fit a slot with a
+    whole answer waits. EvalPlus keeps the first run's 4 slots. A pause that stops the server under answers in flight stops the
     pass; it is not a failure."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     before = world_patches()
@@ -1725,14 +1728,17 @@ def _gate_slots(tmp):
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
-    # gate answers from before the slot count was recorded (so from 4 slots): the loop waits
+    # gate answers from before the slot count was recorded (so from 4 slots): logged as a change, no wait
     r0 = os.path.join(run_dir, "rounds", "r000", "gate.seed1.jsonl")
     os.makedirs(os.path.dirname(r0))
     E.write_jsonl(r0, [{"id": "write/cpp/cc/valid/0", "seed": 1, "pass": True}])
-    assert run_main(args) == 0
-    assert status()["state"] == "waiting" and "scored with 4" in status()["detail"], status()
-    assert "gate_server" not in state() and not w.served
-    # set aside: round 0 is scored on 8 slots and that is recorded
+    logs = []
+    stub = types.SimpleNamespace(state={}, dir=run_dir, save=lambda: None, log=logs.append)
+    L.Loop.require_gate_server(stub, L.load_config(cpath))
+    ch = stub.state["gate_server_changes"]
+    assert len(ch) == 1 and ch[0]["slots"] == [4, 8] and ch[0]["rows_scored_before"] == 1 and "ctx" not in ch[0], ch
+    assert stub.state["gate_server"]["slots"] == 8 and "8 slots from now on (was 4 slots" in logs[-1], logs
+    # set aside: round 0 is scored on 8 slots and that is recorded, with no change
     os.rename(r0, r0 + ".4-slots")
     assert run_main(args) == 0, status()
     assert state()["gate_server"] == {"slots": 8, "ctx": 262144, "build": "b11435-vulkan", "spec": None,
@@ -1747,12 +1753,28 @@ def _gate_slots(tmp):
     assert L.gate_concurrency({"gate": {}}) == 4 and L.gate_server({"gate": {}})["slots"] == 4
     flags = L.llama.scoring_flags()  # the first run's and EvalPlus's server
     assert flags[flags.index("-np") + 1] == "4" and flags[flags.index("-c") + 1] == "262144"
-    # a later change of slot count waits
-    cfg["gate"]["slots"] = 4
-    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
-    n = len(w.served)
-    assert run_main(args) == 0
-    assert status()["state"] == "waiting" and "scored with 8" in status()["detail"] and len(w.served) == n, status()
+    assert "gate_server_changes" not in state()
+    # a later change of slot count and cache size goes on, logged with the rows scored before it
+    rows = sum(len(E.read_jsonl(p)) for p in glob.glob(os.path.join(run_dir, "rounds", "r*", "gate.seed*.jsonl")))
+    assert rows
+    logs = []
+    stub = types.SimpleNamespace(state=state(), dir=run_dir, save=lambda: None, log=logs.append)
+    c2 = copy.deepcopy(cfg)
+    c2["gate"]["slots"], c2["gate"]["ctx"] = 5, 5 * 52428
+    L.Loop.require_gate_server(stub, c2)
+    ch = stub.state["gate_server_changes"]
+    assert ch[-1]["slots"] == [8, 5] and ch[-1]["ctx"] == [262144, 262140] and ch[-1]["rows_scored_before"] == rows
+    assert stub.state["gate_server"]["slots"] == 5 and stub.state["gate_server"]["ctx"] == 262140
+    # any other change still waits, naming only what is not slots or cache
+    for key, val, words in (("budget", 32768, "32768-token thinking budget"), ("max_tokens", 40960, "40960 tokens")):
+        c3 = copy.deepcopy(c2)
+        c3["gate"][key], c3["gate"]["slots"] = val, 8
+        try:
+            L.Loop.require_gate_server(types.SimpleNamespace(state=dict(stub.state), dir=run_dir, save=lambda: None,
+                                                             log=logs.append), c3)
+            raise AssertionError(f"a {key} change went on")
+        except L.Waiting as exc:
+            assert words in str(exc) and "slots" not in str(exc), exc
     # the room check: each of 8 slots holds 32,768 tokens; prompt + 64 + max_tokens must fit
     logs = []
     stub = types.SimpleNamespace(log=logs.append)

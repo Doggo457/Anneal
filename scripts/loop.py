@@ -139,6 +139,10 @@ GATE_SERVER_ADDED = {"build": llama.DEFAULT_BUILD, "spec": None, "budget": 16384
                      "budget_message": None, "nc_max_tokens": 20480, "gpu_driver": llama.LEGACY_GPU_DRIVER}
 LEGACY_GATE_SERVER = dict(GATE_SERVER_ADDED, slots=4, ctx=llama.SCORING_CTX)
 PROMPT_MARGIN = 64
+# Slots and cache size (26 Oct 2026) only set how many answers the gate server runs at once: slot_room_check still
+# makes every prompt with a whole answer fit one slot, and budgets, sampling, build and driver must still match, so a
+# change to these two alone is recorded in state["gate_server_changes"] rather than stopping the loop.
+BATCH_ONLY = ("slots", "ctx")
 TOOLS_MARGIN = 512  # a no-worse check's tool-calling instructions around its tools' JSON (chat template), generous
 
 
@@ -888,7 +892,9 @@ class Loop(fr.Controller):
         noncoding: max_tokens, 22 Oct 2026) on the same graphics driver (22 Oct 2026): answers differ with them, so a
         change part way would compare rounds scored differently. Recorded at the first check; rows scored before it
         was recorded came from LEGACY_GATE_SERVER's settings, and before the driver was recorded from
-        llama.LEGACY_GPU_DRIVER. Raises Waiting on a change, or when the build's llama-server is missing."""
+        llama.LEGACY_GPU_DRIVER. Raises Waiting on a change, or when the build's llama-server is missing. Slots and
+        cache size (BATCH_ONLY) may change part way (26 Oct 2026: 8 at once from part way through the base pass):
+        each such change goes in state["gate_server_changes"] with the gate rows scored before it."""
         want = gate_server(cfg)
         known = self.state.get("gate_server")
         if known is None:
@@ -897,8 +903,8 @@ class Loop(fr.Controller):
             known = dict(LEGACY_GATE_SERVER) if scored else want
         else:
             known = dict(GATE_SERVER_ADDED, **known)
-        if known != want:
-            diff = [k for k in want if known.get(k) != want[k]]
+        diff = [k for k in want if known.get(k) != want[k] and k not in BATCH_ONLY]
+        if diff:
             raise Waiting(f"experiments/loop.yaml and this PC ask for a gate server with "
                           f"{describe_gate_server(want, diff)}, but the rounds so far were scored with "
                           f"{describe_gate_server(known, diff)}: put loop.yaml's gate settings"
@@ -908,6 +914,14 @@ class Loop(fr.Controller):
         if want["build"] != llama.DEFAULT_BUILD and not os.path.exists(binary):
             raise Waiting(f"loop.yaml's gate.build is {want['build']}, but {binary} is missing")
         if self.state.get("gate_server") != want:
+            moved = {k: [known.get(k), want[k]] for k in BATCH_ONLY if known.get(k) != want[k]}
+            if moved:
+                rows = sum(len(E.read_jsonl(p))
+                           for p in glob.glob(os.path.join(self.dir, "rounds", "r*", "gate.seed*.jsonl")))
+                self.state.setdefault("gate_server_changes", []).append(
+                    {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "rows_scored_before": rows, **moved})
+                self.log(f"gate server: {describe_gate_server(want, list(moved))} from now on (was "
+                         f"{describe_gate_server(known, list(moved))}; {rows} gate rows scored before)")
             self.state["gate_server"] = want
             self.save()
 
