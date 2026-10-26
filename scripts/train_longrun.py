@@ -29,6 +29,8 @@ Long-run config keys (defaults in brackets):
   warm_up_longest_row: [true]  one forward + backward on the longest row before step 1 (gradients dropped)
   ce_target_gb: []             fixed memory budget for Unsloth's fused cross entropy (UNSLOTH_CE_LOSS_TARGET_GB)
   mem_debug: [false]           log memory just before the loss in every forward
+  sdpa_probe, sdpa_contiguous, blas_backend, profile_steps, profile_warmup: speed checks, all off by default
+                               (anneal/train_probe.py)
   init_adapter: []             start the LoRA from a saved adapter folder instead of fresh weights (the improvement
                                loop continues its best adapter). Same r, lora_alpha and target modules required; every
                                tensor is checked equal after loading. Ignored once a checkpoint exists (resume wins).
@@ -250,6 +252,8 @@ def main():
     p.add_argument("--resume", action="store_true", help="accepted for the Training page; resuming is automatic")
     p.add_argument("--max-steps", type=int, default=None, help="override max_steps (dry runs)")
     p.add_argument("--stop-at-step", type=int, default=None, help="tests: create STOP at this step (pause + checkpoint)")
+    p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                   help="override one config key (YAML value), e.g. --set sdpa_probe=true; repeatable")
     args = p.parse_args()
 
     with open(args.config, encoding="utf-8") as f:
@@ -260,6 +264,11 @@ def main():
         cfg["run_name"] = cfg["run_name"] + "-smoke"
     if args.max_steps:
         cfg["max_steps"] = args.max_steps
+    for item in args.set:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            raise SystemExit(f"--set wants KEY=VALUE, got {item!r}")
+        cfg[key.strip()] = yaml.safe_load(value)
     run_dir = args.run_dir or os.path.join(RESULTS_DIR, cfg["run_name"])
     ckpt_dir = os.path.join(run_dir, "checkpoints")
     os.makedirs(ckpt_dir, exist_ok=True)
@@ -327,6 +336,10 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             f.write(digest + "\n")
 
     engine = cfg.get("engine", "unsloth")
+    from anneal import train_probe  # noqa: E402  (imports torch only when a switch below is on)
+    # Before Unsloth and transformers, so a module that copies the function by name gets the wrapper too.
+    sdpa = train_probe.install_sdpa(contiguous=bool(cfg.get("sdpa_contiguous", False)),
+                                    probe=bool(cfg.get("sdpa_probe", False)))
     if cfg.get("ce_target_gb"):
         # Unsloth sizes its fused cross-entropy chunks from half the free device memory (read at import time).
         os.environ["UNSLOTH_CE_LOSS_TARGET_GB"] = str(cfg["ce_target_gb"])
@@ -344,6 +357,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
 
     from anneal.data import MaskStats, print_sample  # noqa: E402
 
+    blas = train_probe.blas_report(cfg.get("blas_backend")) if torch.cuda.is_available() else None
     set_seed(int(cfg.get("seed", 42)))  # before the adapter is created, so its initial weights are reproducible
 
     load_in_4bit = bool(cfg.get("load_in_4bit", True))
@@ -551,9 +565,28 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         report_to="none",
     )
     counter = StepCounter(None, accum)
+    profile = None
+    if int(cfg.get("profile_steps", 0) or 0) > 0:
+        profile = train_probe.Profile(run_dir, warmup=int(cfg.get("profile_warmup", 1)),
+                                      active=int(cfg["profile_steps"]))
+
+    class Profiling(TrainerCallback):
+        """profile_steps: starts after the warm-up row (LongRun.on_train_begin runs first) and steps with the
+        optimizer."""
+
+        def on_train_begin(self, a, state, control, **kw):
+            profile.start()
+
+        def on_step_end(self, a, state, control, **kw):
+            profile.step()
+
+        def on_train_end(self, a, state, control, **kw):
+            profile.stop()
+
     # LongRun first: with --stop-at-step it creates STOP before the run-contract callback looks for it.
+    callbacks = [LongRun(), trainer_callback(run, step_tokens=counter.step_tokens)] + ([Profiling()] if profile else [])
     trainer = SFTTrainer(model=model, processing_class=text_tok, train_dataset=train_ds, eval_dataset=eval_ds,
-                         args=targs, callbacks=[LongRun(), trainer_callback(run, step_tokens=counter.step_tokens)])
+                         args=targs, callbacks=callbacks)
     collated = check_collated_mask(trainer, rows)
     if not collated["labels_match_helper"]:
         raise RuntimeError("the trainer's labels are not encode_chat's loss mask (see collated batch check)")
@@ -585,6 +618,9 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         "metrics": result.metrics,
         "data_sha256": digest,
         "init_adapter": init_report,
+        "blas": blas,
+        "sdpa": sdpa.as_dict() if sdpa else None,
+        "profile": profile.result if profile else None,
     }
     if not stopped_early:
         adapter_dir = os.path.join(summary_dir, "adapter")
