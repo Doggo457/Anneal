@@ -76,11 +76,14 @@ def test_sdpa_probe_and_contiguous_same_values():
     try:
         rep = T.install_sdpa(contiguous=True, probe=True, log=logs.append)
         got = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
+        wrapped_doc = F.scaled_dot_product_attention.__doc__
+        wrapped_name = F.scaled_dot_product_attention.__name__
         again = F.scaled_dot_product_attention(q.contiguous(), k.contiguous(), v.contiguous(), is_causal=True)
     finally:
         F.scaled_dot_product_attention = original
         torch.nn.functional.scaled_dot_product_attention = original
     assert torch.allclose(got, want, atol=1e-6, rtol=1e-5)
+    assert wrapped_doc == original.__doc__ and wrapped_name == original.__name__
     d = rep.as_dict()
     assert d["calls"] == 2 and d["calls_with_a_copy"] == 1
     assert d["first_call"]["query"]["contiguous"] is False
@@ -88,6 +91,37 @@ def test_sdpa_probe_and_contiguous_same_values():
     assert d["first_call"]["kwargs"] == {"is_causal": True}
     assert again.shape == got.shape
     assert any("first call" in x for x in logs)
+
+
+def test_sdpa_wrapper_keeps_doc_and_name():
+    """Unsloth checks "enable_gqa" in F.scaled_dot_product_attention.__doc__ at import, so the wrapper must carry the
+    original's docstring and name. Runs on a stand-in torch module, so it needs no torch install."""
+    import types
+    keys = ("torch", "torch.nn", "torch.nn.functional")
+    saved = {k: sys.modules.get(k) for k in keys}
+
+    def sdpa(query, key, value, attn_mask=None, enable_gqa=False):
+        """scaled_dot_product_attention(query, key, value, ..., enable_gqa=False) -> Tensor"""
+        return query
+
+    torch = types.ModuleType("torch")
+    torch.nn = types.ModuleType("torch.nn")
+    torch.nn.functional = types.ModuleType("torch.nn.functional")
+    torch.nn.functional.scaled_dot_product_attention = sdpa
+    torch.is_grad_enabled = lambda: False
+    try:
+        sys.modules.update({"torch": torch, "torch.nn": torch.nn, "torch.nn.functional": torch.nn.functional})
+        T.install_sdpa(contiguous=False, probe=True, log=lambda *_: None)
+        w = torch.nn.functional.scaled_dot_product_attention
+        assert w is not sdpa and w._anneal_wrapped and w.__wrapped__ is sdpa
+        assert w.__doc__ == sdpa.__doc__ and "enable_gqa" in w.__doc__
+        assert w.__name__ == "sdpa" and w.__module__ == sdpa.__module__
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                sys.modules.pop(k, None)
+            else:
+                sys.modules[k] = v
 
 
 def test_sdpa_double_wrap_refused():
