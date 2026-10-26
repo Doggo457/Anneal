@@ -18,6 +18,12 @@ SPEC (JSON): {"items": [the 200 item ids], "problems": {CF: {"tol": 1e-4} or {"c
 statement allows on real numbers. checker: anneal/gate_checkers.py's checker for a problem where more than one output
 is right. Problems not listed are compared exactly (YES/NO in any letter case: anneal/evalsets.case_match).
 
+A problem may also carry "added_tests": [{"input", "output", "why"}], hand-checked tests for a wrong method that passes
+every official test (26 Oct 2026: 1615H, where merging the worst-violating groups passes all 204 valid official tests
+but misses the minimum on a 6-reindeer input). They go after the official tests, so the 495's cases still come first;
+each must pass the validator (else the problem is refused), the judge's self-test and, with a checker, the accepted
+solutions, like any other test. The card counts them.
+
 A problem is fit when, after setting tests aside, at least 30 remain, its judge accepts the expected output of every
 test, and, with a checker, no test has 2 or more of its accepted solutions (up to 3: C++ first, then Java, as the
 eligibility table) rejected by the checker (one rejected solution is that solution's bug: the other two back the
@@ -47,6 +53,7 @@ from anneal import evalsets as E  # noqa: E402
 MIN_TESTS = 30
 REFS = 3
 SPEC_KEYS = {"tol", "checker"}
+ADDED_KEY = "added_tests"
 CC_COLUMNS = ["name", "public_tests", "private_tests", "generated_tests", "solutions"]
 CC_LANG = {2: "cpp", 4: "java"}
 
@@ -100,19 +107,23 @@ def is_valid(validate, text):
         return False
 
 
-def check_problem(cf, row, jspec, validate, ex=None, tc=None):
-    """-> (report, kept cases). report["fit"] says whether the problem can be in the 200 (module docstring)."""
+def check_problem(cf, row, jspec, validate, ex=None, tc=None, added=()):
+    """-> (report, kept cases). report["fit"] says whether the problem can be in the 200 (module docstring). added:
+    the problem's hand-checked (input, output) tests, kept after the official ones."""
     full = full_cases(row)
     flags = [is_valid(validate, i) for i, _, _ in full]
     official_bad = [k for k, (_, _, gen) in enumerate(full) if not gen and not flags[k]]
     aside = [k for k, (_, _, gen) in enumerate(full) if gen and not flags[k]]
+    added_bad = [k for k, (i, _) in enumerate(added) if not is_valid(validate, i)]
     drop = set(aside)
-    kept = [(i, o) for k, (i, o, _) in enumerate(full) if k not in drop]
+    kept = [(i, o) for k, (i, o, _) in enumerate(full) if k not in drop] + [(i, o) for i, o in added]
     match = E.case_match({"judge": jspec})
     expected_rejected = [k for k, (i, o) in enumerate(kept) if not match(i, o, o)]
     rep = {"tests": len(full), "official": sum(not g for _, _, g in full), "set_aside": aside, "kept": len(kept),
            "official_invalid": official_bad[:20], "expected_rejected": expected_rejected[:20]}
-    if jspec.get("checker") and ex is not None and not official_bad and not expected_rejected:
+    if added:
+        rep.update(added=len(added), added_invalid=added_bad)
+    if jspec.get("checker") and ex is not None and not official_bad and not added_bad and not expected_rejected:
         from anneal import polyglot as P
         per_test, refs = collections.Counter(), []
         for lang, code in refs_of(row):
@@ -126,6 +137,7 @@ def check_problem(cf, row, jspec, validate, ex=None, tc=None):
         rep["tests_two_refs_rejected"] = sorted(k for k, c in per_test.items() if c >= 2)[:20]
         rep["refs_ran"] = sum(r["stage"] != "compile_error" for r in refs)
     why = ("public or private tests fail the validator" if official_bad
+           else "an added test fails the validator" if added_bad
            else f"{len(kept)} tests left (under {MIN_TESTS})" if len(kept) < MIN_TESTS
            else "the judge rejects expected outputs" if expected_rejected
            else "checker not tested on the accepted solutions (no executor)" if jspec.get("checker") and ex is None
@@ -165,7 +177,7 @@ def trim_refs(sols):
 def read_problems(spec):
     probs = spec.get("problems") or {}
     for cf, p in probs.items():
-        if set(p) - SPEC_KEYS:
+        if set(p) - SPEC_KEYS - {ADDED_KEY}:
             raise SystemExit(f"{cf}: unknown spec keys {sorted(set(p) - SPEC_KEYS)}")
         if p.get("tol") is not None and not (isinstance(p["tol"], float) and 0 < p["tol"] < 1):
             raise SystemExit(f"{cf}: tol must be a number between 0 and 1, got {p['tol']!r}")
@@ -178,6 +190,20 @@ def read_problems(spec):
         if absent:
             raise SystemExit(f"no checker in anneal/gate_checkers.py for {absent}")
     return {cf: {k: p[k] for k in SPEC_KEYS if p.get(k) is not None} for cf, p in probs.items()}
+
+
+def read_added(spec):
+    """{CF: [(input, output)]} from each problem's "added_tests" (module docstring)."""
+    out = {}
+    for cf, p in (spec.get("problems") or {}).items():
+        tests = p.get(ADDED_KEY) or []
+        for t in tests:
+            if not (isinstance(t, dict) and set(t) == {"input", "output", "why"} and
+                    all(isinstance(t[k], str) and t[k].strip() for k in t)):
+                raise SystemExit(f"{cf}: each added test needs a non-empty input, output and why, got {t!r}")
+        if tests:
+            out[cf] = [(t["input"], t["output"]) for t in tests]
+    return out
 
 
 def problems_of(gate):
@@ -196,13 +222,16 @@ def row_for(cf, its, cc_rows):
     return row
 
 
-def run_checks(cfs, by_cf, probs, cc_rows, vdir, ex, tc, parallel, log):
+def run_checks(cfs, by_cf, probs, cc_rows, vdir, ex, tc, parallel, log, added=None):
     """{CF: (report, kept)} for each problem in cfs, `parallel` at a time."""
+    added = added or {}
+
     def one(cf):
         validate, vsha = load_validator(vdir, cf)
         if validate is None:
             return cf, ({"fit": False, "why": f"no validator {cf}.py"}, [])
-        rep, kept = check_problem(cf, row_for(cf, by_cf[cf], cc_rows), probs.get(cf, {}), validate, ex, tc)
+        rep, kept = check_problem(cf, row_for(cf, by_cf[cf], cc_rows), probs.get(cf, {}), validate, ex, tc,
+                                  added.get(cf, ()))
         rep["validator_sha256"] = vsha
         log(f"{cf}: {'fit' if rep['fit'] else 'NOT fit: ' + rep['why']}; {rep['kept']} of {rep['tests']} tests kept, "
             f"{len(rep['set_aside'])} set aside" + (f"; refs {rep['refs']}" if "refs" in rep else ""))
@@ -217,7 +246,7 @@ def check(gate, spec, cc_rows, vdir, ex, tc, parallel=2, log=print):
     unknown = sorted(cf for cf in probs if cf not in by_cf)
     if unknown:
         raise SystemExit(f"not in the gate: {unknown}")
-    res = run_checks(set(probs), by_cf, probs, cc_rows, vdir, ex, tc, parallel, log)
+    res = run_checks(set(probs), by_cf, probs, cc_rows, vdir, ex, tc, parallel, log, read_added(spec))
     return {cf: rep for cf, (rep, _) in res.items()}
 
 
@@ -230,10 +259,13 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
     missing = [i for i in ids if i not in in_gate]
     if missing:
         raise SystemExit(f"{len(missing)} spec items aren't in the gate: {missing[:5]}")
-    probs = read_problems(spec)
+    probs, added = read_problems(spec), read_added(spec)
     want = set(ids)
     chosen = [it for it in gate if it["id"] in want]  # the 495's order: item i keeps its place among the 200
     by_cf = problems_of(chosen)
+    stray = sorted(cf for cf in added if cf not in by_cf)
+    if stray:
+        raise SystemExit(f"added tests for problems not in the 200: {stray}")
     for cf, its in by_cf.items():
         row = row_for(cf, its, cc_rows)
         full = full_cases(row)
@@ -242,7 +274,7 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
             if [(i, o) for i, o, _ in full[:len(have)]] != have:
                 raise SystemExit(f"{it['id']}: its 495 cases aren't the first of {cf}'s full test set (revision or "
                                  "order differs)")
-    res = run_checks(set(by_cf), by_cf, probs, cc_rows, vdir, ex, tc, parallel, log)
+    res = run_checks(set(by_cf), by_cf, probs, cc_rows, vdir, ex, tc, parallel, log, added)
     unfit = sorted(f"{cf}: {rep['why']}" for cf, (rep, _) in res.items() if not rep["fit"])
     if unfit:
         raise SystemExit("not built; unfit problems:\n  " + "\n  ".join(unfit))
@@ -267,6 +299,8 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
             new = {k: v for k, v in it.items() if k != "cases"}
             new.update(cases_file=f"{rel_dir}/{cf}.json", cases_sha256=sha, n_cases=len(kept),
                        n_cases_full=rep["tests"], set_aside=rep["set_aside"], judge=jspec)
+            if rep.get("added"):
+                new["n_cases_added"] = rep["added"]  # the last n_cases_added of n_cases are hand-checked
             items.append(new)
     order = {it["id"]: k for k, it in enumerate(gate)}
     items.sort(key=lambda it: order[it["id"]])
@@ -277,6 +311,7 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
             "tests": sum(v["kept"] for v in card_p.values()),
             "tests_set_aside": sum(len(v["set_aside"]) for v in card_p.values()),
             "problems_with_tests_set_aside": sum(bool(v["set_aside"]) for v in card_p.values()),
+            "tests_added": {cf: v["added"] for cf, v in card_p.items() if v.get("added")},
             "checkers": sorted(cf for cf, v in card_p.items() if "checker" in v["judge"]), "checkers_sha256": ck_sha,
             "tolerance": {cf: v["judge"]["tol"] for cf, v in card_p.items() if "tol" in v["judge"]},
             "per_problem": card_p}
@@ -286,7 +321,10 @@ def build(gate, spec, cc_rows, vdir, out_dir, ex=None, tc=None, parallel=2, log=
          f"Built {card['built']} by scripts/build_gate200.py from the 495-item gate: {len(items)} items on "
          f"{len(card_p)} problems, judged on their full CodeContests test sets: {card['tests']} tests, after "
          f"{card['tests_set_aside']} generated tests on {card['problems_with_tests_set_aside']} problems were set aside "
-         "because their input breaks the statement's limits (each problem's input validator).", "",
+         "because their input breaks the statement's limits (each problem's input validator)"
+         + ("" if not card["tests_added"] else "; the total includes " + ", ".join(
+             f"{n} hand-checked test{'s' * (n > 1)} added to {cf}" for cf, n in sorted(card["tests_added"].items()))
+            + " (a wrong method passed every official test there)") + ".", "",
          "| Kind / language | Items |", "|---|---|"]
     L += [f"| {k} | {v} |" for k, v in sorted(card["by_kind_language"].items())]
     L += ["", "Judging: output token by token; YES and NO in any letter case; numbers exact except where the statement "
