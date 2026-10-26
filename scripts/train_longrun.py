@@ -337,6 +337,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
 
     engine = cfg.get("engine", "unsloth")
     from anneal import train_probe  # noqa: E402  (imports torch only when a switch below is on)
+    blas_expect = train_probe.prefer_blas(cfg.get("blas_backend"))  # before anything imports torch
     # Before Unsloth and transformers, so a module that copies the function by name gets the wrapper too.
     sdpa = train_probe.install_sdpa(contiguous=bool(cfg.get("sdpa_contiguous", False)),
                                     probe=bool(cfg.get("sdpa_probe", False)))
@@ -357,7 +358,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
 
     from anneal.data import MaskStats, print_sample  # noqa: E402
 
-    blas = train_probe.blas_report(cfg.get("blas_backend")) if torch.cuda.is_available() else None
+    blas = train_probe.blas_report(cfg.get("blas_backend"), blas_expect) if torch.cuda.is_available() else None
     set_seed(int(cfg.get("seed", 42)))  # before the adapter is created, so its initial weights are reproducible
 
     load_in_4bit = bool(cfg.get("load_in_4bit", True))

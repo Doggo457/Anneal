@@ -231,6 +231,47 @@ def test_sdpa_double_wrap_refused():
         F.scaled_dot_product_attention = original
 
 
+def test_prefer_blas_sets_the_switch_before_torch():
+    """On Windows builds torch.backends.cuda.preferred_blas_library(x) changes nothing, so the choice goes through
+    TORCH_BLAS_PREFER_HIPBLASLT before torch is imported, and is refused once torch is loaded."""
+    env = {}
+    assert T.prefer_blas(None, env, {}) is None and env == {}
+    assert T.prefer_blas("hipBLASLt", env, {}) == "Cublaslt" and env == {"TORCH_BLAS_PREFER_HIPBLASLT": "1"}
+    assert T.prefer_blas("hipblas", env, {}) == "Cublas" and env == {"TORCH_BLAS_PREFER_HIPBLASLT": "0"}
+    for bad, modules in (("tensile", {}), ("hipblaslt", {"torch": object()})):
+        try:
+            T.prefer_blas(bad, {}, modules)
+            raise AssertionError(f"{bad} accepted")
+        except (ValueError, RuntimeError):
+            pass
+
+
+def test_blas_report_stops_when_the_library_was_not_switched():
+    """A void A/B (asked for hipBLASLt, ran on hipBLAS) must stop the run, not report a speed."""
+    import types
+
+    def body(torch, sdpa, seen):
+        state = {"lib": "_BlasBackend.Cublas"}
+        torch.version = types.SimpleNamespace(hip="7.14")
+        torch.backends = types.SimpleNamespace(cuda=types.SimpleNamespace(preferred_blas_library=lambda: state["lib"]))
+        out = T.blas_report(None, None, log=lambda *_: None)
+        assert out["in_use"] == "_BlasBackend.Cublas" and out["requested"] is None
+        try:
+            T.blas_report("hipblaslt", "Cublaslt", log=lambda *_: None)
+            raise AssertionError("library mismatch not caught")
+        except RuntimeError:
+            pass
+        state["lib"] = "_BlasBackend.Cublaslt"
+        assert T.blas_report("hipblaslt", "Cublaslt", log=lambda *_: None)["in_use"].endswith("Cublaslt")
+        try:
+            T.blas_report("hipblas", "Cublas", log=lambda *_: None)
+            raise AssertionError("Cublaslt accepted as Cublas")
+        except RuntimeError:
+            pass
+
+    _with_fake_torch(body)
+
+
 def _write_run(folder, secs, losses, tokens=24000, reserved=27.5):
     os.makedirs(folder, exist_ok=True)
     with open(os.path.join(folder, "metrics.jsonl"), "w", encoding="utf-8") as f:

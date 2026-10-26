@@ -7,8 +7,10 @@ All of it is off unless a config key turns it on (scripts/train_longrun.py):
                             import-time self-test), and a count of long calls per memory layout
   sdpa_contiguous: [false]  make q, k and v contiguous before scaled_dot_product_attention. A contiguous copy holds the
                             same values, so results change only by kernel choice (rounding-level), never by data
-  blas_backend: []          torch.backends.cuda.preferred_blas_library(...) after Unsloth is imported ("hipblaslt",
-                            "cublas", ...). Unsloth's RDNA default is otherwise kept and reported
+  blas_backend: []          the BLAS library: "hipblaslt" or "hipblas" (CUDA names "cublaslt" / "cublas" too). Set
+                            through TORCH_BLAS_PREFER_HIPBLASLT before torch is imported, because torch reads it once
+                            and torch.backends.cuda.preferred_blas_library(x) changes nothing on Windows builds. The
+                            run stops if torch then reports another library. Unset: Unsloth's RDNA default is kept
   profile_steps: [0]        torch.profiler over this many optimizer steps after profile_warmup [1] steps; writes
                             profile_table.txt and profile.json to the run folder
 
@@ -19,6 +21,7 @@ import functools
 import json
 import os
 import re
+import sys
 import time
 
 # Kinds of GPU work for the profile split. The first pattern that matches a kernel or op name wins, so the more
@@ -135,21 +138,44 @@ def install_sdpa(contiguous=False, probe=False, log=print):
     return rep
 
 
-def blas_report(set_backend=None, log=print):
-    """Optionally pick the BLAS library, then report the one in use and the environment switch Unsloth reads."""
+# blas_backend -> (TORCH_BLAS_PREFER_HIPBLASLT value, the library torch then reports)
+BLAS_CHOICES = {"hipblaslt": ("1", "Cublaslt"), "cublaslt": ("1", "Cublaslt"),
+                "hipblas": ("0", "Cublas"), "rocblas": ("0", "Cublas"), "cublas": ("0", "Cublas")}
+
+
+def prefer_blas(backend, environ=None, modules=None):
+    """Choose the BLAS library before torch is imported. torch reads TORCH_BLAS_PREFER_HIPBLASLT once, when it sets up
+    its context (aten/src/ATen/Context.cpp); on Windows builds torch.backends.cuda.preferred_blas_library(x) only
+    warns, and Unsloth sets the variable only when it is unset. -> the library torch should then report, or None."""
+    if not backend:
+        return None
+    environ = os.environ if environ is None else environ
+    modules = sys.modules if modules is None else modules
+    key = str(backend).strip().lower()
+    if key not in BLAS_CHOICES:
+        raise ValueError(f"blas_backend {backend!r}: use one of {', '.join(sorted(BLAS_CHOICES))}")
+    if "torch" in modules:
+        raise RuntimeError("blas_backend must be applied before torch is imported (torch reads it only once)")
+    value, expect = BLAS_CHOICES[key]
+    environ["TORCH_BLAS_PREFER_HIPBLASLT"] = value
+    return expect
+
+
+def blas_report(requested=None, expect=None, log=print):
+    """Report the BLAS library in use and the environment switch; stop if it is not the one prefer_blas chose."""
     import torch
 
     out = {"env_TORCH_BLAS_PREFER_HIPBLASLT": os.environ.get("TORCH_BLAS_PREFER_HIPBLASLT"),
-           "hip": getattr(torch.version, "hip", None), "requested": set_backend}
+           "hip": getattr(torch.version, "hip", None), "requested": requested}
     try:
-        if set_backend:
-            torch.backends.cuda.preferred_blas_library(set_backend)
         out["in_use"] = str(torch.backends.cuda.preferred_blas_library())
     except Exception as exc:  # noqa: BLE001  (an older build or a CPU-only test)
         out["error"] = f"{type(exc).__name__}: {exc}"
-        if set_backend:
+        if expect:
             raise
     log(f"BLAS library: {out}")
+    if expect and out["in_use"].rsplit(".", 1)[-1] != expect:
+        raise RuntimeError(f"blas_backend {requested!r} asked for {expect}, but torch uses {out['in_use']}")
     return out
 
 
