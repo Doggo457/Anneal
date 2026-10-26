@@ -356,6 +356,57 @@ def test_score_resumes_and_stops():
         assert len(r2) == 8 and len(E.read_jsonl(out)) == 16
 
 
+def test_score_many_fills_idle_slots():
+    """26 Oct 2026: the next pass starts in slots the last long answers of a pass leave idle; rows as score() alone."""
+    import threading
+    import time as _t
+    with tempfile.TemporaryDirectory() as d:
+        gate = [{"id": f"g/{i}", "prompt": f"g{i}"} for i in range(4)]
+        nc = [{"id": f"m/{i}", "prompt": f"m{i}"} for i in range(3)]
+        log, lock = [], threading.Lock()
+
+        def chat(url, message, seed, max_tokens):
+            with lock:
+                log.append(("start", message, seed))
+            _t.sleep(0.6 if message == "g3" else 0.02)  # the gate's last answer is the long one
+            with lock:
+                log.append(("end", message, seed))
+            return {"content": "A" if message.startswith("m") else "ok", "reasoning": "", "finish_reason": "stop",
+                    "completion_tokens": 3, "seconds": 0.01}
+        chk = lambda item, content: content == "ok"  # noqa: E731
+        gp, npth = os.path.join(d, "gate.jsonl"), os.path.join(d, "nc.jsonl")
+        seen = []
+        spec = lambda items, path, seed: dict(items=items, out_path=path, seed=seed, max_tokens=9, check=chk,  # noqa: E731
+                                              chat=chat, count_tokens=lambda u, t: 0, budget=0,
+                                              on_row=lambda r, n, tot, tps, s=seed: seen.append((r["id"], s, n, tot)))
+        g, n1, n2 = E.score_many("u", [spec(gate, gp, 1), spec(nc, npth, 1), spec(nc, npth, 2)], concurrency=3,
+                                 log=lambda m: None)
+        assert [len(g), len(n1), len(n2)] == [4, 3, 3] and sum(r["pass"] for r in g) == 4
+        assert {r["seed"] for r in n1} == {1} and {r["seed"] for r in n2} == {2} and len(E.read_jsonl(npth)) == 6
+        # gate items are handed out first (g3 goes out with the first non-coding ones when slots free up; threads may
+        # start them in any order), and non-coding answers ran during g3
+        starts = [m for k, m, _ in log if k == "start"]
+        assert set(starts[:3]) == {"g0", "g1", "g2"} and starts.index("g3") <= 5, starts
+        g3_end = log.index(("end", "g3", 100003))
+        assert any(k == "end" and m.startswith("m") for k, m, _ in log[:g3_end]), log
+        # same request seeds as score() alone: 100000 * seed + index in its own items
+        assert sorted(s for k, m, s in log if k == "start" and m.startswith("m")) == [100000, 100001, 100002,
+                                                                                    200000, 200001, 200002]
+        assert sorted((i, n, t) for i, s, n, t in seen if s == 2 and i.startswith("m"))[-1][2] == 3
+        # one slot: strictly pass by pass, in each pass's order
+        log.clear()
+        gp1, np1 = os.path.join(d, "gate1.jsonl"), os.path.join(d, "nc1.jsonl")
+        E.score_many("u", [spec(gate, gp1, 1), spec(nc, np1, 1), spec(nc, np1, 2)], concurrency=1, log=lambda m: None)
+        assert [(m, s) for k, m, s in log if k == "start"] == (
+            [(f"g{i}", 100000 + i) for i in range(4)] + [(f"m{i}", 100000 + i) for i in range(3)]
+            + [(f"m{i}", 200000 + i) for i in range(3)])
+        # resumable: nothing left to do
+        log.clear()
+        again = E.score_many("u", [spec(gate, gp, 1), spec(nc, npth, 1), spec(nc, npth, 2)], concurrency=3,
+                             log=lambda m: None)
+        assert not log and [len(x) for x in again] == [4, 3, 3]
+
+
 def test_rows_bookkeeping():
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "pool.jsonl")
@@ -1719,8 +1770,8 @@ def _gate_slots(tmp):
     cfg = L.load_config(cpath)
     cfg["score_first_run"] = False
     cfg["gate"]["slots"] = 8
-    for k in ("concurrency", "build", "spec", "budget_message"):  # b11435, no speculative decoding, no budget message,
-        cfg["gate"].pop(k, None)                                   # whatever loop.yaml has now
+    for k in ("concurrency", "build", "spec", "budget_message", "ctx"):  # b11435, no speculative decoding, no budget
+        cfg["gate"].pop(k, None)                                          # message, the default cache, whatever loop.yaml has now
     cfg["gate"]["budget"], cfg["gate"]["max_tokens"] = 16384, 20480
     cfg["noncoding"]["max_tokens"] = 20480
     yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
@@ -1869,7 +1920,7 @@ def _gate_build_and_spec(tmp):
     args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
     state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
     status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
-    default = {"slots": slots, "ctx": 262144, "build": "b11435-vulkan", "spec": None, "budget": 16384,
+    default = {"slots": slots, "ctx": L.gate_ctx(cfg), "build": "b11435-vulkan", "spec": None, "budget": 16384,
                "max_tokens": 20480, "budget_message": None, "nc_max_tokens": 20480, "gpu_driver": "32.0.12078.30"}
     # the default settings: b11435, no speculative decoding, the build's binary not looked for, nothing new in the
     # no-worse checks' fingerprint
