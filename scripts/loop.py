@@ -1758,14 +1758,14 @@ class Loop(fr.Controller):
         if reasons:
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
                   + "; ".join(reasons) + ".", ""]
-        if rec.get("files_kept"):
-            L += [f"Files: {rec['files_kept']}.", ""]
         elif rec["status"] == "kept":
             fell = " and ".join(HELDOUT[k]["label"] for k in d.get("loss_fell") or [] if k in HELDOUT) or "held-out steps"
             L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
                    "loss": f"Kept on the held-out loss: its gate score held level and its loss on the {fell} fell, by "
                            "a one-sided sign test (Holm-adjusted across the bug-fix and terminal sets)."}.get(
                        rec.get("path") or d.get("path"), "Kept."), ""]
+        if rec.get("files_kept"):
+            L += [f"Files: {rec['files_kept']}.", ""]
         part_label = {"write": "write a program", "fix": "fix a wrong submission", "cc": "CodeContests",
                       "oci": "OpenCodeInstruct held-out"}
         rows = [("gate (all)", g)] + [(f"part: {part_label.get(k, k)}", c) for k, c in (d.get("parts") or {}).items()]
