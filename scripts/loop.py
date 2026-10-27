@@ -71,6 +71,11 @@ Rounds (results/loop/rounds/rNNN):
     finish     state.json updated (best, rejects in a row); a rejected round's adapter, checkpoints and GGUF are
                deleted (its scores, logs and report stay); report.md and results/loop/summary.md written.
 
+Prototype rounds (loop.yaml prototype_rounds, 27 Oct 2026; round 2, the first training round): the whole gate is
+answered (no early look), every no-worse check and EvalPlus run whatever decide says and even after one of them is
+worse, and a rejected prototype keeps its adapter, checkpoints and GGUF. The keep rule is unchanged: it still decides
+whether the round becomes the best, so what the next round continues from, and the confirm pass runs only for a keep.
+
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
@@ -605,6 +610,12 @@ def guard_ok(cfg, mile, guards=None):
     return not guards_failed(cfg, mile, guards) and all(n in guards for n in guard_names(cfg))
 
 
+def prototype_round(cfg, rnum):
+    """Whether round rnum is a prototype (loop.yaml prototype_rounds, 27 Oct 2026): it answers the whole gate, runs
+    every no-worse check and EvalPlus whatever the keep rule says, and keeps its files if rejected."""
+    return int(rnum) in {int(r) for r in (cfg.get("prototype_rounds") or [])}
+
+
 class Loop(fr.Controller):
     def __init__(self, args, run):
         super().__init__(args, run)
@@ -1093,6 +1104,10 @@ class Loop(fr.Controller):
         er = (cfg.get("gate") or {}).get("early_reject")
         if not er:
             return None
+        if prototype_round(cfg, self.rnum):
+            self.log(f"round {self.rnum}: a prototype round (loop.yaml prototype_rounds), so the whole gate is answered "
+                     "(no early look)")
+            return None
         fell = E.open_loss_paths(cfg["rules"], self.heldout_losses())
         if fell:
             self.log(f"round {self.rnum}: {', '.join(E.LOSS_LABELS.get(k, k) for k in fell)} loss path open, so the "
@@ -1149,15 +1164,16 @@ class Loop(fr.Controller):
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
         conf = mile = None
         guards = {}
-        if d["keep"]:  # the cheaper checks first (21 Oct 2026); a block skips the rest, as every check must pass
+        proto = prototype_round(cfg, self.rnum)  # every check runs, whatever decide and the checks say (27 Oct 2026)
+        if d["keep"] or proto:  # the cheaper checks first (21 Oct 2026); a block skips the rest, as every check must pass
             for name in guard_names(cfg):
-                if guards_blocked(guards):
+                if guards_blocked(guards) and not proto:
                     break
                 guards[name] = self.run_stage(name, self.guard, cfg, name)
             evalplus = cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard")
-            if evalplus and not guards_blocked(guards):
+            if evalplus and (proto or not guards_blocked(guards)):
                 mile = self.run_stage("milestone", self.milestone, cfg)
-            if guard_ok(cfg, mile, guards):
+            if d["keep"] and guard_ok(cfg, mile, guards):
                 conf = self.run_stage("confirm", self.confirm, cfg, d)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile, guards)
 
@@ -1656,7 +1672,8 @@ class Loop(fr.Controller):
         guards = guards or {}
         g_ok = guard_ok(cfg, mile, guards)
         failed = guards_failed(cfg, mile, guards)
-        if d["keep"] and "evalplus" in failed:
+        proto = prototype_round(cfg, self.rnum)
+        if (d["keep"] or proto) and "evalplus" in failed:
             g = (mile or {}).get("guard") or {}
             reasons.append("EvalPlus (HumanEval+ and MBPP+ plus tests) worse than the base: " + (
                 f"{g['base']:.4f} -> {g['candidate']:.4f} on {g['n']} problems, {g['losses']} lost / {g['wins']} won, "
@@ -1693,8 +1710,12 @@ class Loop(fr.Controller):
         else:
             self.state["rejects_in_row"] += 1
             rec["status"] = "rejected"
-            rec["freed_bytes"] = safe_delete(self.rdir, ["train/adapter", "train/checkpoints", "train/milestones",
-                                                         "train/branches", "convert"], self.log)
+            if proto:
+                rec["files_kept"] = "a prototype round (loop.yaml prototype_rounds): adapter, checkpoints and GGUF kept"
+                self.log(f"round {self.rnum}: {rec['files_kept']}")
+            else:
+                rec["freed_bytes"] = safe_delete(self.rdir, ["train/adapter", "train/checkpoints", "train/milestones",
+                                                             "train/branches", "convert"], self.log)
             if plan.get("stack_eligible") and n_new:
                 cap = int(cfg.get("stack_max_new_rows", 0) or 0)
                 entry = {"rows": n_new, "attempts": plan.get("stack_attempt", 1),
@@ -1737,6 +1758,8 @@ class Loop(fr.Controller):
         if reasons:
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
                   + "; ".join(reasons) + ".", ""]
+        if rec.get("files_kept"):
+            L += [f"Files: {rec['files_kept']}.", ""]
         elif rec["status"] == "kept":
             fell = " and ".join(HELDOUT[k]["label"] for k in d.get("loss_fell") or [] if k in HELDOUT) or "held-out steps"
             L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
