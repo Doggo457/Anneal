@@ -604,6 +604,7 @@ class World:
         self.server = None
         self.calls = []
         self.pause_train_once = {"loop-r003"}
+        self.pause_convert_once = set()  # run names whose GGUF convert is stopped by a pause once
         self.prompt_to_idx = {}
         self.swe_calls = []  # (round, --no-base) for each val_loss.py run on the held-out bug-fix steps
         self.term_calls = []  # the same for the held-out terminal steps
@@ -706,6 +707,11 @@ class World:
                        "init_adapter": cfg.get("init_adapter")}, open(os.path.join(rd, "summary.json"), "w"))
             return 0
         if script == "convert_lora_to_gguf.py":
+            name = os.path.basename(arg("--outfile")).split("-F16")[0]
+            if name in self.pause_convert_once:
+                self.pause_convert_once.discard(name)
+                ctl.stop.set()  # as if Pause was pressed while converting: the child is stopped and exits 1
+                return 1
             open(arg("--outfile"), "wb").write(b"gguf")
             return 0
         if script == "val_loss.py":
@@ -1406,6 +1412,43 @@ def _prototype_round(tmp):
     assert not has(3, "bfcl") and not has(3, "milestone") and rec(3)["status"] == "rejected"
     assert rec(3)["freed_bytes"] > 0 and "files_kept" not in rec(3)
     assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and not os.path.exists(os.path.join(rd(3), "convert"))
+
+
+def test_convert_pause():
+    """27 Oct 2026: a pause that stops the GGUF convert (exit code 1) ends the loop paused, not failed, and the
+    next start converts again and carries on with the round."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _convert_pause(tmp)
+    finally:
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _convert_pause(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    w.pause_convert_once = {"loop-r002"}
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    stages = os.path.join(run_dir, "rounds", "r002", "stages")
+    assert run_main(args) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "paused", st
+    assert os.path.exists(os.path.join(stages, "train.done.json"))
+    assert not os.path.exists(os.path.join(stages, "convert.done.json"))
+    trains = sum(1 for script, _ in w.calls if script == "train_longrun.py")
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert json.load(open(os.path.join(run_dir, "status.json")))["state"] == "finished"
+    assert os.path.exists(os.path.join(stages, "convert.done.json")) and os.path.exists(os.path.join(stages, "decide.done.json"))
+    assert sum(1 for script, _ in w.calls if script == "train_longrun.py") == trains  # training was not redone
+    assert [script for script, _ in w.calls].count("convert_lora_to_gguf.py") >= 2
 
 
 def test_bfcl_harness():

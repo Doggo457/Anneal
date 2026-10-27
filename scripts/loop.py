@@ -1301,6 +1301,7 @@ class Loop(fr.Controller):
             E.write_jsonl(os.path.join(root, name, "val.jsonl"), E.read_jsonl(os.path.join(POOLS, name, "val.jsonl")))
             cmd += ["--source", f"{name}={os.path.join(root, name)}:all"]
         rc = self.run_child(cmd, "mix.log")
+        self.check_stop()  # a pause stops the child: that is a pause, not a failure
         if rc != 0:
             raise RuntimeError(f"mix_datasets.py exited with {rc}")
         mix = os.path.join(root, "mix")
@@ -1368,6 +1369,7 @@ class Loop(fr.Controller):
         os.makedirs(os.path.dirname(out), exist_ok=True)
         rc = self.run_child([PY, "-u", fr.CONVERT, "--base", llama.LORA_BASE_CONFIG, "--outtype", "f16", "--outfile", out,
                              os.path.join(self.rdir, "train", "adapter")], "convert_lora.log")
+        self.check_stop()  # a pause stops the child: that is a pause, not a failure
         if rc != 0 or not os.path.exists(out):
             raise RuntimeError(f"convert_lora_to_gguf.py exited with {rc}")
         return self.mark_done("convert", {"gguf": out, "bytes": os.path.getsize(out)})
