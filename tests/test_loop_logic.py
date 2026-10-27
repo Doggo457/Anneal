@@ -832,6 +832,7 @@ def setup_world(tmp):
     cfg["score_first_run"] = True  # the record round is exercised here; off in loop.yaml since 21 Oct
     cfg["guards"] = {"bfcl": cfg["guards"]["bfcl"]}  # the later checks are tested on their own (test_cweval_guard)
     cfg["gate"]["early_reject"] = None  # whole passes here; test_early_reject covers the early look
+    cfg["prototype_rounds"] = []  # ordinary rounds here; test_prototype_round covers a prototype
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
     cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
@@ -1340,6 +1341,71 @@ def _bfcl_guard(tmp):
     # without asking again
     assert 8 <= [m for m, _, _ in w.bfcl_requests].count("r005") <= 8 + L.gate_concurrency(cfg) - 1
     assert len(E.read_jsonl(os.path.join(rd(5), "guards", "bfcl.seed2.jsonl"))) == 8
+
+
+def test_prototype_round():
+    """27 Oct 2026: a prototype round (loop.yaml prototype_rounds) answers the whole gate even where the early look
+    would stop it, runs the no-worse checks and EvalPlus although it fails the keep rule (and after one of them is
+    worse), has no confirm pass, and keeps its adapter and GGUF when rejected; the best stays the base. The next,
+    ordinary round stops early as before, runs no checks, and its reject deletes them."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(BFCL_PASSING)
+    before = world_patches()
+    try:
+        _prototype_round(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        BFCL_PASSING.clear()
+        BFCL_PASSING.update(saved[1])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _prototype_round(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg["score_first_run"] = False
+    cfg["gate"]["early_reject"] = {"looks": [0.3334, 0.6667], "max_diff": 0}
+    cfg["prototype_rounds"] = [2]
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    assert L.prototype_round(cfg, 2) and not L.prototype_round(cfg, 3) and not L.prototype_round({}, 2)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    has = lambda n, stage: os.path.exists(os.path.join(rd(n), "stages", f"{stage}.done.json"))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    gate = E.read_jsonl(E.GATE_PATH)
+    # r002 is behind the base (18 vs 20 of 40) and loses 7 BFCL items: rejected, but every check runs
+    PASSING["r002"], BFCL_PASSING["r002"] = 18, 2
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    ev2, d2 = done(2, "evaluate"), done(2, "decide")
+    assert "early_check" not in ev2 and ev2["gate_n"] == len(gate) and not d2["keep"], ev2
+    assert E.read_jsonl(os.path.join(rd(2), "noncoding.jsonl"))
+    assert not done(2, "bfcl")["guard"]["ok"] and has(2, "milestone") and not has(2, "confirm")
+    order = [n for n, _ in w.served]
+    assert order.index("r002-evaluate") < order.index("r002-bfcl") < order.index("r002-evalplus"), order
+    assert "r002-confirm" not in order
+    r2 = rec(2)
+    assert r2["status"] == "rejected" and "prototype" in r2["files_kept"] and "freed_bytes" not in r2, r2
+    assert r2["guards"]["bfcl"]["ok"] is False and r2["evalplus"] and r2["evalplus_guard"], r2
+    assert any(x.startswith("BFCL") for x in r2["reasons"]), r2["reasons"]
+    assert os.path.exists(os.path.join(rd(2), "train", "adapter")) and os.path.exists(os.path.join(rd(2), "convert"))
+    assert "Files: a prototype round" in open(os.path.join(rd(2), "report.md")).read()
+    assert state()["best"]["round"] == 0 and state()["rejects_in_row"] == 1
+    # r003, an ordinary round, is behind too: it stops at the first look, runs no checks, and its files are deleted
+    PASSING["r003"] = 18
+    assert run_main(args) == 0
+    ev3 = done(3, "evaluate")
+    assert ev3["early_reject"] is True and ev3["gate_n"] < len(gate), ev3
+    assert not has(3, "bfcl") and not has(3, "milestone") and rec(3)["status"] == "rejected"
+    assert rec(3)["freed_bytes"] > 0 and "files_kept" not in rec(3)
+    assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and not os.path.exists(os.path.join(rd(3), "convert"))
 
 
 def test_bfcl_harness():

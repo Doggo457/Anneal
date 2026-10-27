@@ -23,6 +23,10 @@ valloss: true
 milestone_evalplus: true   # EvalPlus on rounds that pass the keep rule only; since 21 Oct 2026 a no-worse check against the
                            # base (rules.evalplus_guard), not a measure of gain
 pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead
+prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is the prototype. Even if it scores worse, it
+                           # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
+                           # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
+                           # decides what the next round continues from.
 reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
 # NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
 
