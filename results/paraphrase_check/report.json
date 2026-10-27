@@ -1,5 +1,5 @@
 {
- "started": "2026-10-22 12:39:54",
+ "started": "2026-10-27 02:42:36",
  "tag": "flm0.9.43-embedgemma300m",
  "url": "http://127.0.0.1:52625",
  "model": "embed-gemma:300m",
@@ -24,6 +24,7 @@
    "cutoff": 0.7353,
    "reworded_recall_at_cutoff": 0.4384,
    "problems_with_a_flagged_row": 3,
+   "problems_with_a_version": 0,
    "flagged_test_ids": [
     "HumanEval/25",
     "HumanEval/51",
@@ -36,16 +37,22 @@
    "cutoff": 0.8625,
    "reworded_recall_at_cutoff": 0.0205,
    "problems_with_a_flagged_row": 0,
+   "problems_with_a_version": 0,
    "flagged_test_ids": []
   },
   "gate": {
-   "problems": 265,
-   "t_neg": 0.9151,
-   "cutoff": 0.9151,
-   "reworded_recall_at_cutoff": 0.0,
-   "problems_with_a_flagged_row": 1,
+   "problems": 173,
+   "t_neg": 0.8351,
+   "cutoff": 0.8351,
+   "reworded_recall_at_cutoff": 0.0548,
+   "problems_with_a_flagged_row": 5,
+   "problems_with_a_version": 12,
    "flagged_test_ids": [
-    "cc/test/75"
+    "cc/test/46",
+    "cc/test/63",
+    "cc/test/75",
+    "cc/test/87",
+    "cc/valid/15"
    ]
   },
   "mmlu-pro": {
@@ -54,6 +61,7 @@
    "cutoff": 0.5694,
    "reworded_recall_at_cutoff": 0.9452,
    "problems_with_a_flagged_row": 5,
+   "problems_with_a_version": 0,
    "flagged_test_ids": [
     "mmlupro/12178",
     "mmlupro/7710",
@@ -66,15 +74,15 @@
  "per_source": {
   "mix_first_2k": {
    "rows_checked": 2000,
-   "rows_flagged": 6
+   "rows_flagged": 10
   },
   "ocr_first": {
    "rows_checked": 1000,
-   "rows_flagged": 1
+   "rows_flagged": 3
   },
   "ocr_first_b": {
    "rows_checked": 505,
-   "rows_flagged": 0
+   "rows_flagged": 2
   },
   "self_oci_r1": {
    "rows_checked": 512,
@@ -113,18 +121,18 @@
    "rows_flagged": 0
   }
  },
- "blocked_keys": 23,
- "flags": 47,
+ "blocked_keys": 27,
+ "flags": 59,
  "unique_training_questions": 31687,
  "embedder_speed": {
-  "texts": 6928,
-  "seconds": 26878.8,
-  "texts_per_s": 0.258,
-  "chars_per_s": 950.6
+  "texts": 8,
+  "seconds": 3.4,
+  "texts_per_s": 2.355,
+  "chars_per_s": 179.0
  },
- "min_free_ram_gb": 14.88,
- "minutes": 448.6,
+ "min_free_ram_gb": 12.44,
+ "minutes": 0.3,
  "training_speed": null,
- "started_epoch": 1792669194.7,
- "finished_epoch": 1792696112.7
+ "started_epoch": 1793068956.6,
+ "finished_epoch": 1793068972.6
 }
