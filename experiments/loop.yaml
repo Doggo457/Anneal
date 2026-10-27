@@ -145,6 +145,10 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
   ce_target_gb: 2
   empty_cache_between_microbatches: true
   pinned_offload: false
+  blas_backend: hipblaslt   # 27 Oct 2026, speed check 3 (anneal/train_probe.py): hipBLASLt for the matrix products. On the
+                            # 12 longest 12k rows, 6 steps each: 244.6 s a step against 267.3-267.9 for hipBLAS (two
+                            # baseline runs, identical losses), 100.0 tok/s, step losses within 0.42%, torch peak 27.3 GiB,
+                            # >= 9.4 GB RAM free. Training only: held-out losses (scripts/val_loss.py) keep hipBLAS
 
 # Public sources. My rules: the teacher is as strong as or stronger than Qwen3.8-27B on a published coding
 # benchmark (20 Oct); every row carries the teacher's real reasoning (21 Oct: a source with require_think off is never
