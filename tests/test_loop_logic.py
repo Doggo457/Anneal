@@ -1415,6 +1415,104 @@ def _prototype_round(tmp):
     assert not os.path.exists(os.path.join(rd(3), "train", "adapter")) and not os.path.exists(os.path.join(rd(3), "convert"))
 
 
+def test_think_selection():
+    """28 Oct 2026: rows picked by reasoning length. Unit parts: the selecting keys (min_think_tokens, order) are not
+    part of a pool's spec; think_index counts and caches each row's reasoning tokens; ranked_rows filters and orders;
+    filter_rolled drops short rolled-forward rows. Then a prototype round 2 is rejected and the loop holds
+    (pause_after_rejects_in_row 1) instead of training round 3; with the hold off and tachibana4 selecting (at least
+    20 reasoning tokens, most first), round 3 takes its new rows in that order, the rolled-forward tachibana4 rows
+    under 20 tokens stay out, and the pool's offset doesn't move."""
+    src = {"name": "a", "kind": "messages", "share": 0.4}
+    assert L.spec_hash(src) == L.spec_hash(dict(src, min_think_tokens=150, order="think_desc"))
+    assert not L.selects(src) and not L.selects(dict(src, order="pool")) and not L.selects(None)
+    assert L.selects(dict(src, min_think_tokens=1)) and L.selects(dict(src, order="think_desc"))
+    keys, tokens = ["k0", "k1", None, "k3", "k4", "k5"], [5, 0, 9, 9, 30, 9]
+    assert L.ranked_rows(src, keys, tokens) == [0, 3, 4, 5]                        # no reasoning / no key: out
+    assert L.ranked_rows(dict(src, min_think_tokens=9), keys, tokens) == [3, 4, 5]
+    assert L.ranked_rows(dict(src, order="think_desc"), keys, tokens) == [4, 3, 5, 0]  # ties keep pool order
+    try:
+        L.ranked_rows(dict(src, order="longest"), keys, tokens)
+        raise AssertionError("unknown order accepted")
+    except RuntimeError:
+        pass
+    srcs = {"a": dict(src, min_think_tokens=9), "b": {"name": "b"}}
+    out, dropped = L.filter_rolled([["a", [0, 3, 4]], ["b", [0, 1]], ["a", [1]]], srcs, lambda n: (keys, tokens))
+    assert out == [["a", [3, 4]], ["b", [0, 1]]] and dropped == {"a": 2}, (out, dropped)
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved_count = L.count_tokens
+    saved = dict(PASSING)
+    before = world_patches()
+    try:
+        calls = []
+        L.count_tokens = lambda texts: calls.append(len(texts)) or [len(t.split()) for t in texts]
+        pool = os.path.join(tmp, "pool")
+        rows = [{"messages": [{"role": "user", "content": f"q{i}"},
+                              {"role": "assistant", "content": f"<think>{' w' * i}</think> a"}]} for i in range(4)]
+        rows.append({"messages": [{"role": "user", "content": "q4"}, {"role": "assistant", "content": "no trace"}]})
+        E.write_jsonl(os.path.join(pool, "train.jsonl"), rows)
+        k, t = L.think_index(pool)
+        assert t == [0, 1, 2, 3, 0] and k == [L.row_key(r) for r in rows] and calls == [5], (t, calls)
+        assert L.think_index(pool) == (k, t) and calls == [5]                     # cached
+        E.write_jsonl(os.path.join(pool, "train.jsonl"), rows[:3])
+        assert L.think_index(pool)[1] == [0, 1, 2] and calls == [5, 3]            # rebuilt when the pool changes
+        _think_selection(tmp)
+    finally:
+        L.count_tokens = saved_count
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _think_selection(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    # each pool row's reasoning tokens: 37 * index mod 101 (the fake pools all carry the same one-word reasoning)
+    L.count_tokens = lambda texts: [(37 * i) % 101 for i in range(len(texts))]
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, prototype_rounds=[2], pause_after_rejects_in_row=1)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "2"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    PASSING["r002"] = 18
+    assert run_main(args) == 0
+    st = json.load(open(os.path.join(run_dir, "status.json")))
+    assert st["state"] == "waiting" and "paused for a new recipe" in st["detail"], st
+    assert state()["rejects_in_row"] == 1 and not os.path.exists(rd(3))
+    plan2 = done(2, "plan")
+    tach = "tachibana4_v4pro"
+    assert tach in plan2["slices"] and plan2["rolled"] == [], plan2["slices"].keys()
+    off2 = state()["offsets"][tach]
+    # the round 3 change: no hold, tachibana4 picks rows with at least 20 reasoning tokens, most first
+    for s in cfg["sources"]:
+        if s["name"] == tach:
+            s.update(min_think_tokens=20, order="think_desc")
+    cfg["pause_after_rejects_in_row"] = 0
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    PASSING["r003"] = 18
+    assert run_main(["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]) == 0
+    plan3 = done(3, "plan")
+    keys, tokens = L.think_index(os.path.join(L.POOLS, tach))
+    used = {keys[i] for i in plan2["slices"][tach]} | {L.row_key({"messages": [{"role": "user", "content": f"{tach} q{q}"},
+                                                                               {"role": "assistant", "content": "x"}]})
+                                                       for q in (0, 5)}  # the first run's row and the blocked row
+    want = [i for i in sorted(range(len(keys)), key=lambda i: (-tokens[i], i)) if tokens[i] >= 20 and keys[i] not in used]
+    got = plan3["slices"][tach]
+    assert got and got == want[:len(got)], (got[:10], want[:10])
+    rolled = dict((n, ix) for n, ix in plan3["rolled"])
+    assert rolled[tach] == [i for i in plan2["slices"][tach] if tokens[i] >= 20], rolled[tach]
+    short = sum(1 for i in plan2["slices"][tach] if tokens[i] < 20)
+    assert short and plan3["rolled_dropped"] == {tach: short}, plan3["rolled_dropped"]
+    assert rolled["math_v4_aops"] == plan2["slices"]["math_v4_aops"]   # a source without the setting rolls whole
+    assert state()["offsets"][tach] == off2
+    assert plan3["rows"] == sum(len(ix) for ix in plan3["slices"].values()) + sum(len(ix) for ix in rolled.values())
+
+
 def test_convert_pause():
     """27 Oct 2026: a pause that stops the GGUF convert (exit code 1) ends the loop paused, not failed, and the
     next start converts again and carries on with the round."""
