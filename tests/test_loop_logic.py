@@ -841,6 +841,7 @@ def setup_world(tmp):
     cfg["prototype_rounds"] = []  # ordinary rounds here; test_prototype_round covers a prototype
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
     cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
+    cfg["pause_after_rejects_in_row"] = 0  # rounds go on after a reject here (loop.yaml holds after round 2 for now)
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
