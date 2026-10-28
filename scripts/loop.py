@@ -203,9 +203,86 @@ def reasoning_source(src):
     return bool(src.get("require_think", True))
 
 
+# How a round picks rows from a prepared pool, not how the pool is prepared, so they can change without a new pool:
+#   min_think_tokens: N   only rows whose trained turn has at least N reasoning tokens (rolled-forward rows too)
+#   order: think_desc     rows with the most reasoning tokens first (default: pool order)
+SELECT_KEYS = ("min_think_tokens", "order")
+
+
 def spec_hash(src):
-    keep = {k: v for k, v in src.items() if k not in ("share", "note", "group")}
+    keep = {k: v for k, v in src.items() if k not in ("share", "note", "group") + SELECT_KEYS}
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def selects(src):
+    """True when a source picks its rows by reasoning length (SELECT_KEYS) instead of in pool order."""
+    return bool(src) and (int(src.get("min_think_tokens") or 0) > 0 or src.get("order", "pool") != "pool")
+
+
+def count_tokens(texts):
+    """Token counts of texts with the model's tokenizer (fr.SNAP), no special tokens. Tests replace it."""
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(fr.SNAP)
+    tok = getattr(tok, "tokenizer", tok)
+    out = []
+    for i in range(0, len(texts), 256):
+        out.extend(len(ids) for ids in tok(texts[i:i + 256], add_special_tokens=False)["input_ids"])
+    return out
+
+
+def think_index(pool_dir):
+    """(keys, tokens): row_key and reasoning tokens (anneal/rowkeys.py reasoning_text) of every row of a pool, by row
+    index. Cached in think_tokens.json next to the pool and rebuilt when train.jsonl's size changes."""
+    f = os.path.join(pool_dir, "train.jsonl")
+    cache = os.path.join(pool_dir, "think_tokens.json")
+    size = os.path.getsize(f)
+    try:
+        with open(cache, encoding="utf-8") as fh:
+            c = json.load(fh)
+        if c.get("size") == size and len(c.get("keys") or []) == len(c.get("tokens") or []):
+            return c["keys"], c["tokens"]
+    except (OSError, ValueError):
+        pass
+    keys, texts = [], []
+    with open(f, encoding="utf-8") as fh:
+        for line in fh:
+            if line.strip():
+                row = json.loads(line)
+                keys.append(row_key(row))
+                texts.append(reasoning_text(row))
+    tokens = [n if t else 0 for n, t in zip(count_tokens(texts), texts)]
+    write_json(cache, {"size": size, "rows": len(keys), "keys": keys, "tokens": tokens})
+    return keys, tokens
+
+
+def ranked_rows(src, keys, tokens):
+    """Row indices a selecting source hands out, in order: rows with reasoning and at least min_think_tokens of it,
+    pool order or (order: think_desc) most reasoning first, ties in pool order."""
+    lo = int(src.get("min_think_tokens") or 0)
+    idx = [i for i, (k, t) in enumerate(zip(keys, tokens)) if k is not None and t > 0 and t >= lo]
+    order = src.get("order", "pool")
+    if order == "think_desc":
+        idx.sort(key=lambda i: (-tokens[i], i))
+    elif order != "pool":
+        raise RuntimeError(f"source {src['name']}: unknown order {order!r} (pool or think_desc)")
+    return idx
+
+
+def filter_rolled(rolled, srcs, index):
+    """Rolled-forward rows of a source with min_think_tokens keep only rows with that much reasoning. index(name) ->
+    (keys, tokens). Returns (rolled, {source: rows dropped})."""
+    out, dropped = [], {}
+    for name, ix in rolled:
+        lo = int((srcs.get(name) or {}).get("min_think_tokens") or 0)
+        if lo > 0:
+            tokens = index(name)[1]
+            keep = [i for i in ix if tokens[i] >= lo]
+            if len(keep) < len(ix):
+                dropped[name] = dropped.get(name, 0) + len(ix) - len(keep)
+            ix = keep
+        if ix:
+            out.append([name, list(ix)])
+    return out, dropped
 
 
 def public_source_args(src, side="pool"):
@@ -1193,6 +1270,24 @@ class Loop(fr.Controller):
                  "reworded-copy check: no rows blocked (data/eval/paraphrase/blocked_keys.txt missing or empty)")
         stack = self.state.get("stack")
         cap = int(cfg.get("stack_max_new_rows", 0) or 0)
+        srcs = {s["name"]: s for s in cfg.get("sources") or []}
+        index_cache = {}
+
+        def index(name):
+            if name not in index_cache:
+                index_cache[name] = think_index(os.path.join(POOLS, name))
+            return index_cache[name]
+
+        # Selecting sources: the rows they would hand out, minus rows used before or blocked.
+        orders = {}
+        for n in usable:
+            if selects(srcs.get(n)):
+                keys, tokens = index(n)
+                orders[n] = [i for i in ranked_rows(srcs[n], keys, tokens) if keys[i] not in used and keys[i] not in blocked]
+                self.log(f"pool {n}: {len(orders[n])} unused rows pass its row selection "
+                         f"(min_think_tokens {int(srcs[n].get('min_think_tokens') or 0)}, order {srcs[n].get('order', 'pool')})")
+        count_rows = dict(usable, **{n: len(o) for n, o in orders.items()})
+        count_state = {"offsets": dict(self.state["offsets"], **{n: 0 for n in orders})}
         short = False  # the pools can't fill a round: try a when_pools_short recipe before waiting
         while True:
             recipe = pick_recipe(cfg, self.state, short)
@@ -1203,7 +1298,7 @@ class Loop(fr.Controller):
             target = recipe_rows(cfg, recipe)
             if take_stack and cap:
                 target = min(target, cap - n_stack)
-            counts = plan_counts(cfg, recipe, self.state, usable, target)
+            counts = plan_counts(cfg, recipe, count_state, count_rows, target)
             why = None
             mix = recipe.get("mix")
             if recipe["id"] == "default":
@@ -1221,9 +1316,19 @@ class Loop(fr.Controller):
             slices, offsets, new_keys = {}, {}, set(used) | blocked  # blocked rows are skipped like used ones
             skipped = collections.Counter()
             for n, take in counts.items():
-                idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take, new_keys,
-                                     skipped)
-                offsets[n] = nxt
+                if n in orders:  # by reasoning length; the pool's offset stays where it is
+                    keys = index(n)[0]
+                    idx = []
+                    for i in orders[n]:
+                        if len(idx) >= take:
+                            break
+                        if keys[i] not in new_keys:
+                            new_keys.add(keys[i])
+                            idx.append(i)
+                else:
+                    idx, nxt = pick_rows(os.path.join(POOLS, n, "train.jsonl"), self.state["offsets"].get(n, 0), take,
+                                         new_keys, skipped)
+                    offsets[n] = nxt
                 if idx:
                     slices[n] = idx
             n_new = sum(len(v) for v in slices.values())
@@ -1247,11 +1352,15 @@ class Loop(fr.Controller):
         self.add_used_keys(new_keys - used - blocked)  # blocked rows were never trained on
         lineage = best["lineage"] if init == "base_lineage" else []
         rolled = copy.deepcopy(stack["slices"]) if take_stack else []
+        rolled, rolled_dropped = filter_rolled(rolled, srcs, index)
+        if rolled_dropped:
+            self.log(f"rolled-forward rows under their source's min_think_tokens left out: {rolled_dropped}")
         n_rolled = sum(len(ix) for _, ix in rolled)
         frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
         replay = pick_replay(best["lineage"], int(round(frac * (n_new + n_rolled))), self.rnum) if init == "best" else []
         plan = {"recipe": recipe, "init": init, "init_adapter": best["adapter"] if init == "best" else None,
                 "slices": slices, "rolled": rolled, "lineage": lineage, "replay": replay,
+                "rolled_dropped": rolled_dropped,
                 "stack_eligible": takes_stack(recipe), "stack_attempt": (stack["attempts"] + 1) if take_stack else 1,
                 "stack_rounds": (stack["rounds"] if take_stack else []) + [self.rnum],
                 "rows": n_new + n_rolled + sum(len(ix) for _, ix in lineage) + sum(len(ix) for _, ix in replay),
