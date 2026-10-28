@@ -31,6 +31,12 @@ Long-run config keys (defaults in brackets):
   mem_debug: [false]           log memory just before the loss in every forward
   sdpa_probe, sdpa_contiguous, blas_backend, profile_steps, profile_warmup: speed checks, all off by default
                                (anneal/train_probe.py)
+  kl_think_beta: [0]           weight of KL(base || tuned) on the trained turn's reasoning tokens and their close tag,
+                               added to the loss (anneal/kl_loss.py); the base is this model with the adapter switched
+                               off. 0 = off.
+  own_loss: [false]            compute the loss in anneal/kl_loss.py from the decoder's hidden states instead of the
+                               model's own loss (always on when kl_think_beta > 0; with beta 0 it checks that path)
+  kl_chunk_gb: []              memory budget for one chunk of LM-head logits in that loss (default ce_target_gb or 2)
   init_adapter: []             start the LoRA from a saved adapter folder instead of fresh weights (the improvement
                                loop continues its best adapter). Same r, lora_alpha and target modules required; every
                                tensor is checked equal after loading. Ignored once a checkpoint exists (resume wins).
@@ -423,6 +429,28 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     if not rows:
         raise SystemExit("no training rows left")
     sample = print_sample(text_tok, rows[0], "row 0 (loss mask)")
+    kl_beta = float(cfg.get("kl_think_beta", 0) or 0)
+    own = bool(cfg.get("own_loss", False)) or kl_beta > 0
+    own_info = None
+    if own:
+        from anneal import kl_loss
+        close_id = text_tok.convert_tokens_to_ids("</think>")
+        if not isinstance(close_id, int) or close_id == text_tok.unk_token_id:
+            raise RuntimeError("the tokenizer has no single </think> token")
+        with_think, think_tokens = 0, 0
+        for r in rows:
+            m = kl_loss.think_targets(torch.tensor([r["input_ids"]]), torch.tensor([r["labels"]]), close_id)
+            n = int(m.sum())
+            with_think += n > 0
+            think_tokens += n
+        own_info = {"kl_think_beta": kl_beta, "close_id": close_id, "rows_with_think": with_think,
+                    "think_tokens": think_tokens, "rows": len(rows),
+                    "chunk_gb": float(cfg.get("kl_chunk_gb") or cfg.get("ce_target_gb") or 2)}
+        print(f"own loss (anneal/kl_loss.py): {own_info}")
+        run.metric(event="own_loss_plan", **own_info)
+        if kl_beta > 0 and with_think < 0.95 * len(rows):
+            raise RuntimeError(f"only {with_think} of {len(rows)} rows have a trained </think>: the KL term would miss "
+                               "most of the reasoning")
     train_ds = Dataset.from_list([{"input_ids": r["input_ids"], "labels": r["labels"]} for r in rows])
     n_tokens = sum(len(r["input_ids"]) for r in rows)
     eval_ds = None
@@ -586,8 +614,46 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
 
     # LongRun first: with --stop-at-step it creates STOP before the run-contract callback looks for it.
     callbacks = [LongRun(), trainer_callback(run, step_tokens=counter.step_tokens)] + ([Profiling()] if profile else [])
-    trainer = SFTTrainer(model=model, processing_class=text_tok, train_dataset=train_ds, eval_dataset=eval_ds,
-                         args=targs, callbacks=callbacks)
+    trainer_cls = SFTTrainer
+    if own:
+        budget = own_info["chunk_gb"] * 2**30
+        acc = {"trained": 0, "think": 0, "kl_sum": 0.0, "ce_sum": 0.0}
+
+        class OwnLossTrainer(SFTTrainer):
+            """The loss from anneal/kl_loss.py, divided as the model's own loss would be: by the accumulated batch's
+            trained tokens when the model takes num_items_in_batch (Trainer then divides no further), else by this
+            micro-batch's (Trainer then divides by the accumulation steps)."""
+
+            def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+                def denominator(local):
+                    if getattr(self, "model_accepts_loss_kwargs", False) and num_items_in_batch is not None:
+                        return num_items_in_batch
+                    return max(local, 1)
+                loss, st = kl_loss.own_loss(model, inputs, kl_beta, own_info["close_id"], budget, denominator)
+                for k in acc:
+                    acc[k] += st[k]
+                return (loss, None) if return_outputs else loss
+
+        class OwnLossLog(TrainerCallback):
+            """Per optimizer step: cross entropy per trained token and KL per reasoning token (metrics.jsonl)."""
+
+            def on_train_begin(self, a, state, control, **kw):
+                for k in acc:
+                    acc[k] = 0 if k in ("trained", "think") else 0.0  # the warm-up row is not a step
+
+            def on_step_end(self, a, state, control, **kw):
+                run.metric(event="own_loss", step=state.global_step, trained_tokens=acc["trained"],
+                           think_tokens=acc["think"], ce_per_token=acc["ce_sum"] / max(acc["trained"], 1),
+                           kl_per_think_token=acc["kl_sum"] / max(acc["think"], 1) if kl_beta > 0 else None)
+                self.on_train_begin(a, state, control)
+
+        callbacks.append(OwnLossLog())
+        trainer_cls = OwnLossTrainer
+    trainer = trainer_cls(model=model, processing_class=text_tok, train_dataset=train_ds, eval_dataset=eval_ds,
+                          args=targs, callbacks=callbacks)
+    if own:
+        own_info["model_accepts_loss_kwargs"] = bool(getattr(trainer, "model_accepts_loss_kwargs", False))
+        print(f"own loss: model_accepts_loss_kwargs {own_info['model_accepts_loss_kwargs']}")
     collated = check_collated_mask(trainer, rows)
     if not collated["labels_match_helper"]:
         raise RuntimeError("the trainer's labels are not encode_chat's loss mask (see collated batch check)")
@@ -619,6 +685,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         "metrics": result.metrics,
         "data_sha256": digest,
         "init_adapter": init_report,
+        "own_loss": own_info,
         "blas": blas,
         "sdpa": sdpa.as_dict() if sdpa else None,
         "profile": profile.result if profile else None,
