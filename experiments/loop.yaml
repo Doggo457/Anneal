@@ -22,7 +22,7 @@ min_free_gb: 60
 valloss: true
 milestone_evalplus: true   # EvalPlus on rounds that pass the keep rule only; since 21 Oct 2026 a no-worse check against the
                            # base (rules.evalplus_guard), not a measure of gain
-pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead
+pause_after_rejects_in_row: 1   # 28 Oct 2026: 1 until round 3's recipe change is in, so the loop holds after round 2 (a reject) instead of training round 3 on the old mix; back to 0 with that change (0 = never pause; check-ins change the recipe instead)
 prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is the prototype. Even if it scores worse, it
                            # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
                            # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
