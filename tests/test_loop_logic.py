@@ -847,6 +847,8 @@ def setup_world(tmp):
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
     for src in cfg["sources"]:  # small fake pools: tachibana (720) and math (120) usable; the rest keep their minimum
         src["share"] = sim_shares.get(src["name"], 0)
+        for k in L.SELECT_KEYS:  # rows in pool order here; test_think_selection covers picking by reasoning length
+            src.pop(k, None)
         if src["name"] in ("tachibana4_v4pro", "math_v4_aops"):
             src["min_pool_rows"] = 10
     # a source whose rows may lack reasoning (require_think off): never prepared or used (21 Oct rule), so the
@@ -1467,6 +1469,10 @@ def test_think_selection():
 
 def _think_selection(tmp):
     import yaml
+    # the live loop.yaml's selection keys are ones the loop knows
+    live = yaml.safe_load(open(os.path.join(ROOT, "experiments", "loop.yaml"), encoding="utf-8"))
+    for src in live["sources"]:
+        L.ranked_rows(src, ["a", "b"], [500, 300])
     w, cpath = setup_world(tmp)
     w.pause_train_once = set()
     # each pool row's reasoning tokens: 37 * index mod 101 (the fake pools all carry the same one-word reasoning)
