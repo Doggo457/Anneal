@@ -73,6 +73,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -296,6 +297,22 @@ def main():
         return 1
 
 
+def adapter_config_mismatch(ac, lora):
+    """None when a saved adapter_config.json (ac) has this run's r, lora_alpha and target modules, else (have, want).
+    Unsloth saves target_modules as one regex (the projections plus a language/text-tower filter), not a list: then
+    every wanted projection must be named in it, and load_init_adapter's key comparison proves the same modules carry
+    LoRA weights."""
+    want = {"r": lora["r"], "lora_alpha": lora["lora_alpha"], "target_modules": sorted(lora["target_modules"])}
+    tm = ac["target_modules"]
+    if isinstance(tm, str):
+        have_tm = [m for m in want["target_modules"]
+                   if re.search(r"(?<![A-Za-z0-9_])" + re.escape(m) + r"(?![A-Za-z0-9_])", tm)]
+    else:
+        have_tm = sorted(tm)
+    have = {"r": int(ac["r"]), "lora_alpha": int(ac["lora_alpha"]), "target_modules": have_tm}
+    return None if have == want else (have, want)
+
+
 def load_init_adapter(model, path, lora):
     """Copy a saved adapter's LoRA weights into the freshly created LoRA (shapes must match), then prove every tensor
     arrived. Returns a small report for summary.json."""
@@ -305,11 +322,10 @@ def load_init_adapter(model, path, lora):
 
     with open(os.path.join(path, "adapter_config.json"), encoding="utf-8") as f:
         ac = json.load(f)
-    want = {"r": lora["r"], "lora_alpha": lora["lora_alpha"], "target_modules": sorted(lora["target_modules"])}
-    have = {"r": int(ac["r"]), "lora_alpha": int(ac["lora_alpha"]),
-            "target_modules": sorted(ac["target_modules"]) if isinstance(ac["target_modules"], list) else ac["target_modules"]}
-    if want != have:
-        raise RuntimeError(f"init_adapter {path} has {have}, this run wants {want}")
+    bad_config = adapter_config_mismatch(ac, lora)
+    if bad_config:
+        raise RuntimeError(f"init_adapter {path} has {bad_config[0]} (target_modules as saved: "
+                           f"{ac['target_modules']!r}), this run wants {bad_config[1]}")
     saved = load_file(os.path.join(path, "adapter_model.safetensors"))
     current = get_peft_model_state_dict(model)
     if set(saved) != set(current):
