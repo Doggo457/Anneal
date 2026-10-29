@@ -65,7 +65,6 @@ def check(args):
     print(gdn_heads.apply(cfg["base_model"], cfg.get("gdn_heads", "stock")))
     print(short_conv.apply(cfg.get("short_conv", "shift")))
     import torch
-    import torch.nn.functional as F
     from datasets import load_dataset
 
     from anneal import kl_loss
@@ -102,17 +101,10 @@ def check(args):
         with torch.no_grad(), kl_loss.no_checkpointing(decoder):
             return decoder(input_ids=ids, use_cache=False).last_hidden_state[0, :-1]
 
-    def stats(h, ids, labels):
+    def stats(h_b, h_a, ids, labels):
         y = labels[0, 1:]
-        trained = y != kl_loss.IGNORE_INDEX
         think = kl_loss.think_targets(ids, labels, close_id)[0]
-        inside = think & (y != close_id)
-        with torch.no_grad():
-            ce = sum(float(F.cross_entropy(head(h[trained][s:s + 512]).float(), y[trained][s:s + 512], reduction="sum"))
-                     for s in range(0, int(trained.sum()), 512))
-            lp = torch.cat([F.log_softmax(head(h[think][s:s + 512]).float(), -1) for s in range(0, int(think.sum()), 512)])
-        p_close = float(lp[:, close_id][(inside[think])].exp().mean()) if bool(inside.any()) else None
-        return ce / max(int(trained.sum()), 1), lp, p_close, int(think.sum())
+        return row_stats(head, h_b, h_a, y, think, close_id, ignore_index=kl_loss.IGNORE_INDEX)
 
     base_h = {}
     for i in pick:
@@ -131,9 +123,7 @@ def check(args):
         on = float((h_on.float() - base_h[i].float()).abs().max())
         worst_off = max(worst_off, off)
         min_on = on if min_on is None else min(min_on, on)
-        ce_b, lp_b, pc_b, n_think = stats(base_h[i], ids, labels)
-        ce_a, lp_a, pc_a, _ = stats(h_on, ids, labels)
-        kl = float(F.kl_div(lp_a, lp_b, log_target=True, reduction="sum")) / max(n_think, 1)
+        ce_b, ce_a, kl, pc_b, pc_a, n_think = stats(base_h[i], h_on, ids, labels)
         row = {"row": i, "source": r.get("source"), "tokens": len(r["input_ids"]), "trained": r["n_trained"],
                "think": n_think, "off_vs_base_max_abs": off, "on_vs_base_max_abs": on,
                "kl_base_adapter_per_think_token": round(kl, 5), "ce_base": round(ce_b, 5), "ce_adapter": round(ce_a, 5),
@@ -147,6 +137,39 @@ def check(args):
     out["off_exact"] = worst_off == 0.0
     out["result"] = "PASS" if (min_on or 0) > 0 and worst_off <= 0.01 * min_on else "FAIL"
     return out
+
+
+def row_stats(head, h_b, h_a, y, think, close_id, chunk=256, ignore_index=-100):
+    """One row's numbers from base and adapter hidden states (h_b, h_a: [T, H], aligned with targets y: [T]), a few
+    hundred positions at a time so no full-vocabulary tensor for the whole row is ever held (29 Oct 2026: holding
+    both rows' log-probs and the KL's elementwise tensor ran a 43.9 GiB GPU out of memory on a long row).
+    Returns (ce_base, ce_adapter) per trained token, KL(base || adapter) per reasoning token, the mean probability
+    base and adapter give the close tag inside the reasoning (None if the row never is), and the reasoning count."""
+    import torch
+    import torch.nn.functional as F
+    trained = y != ignore_index
+    inside = think & (y != close_id)
+    ce_b = ce_a = kl = pc_b = pc_a = 0.0
+    with torch.no_grad():
+        for s in range(0, int(y.shape[0]), chunk):
+            tr, th, ins = trained[s:s + chunk], think[s:s + chunk], inside[s:s + chunk]
+            if not bool(tr.any()) and not bool(th.any()):
+                continue
+            lb = F.log_softmax(head(h_b[s:s + chunk]).float(), -1)
+            la = F.log_softmax(head(h_a[s:s + chunk]).float(), -1)
+            if bool(tr.any()):
+                yy = y[s:s + chunk][tr].unsqueeze(1)
+                ce_b -= float(lb[tr].gather(1, yy).sum())
+                ce_a -= float(la[tr].gather(1, yy).sum())
+            if bool(th.any()):
+                kl += float(F.kl_div(la[th], lb[th], log_target=True, reduction="sum"))
+            if bool(ins.any()):
+                pc_b += float(lb[ins, close_id].exp().sum())
+                pc_a += float(la[ins, close_id].exp().sum())
+            del lb, la
+    n_tr, n_th, n_in = int(trained.sum()), int(think.sum()), int(inside.sum())
+    return (ce_b / max(n_tr, 1), ce_a / max(n_tr, 1), kl / max(n_th, 1),
+            pc_b / n_in if n_in else None, pc_a / n_in if n_in else None, n_th)
 
 
 if __name__ == "__main__":
