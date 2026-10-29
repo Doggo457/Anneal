@@ -57,18 +57,33 @@ class Run:
         self.status_path = os.path.join(run_dir, "status.json")
         self.stop_path = os.path.join(run_dir, "STOP")
         self.status = {"state": "starting", "pid": os.getpid(), "started": time.time(), "step": 0, "max_steps": None}
+        self._status_lock = threading.Lock()
 
     def capture_output(self, name="run.log"):
         fh = open(os.path.join(self.dir, name), "a", encoding="utf-8", errors="replace", buffering=1)
         sys.stdout = Tee(sys.__stdout__, fh) if sys.__stdout__ else Tee(fh)
         sys.stderr = Tee(sys.__stderr__, fh) if sys.__stderr__ else Tee(fh)
 
+    STATUS_REPLACE_TRIES = 60  # 50 ms apart: about 3 s
+
     def write_status(self, **kw):
-        self.status.update(kw, updated=time.time())
-        tmp = self.status_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self.status, fh, indent=1, default=str)
-        os.replace(tmp, self.status_path)
+        # Windows refuses to replace status.json while another process (the portal, the watchdog, a status check)
+        # has it open, and those reads last milliseconds, so the swap is retried briefly instead of failing the
+        # caller (29 Oct 2026: one refused swap ended an EvalPlus stage attempt). One writer at a time, so two
+        # threads never share the .tmp file.
+        with self._status_lock:
+            self.status.update(kw, updated=time.time())
+            tmp = self.status_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.status, fh, indent=1, default=str)
+            for attempt in range(self.STATUS_REPLACE_TRIES):
+                try:
+                    os.replace(tmp, self.status_path)
+                    return
+                except PermissionError:
+                    if attempt == self.STATUS_REPLACE_TRIES - 1:
+                        raise
+                    time.sleep(0.05)
 
     def metric(self, **kw):
         kw.setdefault("t", time.time())
