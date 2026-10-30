@@ -1227,6 +1227,10 @@ class Loop(fr.Controller):
         rec.update(recipe=plan["recipe"]["id"], init=plan["init"], rows=plan["rows"])
         self.save()
         self.run_stage("data", self.data, cfg, plan)
+        held = {int(r) for r in (cfg.get("hold_before_train") or [])}
+        if self.done("train") is None and int(self.rnum) in held:
+            raise Waiting(f"round {self.rnum}: holding before training (loop.yaml hold_before_train) while its learning "
+                          f"rates are compared outside the loop (scripts/strength_sweep.py)")
         if self.free_gb() < cfg.get("min_free_gb", 60) and self.done("train") is None:
             raise Waiting(f"only {self.free_gb():.0f} GB free on the training drive (need {cfg.get('min_free_gb', 60)})")
         self.run_stage("train", self.train_round, cfg, plan)
