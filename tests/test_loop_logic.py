@@ -1556,6 +1556,52 @@ def _convert_pause(tmp):
     assert [script for script, _ in w.calls].count("convert_lora_to_gguf.py") >= 2
 
 
+def test_hold_before_train():
+    """30 Oct 2026: a round listed in loop.yaml hold_before_train plans and builds its data, then waits before training
+    (scripts/strength_sweep.py trains it at several learning rates outside the loop). Once a training folder and
+    train.done.json are in place, the loop goes on from convert without training again, still listed or not."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _hold_before_train(tmp)
+    finally:
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _hold_before_train(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, hold_before_train=[2])
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    r2 = os.path.join(run_dir, "rounds", "r002")
+    stages = os.path.join(r2, "stages")
+    for _ in range(2):  # the watchdog's restarts wait again, with nothing redone
+        assert run_main(args) == 0
+        st = json.load(open(os.path.join(run_dir, "status.json")))
+        assert st["state"] == "waiting" and "holding before training" in st["detail"], st
+        assert os.path.exists(os.path.join(stages, "data.done.json"))
+        assert not os.path.exists(os.path.join(stages, "train.done.json")) and not os.path.exists(os.path.join(r2, "train"))
+        assert not any(script == "train_longrun.py" for script, _ in w.calls)
+    # what strength_sweep.py adopt leaves: the chosen training folder and the train stage's record
+    tdir = os.path.join(r2, "train")
+    os.makedirs(os.path.join(tdir, "adapter"))
+    open(os.path.join(tdir, "adapter", "adapter_model.safetensors"), "wb").write(b"w" * 100)
+    json.dump({"state": "finished"}, open(os.path.join(tdir, "status.json"), "w"))
+    json.dump({"global_step": 12, "adapter": os.path.join(tdir, "adapter"), "rows": 1, "init_adapter": None,
+               "strength_sweep": {"lr": 5e-05}}, open(os.path.join(stages, "train.done.json"), "w"))
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))  # the hold only covers training
+    assert json.load(open(os.path.join(run_dir, "status.json")))["state"] == "finished"
+    assert not any(script == "train_longrun.py" for script, _ in w.calls)  # the adopted training was used as it is
+    assert os.path.exists(os.path.join(stages, "convert.done.json")) and os.path.exists(os.path.join(stages, "decide.done.json"))
+    assert json.load(open(os.path.join(stages, "train.done.json")))["strength_sweep"] == {"lr": 5e-05}
+
+
 def test_bfcl_harness():
     """anneal/bfcl.py: BFCL's request building (rebuilt here; checked byte for byte against BFCL 2026.3.23's own
     convert_to_tool output when the set was pinned), the judge on known answers through BFCL's real checker, and
