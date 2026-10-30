@@ -17,6 +17,9 @@ Long-run config keys (defaults in brackets):
   min_lr_ratio: [0.0]          epochs: [1]
   save_steps: [20]             save_total_limit: [3] rolling checkpoints for resume
   milestone_steps: []          steps whose checkpoints are kept for good (decay branches start from them)
+  short_run_fractions: []      also keep, for each share f, the checkpoint where a run of round(f x steps) steps would
+                               start its decay; a decay branch from it (branch_decay_steps = the rest) is that
+                               shorter run without training it from the start (short_run_start below)
   branch_decay_fraction: [0.1] decay length of a branch, as a share of its starting step
   branch_decay_steps: [0]      if set, overrides branch_decay_fraction
   completion_only: [true]      loss on the assistant turn only, not on the prompt
@@ -86,6 +89,14 @@ from anneal.runtime import RESULTS_DIR, Run, WindowsMemorySampler, gib, trainer_
 
 os.environ.setdefault("UNSLOTH_BLOCK_COMPILE", "0")  # block compile fails at guard building under TRL (30+ min lost)
 os.environ.setdefault("UNSLOTH_ENABLE_LOGGING", "1")
+
+
+def short_run_start(total_steps, fraction, decay_fraction=0.2):
+    """(start, decay) of a run of round(fraction x total_steps) steps on this script's warmup-stable-decay schedule:
+    the step its decay starts at, up to which it is the same as the full run, and its decay length."""
+    steps = max(2, round(float(fraction) * int(total_steps)))
+    decay = max(1, round(float(decay_fraction) * steps))
+    return steps - decay, decay
 
 
 def sha256_file(path):
@@ -498,6 +509,9 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     else:
         total_steps = main_steps
         decay = max(1, round(float(cfg.get("decay_fraction", 0.2)) * total_steps))
+        # 30 Oct 2026 (scripts/strength_sweep.py): the start of a shorter run's decay, kept for a decay branch
+        milestones = sorted(set(milestones) | {short_run_start(total_steps, f, cfg.get("decay_fraction", 0.2))[0]
+                                               for f in cfg.get("short_run_fractions") or []})
         out_dir = ckpt_dir
         resume = latest_checkpoint(ckpt_dir)
     if total_steps > steps_per_epoch * int(cfg.get("epochs", 1)):

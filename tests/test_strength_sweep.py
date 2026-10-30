@@ -1,6 +1,7 @@
 """Tests for scripts/strength_sweep.py without a GPU, a model or Windows: training, conversion and held-out losses by a
 fake run_cmd, answers from a fake llama-server whose adapter is as strong as its learning rate (lr / 1e-4), the
-choice rule and its tie-breaks, the hand-back to the loop, and every refusal.
+choice rule and its tie-breaks, the hand-back to the loop, and every refusal. The tuning pass (30 Oct 2026): KL
+weight candidates, the half-length run as a decay branch from the full run's checkpoint, and the close-call check.
 
   python tests/test_strength_sweep.py        (or: python -m pytest tests/test_strength_sweep.py)
 """
@@ -17,6 +18,7 @@ import test_lora_scale_check as T  # noqa: E402  (the fake server, BFCL module a
 
 S, L, E = T.S, T.L, T.E
 import strength_sweep as SW  # noqa: E402
+import train_longrun as TL  # noqa: E402  (only its short_run_start; nothing trains)
 import yaml  # noqa: E402
 
 LRS = (1e-4, 5e-5, 2.5e-5)
@@ -24,19 +26,25 @@ CALLS = []
 FAKE = {"pause_once": False, "drop_init_adapter": False}
 
 
-def strength(lr):
-    return float(lr) / 1e-4
+STEPS = 20  # the fake full run's steps
+
+
+def strength(lr, kl=None, half=False):
+    """How strongly the fake adapter changes answers: its learning rate, less with a larger KL weight, less again
+    at half length."""
+    return float(lr) / 1e-4 / (1 + 0.1 * (kl or 0)) * (0.7 if half else 1.0)
 
 
 # ============================================================================================ fakes
 
 class LrServer(T.FakeServer):
-    """The fake server with the adapter's strength set by the learning rate in the GGUF's name: scale 1 on an lr 5e-5
-    adapter answers as scale 0.5 on the lr 1e-4 one."""
+    """The fake server with the adapter's strength read from the fake GGUF: scale 1 on an lr 5e-5 adapter answers as
+    scale 0.5 on the lr 1e-4 one."""
 
     def __init__(self, flags, log_path, **kw):
         lora = flags[flags.index("--lora") + 1]
-        self.k = strength(re.search(r"-lr([0-9.e+-]+)-F16-LoRA\.gguf$", os.path.basename(lora)).group(1))
+        assert re.search(r"-lr[0-9.e+-]+(_kl[0-9.e+-]+)?(_half)?-F16-LoRA\.gguf$", os.path.basename(lora)), lora
+        self.k = json.loads(open(lora, "rb").read()[4:])["k"]
         super().__init__(flags, log_path, **kw)
 
     applied = property(lambda self: self._applied * self.k, lambda self, v: setattr(self, "_applied", v))
@@ -61,34 +69,47 @@ def fake_run_cmd(cmd, log_path):
         assert a["--resume"] is True
         cfg = yaml.safe_load(open(a["--config"]))
         tdir = a["--run-dir"]
+        branch = a.get("--branch-from")
         os.makedirs(os.path.join(tdir, "checkpoints", "checkpoint-10"), exist_ok=True)
         open(os.path.join(tdir, "checkpoints", "checkpoint-10", "optimizer.pt"), "wb").write(b"opt")
         if FAKE["pause_once"]:
             FAKE["pause_once"] = False
             json.dump({"state": "paused", "step": 5}, open(os.path.join(tdir, "status.json"), "w"))
             return 0
-        ad = os.path.join(tdir, "adapter")
+        if branch:  # as train_longrun.py: resumes the milestone, decays over branch_decay_steps
+            assert "short_run_fractions" not in cfg and os.path.isdir(branch), branch
+            start = json.load(open(os.path.join(branch, "trainer_state.json")))["global_step"]
+            steps = start + int(cfg["branch_decay_steps"])
+            ad = os.path.join(tdir, "branches", os.path.basename(branch), "adapter")
+        else:
+            steps, ad = STEPS, os.path.join(tdir, "adapter")
+            for f in cfg.get("short_run_fractions") or []:
+                ms = os.path.join(tdir, "milestones", f"checkpoint-{TL.short_run_start(steps, f, 0.2)[0]}")
+                os.makedirs(ms, exist_ok=True)
+                json.dump({"global_step": int(ms.rsplit("-", 1)[1])}, open(os.path.join(ms, "trainer_state.json"), "w"))
+        k = strength(cfg["lr"], cfg.get("kl_think_beta"), bool(branch))
         os.makedirs(ad, exist_ok=True)
-        json.dump({"r": 16, "lora_alpha": 32, "fake_lr": cfg["lr"]}, open(os.path.join(ad, "adapter_config.json"), "w"))
-        open(os.path.join(ad, "adapter_model.safetensors"), "wb").write(repr(cfg["lr"]).encode() * 100)
-        open(os.path.join(tdir, "metrics.jsonl"), "w").write(json.dumps({"step": 10, "loss": 0.5}) + "\n")
+        json.dump({"r": 16, "lora_alpha": 32, "fake_k": k}, open(os.path.join(ad, "adapter_config.json"), "w"))
+        open(os.path.join(ad, "adapter_model.safetensors"), "wb").write(repr(k).encode() * 100)
+        open(os.path.join(tdir, "metrics.jsonl"), "w").write(json.dumps({"step": steps, "loss": 0.5}) + "\n")
         rows = sum(1 for _ in open(cfg["train_file"]))
-        summ = {"global_step": 10, "total_steps": 10, "trainable_params": 1, "rows": rows, "rows_dropped_too_long": 0,
+        summ = {"global_step": steps, "total_steps": steps, "trainable_params": 1, "rows": rows,
+                "rows_dropped_too_long": 0,
                 "tokens": 1000, "peak_reserved_gib": 20.0, "session_seconds": 60, "adapter": ad,
                 "metrics": os.path.join(tdir, "metrics.jsonl"), "data_sha256": "d",
                 "init_adapter": None if FAKE["drop_init_adapter"] else cfg.get("init_adapter")}
         json.dump(summ, open(os.path.join(tdir, "summary.json"), "w"))
-        json.dump({"state": "finished", "step": 10}, open(os.path.join(tdir, "status.json"), "w"))
+        json.dump({"state": "finished", "step": steps}, open(os.path.join(tdir, "status.json"), "w"))
         return 0
     if script == "convert_lora_to_gguf.py":
         assert a["--outfile"].endswith(".gguf.part") and a["--outtype"] == "f16"
-        lr = json.load(open(os.path.join(a["path"], "adapter_config.json")))["fake_lr"]
-        open(a["--outfile"], "wb").write(b"gguf" + repr(lr).encode())
+        k = json.load(open(os.path.join(a["path"], "adapter_config.json")))["fake_k"]
+        open(a["--outfile"], "wb").write(b"gguf" + json.dumps({"k": k}).encode())
         return 0
     if script == "val_loss.py":
         assert a["--no-base"] is True and a["--max-rows"] == "200"
-        lr = json.load(open(os.path.join(a["--adapter"], "adapter_config.json")))["fake_lr"]
-        per = [{"key": r["key"], "trained": 100, "adapter_loss": 1.0 + (T.h(r["key"]) % 50) / 100 - 0.1 * strength(lr)}
+        k = json.load(open(os.path.join(a["--adapter"], "adapter_config.json")))["fake_k"]
+        per = [{"key": r["key"], "trained": 100, "adapter_loss": 1.0 + (T.h(r["key"]) % 50) / 100 - 0.1 * k}
                for r in map(json.loads, open(a["--val-file"]))]
         os.makedirs(a["--run-dir"], exist_ok=True)
         json.dump({"scored": ["adapter"], "per_row": per}, open(os.path.join(a["--run-dir"], "summary.json"), "w"))
@@ -102,12 +123,14 @@ def calls(script):
 
 # ============================================================================================ a fake round 3
 
-def make_round3(init_adapter=None, hold=True, data=True):
+def make_round3(init_adapter=None, hold=True, data=True, kl=None):
     r3 = SW.round_dir(3)
     os.makedirs(os.path.join(r3, "stages"))
     plan = {"recipe": {"id": "filter-kl"}, "init": "base" if not init_adapter else "best", "rows": 50,
             "init_adapter": init_adapter,
             "train": {"base_model": "m", "lr": 1e-4, "lora_r": 16, "lora_alpha": 32, "max_seq_len": 12288, "seed": 7}}
+    if kl is not None:
+        plan["train"]["kl_think_beta"] = kl
     json.dump(plan, open(os.path.join(r3, "stages", "plan.done.json"), "w"))
     if data:
         mix = os.path.join(r3, "data", "mix")
@@ -124,7 +147,8 @@ def make_round3(init_adapter=None, hold=True, data=True):
 
 @contextlib.contextmanager
 def sweep_world(**kw):
-    old = [(o, k, getattr(o, k)) for o, k in ((SW, "LOOP_DIR"), (SW, "OUT_ROOT"), (SW, "run_cmd"))]
+    old = [(o, k, getattr(o, k)) for o, k in ((SW, "LOOP_DIR"), (SW, "OUT_ROOT"), (SW, "run_cmd"),
+                                              (SW, "CLOSE_MARGIN"))]
     with T.world() as gate:
         try:
             SW.LOOP_DIR = S.LOOP_DIR
@@ -141,8 +165,9 @@ def sweep_world(**kw):
                 setattr(o, k, v)
 
 
-def run(*argv, lrs=LRS):
-    sys.argv = ["strength_sweep.py", "--round", "3", "--lrs", ",".join(f"{x:g}" for x in lrs), *argv]
+def run(*argv, lrs=LRS, cands=None):
+    which = ["--cands", cands] if cands is not None else ["--lrs", ",".join(f"{x:g}" for x in lrs)]
+    sys.argv = ["strength_sweep.py", "--round", "3", *which, *argv]
     return SW.main()
 
 
@@ -183,6 +208,8 @@ def test_full_sweep_choose_and_adopt():
             t = yaml.safe_load(open(os.path.join(d, "train.yaml")))
             assert t["lr"] == lr and {x: t[x] for x in plan["train"] if x != "lr"} == \
                 {x: v for x, v in plan["train"].items() if x != "lr"}, t  # only the lr differs from the round's plan
+            assert t["short_run_fractions"] == [0.5] and "kl_think_beta" not in t  # plus the half-length checkpoint
+            assert os.path.isdir(os.path.join(d, "train", "milestones", "checkpoint-8"))
             assert t["train_file"].endswith("r003/data/mix/train.jsonl") and "init_adapter" not in t
             assert os.path.exists(os.path.join(d, "convert", f"loop-r003-lr{SW.lr_tag(lr)}-F16-LoRA.gguf"))
             rows = E.read_jsonl(os.path.join(d, "gate.seed1.jsonl"))
@@ -225,7 +252,8 @@ def test_full_sweep_choose_and_adopt():
         assert not os.path.exists(os.path.join(dst, "checkpoints")) and os.path.exists(os.path.join(src, "checkpoints"))
         done = json.load(open(os.path.join(r3, "stages", "train.done.json")))
         assert done["strength_sweep"]["lr"] == best and done["adapter"] == os.path.join(dst, "adapter")
-        assert done["metrics"] == os.path.join(dst, "metrics.jsonl") and done["global_step"] == 10
+        assert done["metrics"] == os.path.join(dst, "metrics.jsonl") and done["global_step"] == STEPS
+        assert not os.path.exists(os.path.join(dst, "milestones"))
         assert set(SW.TRAIN_DONE_KEYS) <= set(done) and done["finished"]
         ytext = open(os.path.join(r3, "train.yaml")).read()
         assert ytext.startswith("# adopted from ") and yaml.safe_load(ytext)["lr"] == best
@@ -255,7 +283,7 @@ def test_choose_needs_every_part():
         assert not calls("val_loss.py") and not T.FakeServer.instances
         assert run("--n", "10", "--part", "loss", lrs=LRS[:2]) == 0
         assert run("--n", "10", "--part", "gate", lrs=LRS[:2]) == 0
-        refused(["--n", "10", "--part", "choose"], "lr 0.0001, lr 5e-05", lrs=LRS[:2])  # no BFCL answers yet
+        refused(["--n", "10", "--part", "choose"], "lr 0.0001; lr 5e-05", lrs=LRS[:2])  # no BFCL answers yet
         assert not os.path.exists(SW.choice_path(3))
         refused(["--n", "10", "--part", "adopt"], "run --part choose first", lrs=LRS[:2])
         assert run("--n", "10", "--part", "bfcl", lrs=LRS[:2]) == 0
@@ -318,6 +346,127 @@ def test_bfcl_refuses_base_rows_from_other_settings():
         json.dump(st, open(path, "w"))
         refused(["--part", "bfcl"], "other settings", lrs=LRS[:1])
         assert not os.path.exists(os.path.join(SW.cand_dir(3, LRS[0]), "bfcl.seed1.jsonl"))
+
+
+def test_short_run_start_matches_trainer():
+    for total in range(2, 400):
+        for f in (0.25, 0.5, 0.75):
+            for df in (0.1, 0.2, 0.3):
+                assert SW.short_run_start(total, f, df) == TL.short_run_start(total, f, df)
+    assert SW.short_run_start(200, 0.5) == (80, 20)  # a 100-step run: stable to 80, decays over 20
+
+
+def test_rank_tie_breaks_kl_and_length():
+    def s(lr, kl=None, half=False, gate=30):
+        return {"lr": lr, "kl": kl, "half": half, "gate": {"all": {"cand": {"pass": gate}}}, "bfcl": {"all": {"cand": 50}},
+                "loss": {"swe": {"rel_diff": -0.1}, "terminal": {"rel_diff": -0.1}}}
+
+    def pick(*rows):
+        r = max(rows, key=SW.rank_key)
+        return r["lr"], r["kl"], r["half"]
+
+    assert pick(s(1e-4, kl=3.0), s(1e-4)) == (1e-4, None, False)  # the round's own KL weight on a tie
+    assert pick(s(1e-4, half=True), s(1e-4)) == (1e-4, None, False)  # then the full length
+    assert pick(s(1e-4, kl=3.0, half=True, gate=31), s(1e-4)) == (1e-4, 3.0, True)  # gate passes still come first
+    assert pick(s(5e-5, kl=0.33), s(1e-4, kl=3.0)) == (5e-5, 0.33, False)  # then the smaller learning rate
+
+
+def test_kl_and_half_length_candidates():
+    with sweep_world(kl=1.0) as (gate, plan):
+        refused(["--part", "train"], "/half candidate needs its full-length run", cands="1e-4/half")
+        refused(["--part", "train"], "equals round 3's own KL weight", cands="1e-4/kl1")
+        refused(["--part", "train"], "cannot read candidate", cands="1e-4/kl")
+        refused(["--part", "train"], "cannot read candidate", cands="1e-4/half/half")
+        refused(["--part", "train"], "must be distinct", cands="1e-4/kl3,1e-4/kl3.0")
+        sys.argv = ["strength_sweep.py", "--round", "3", "--lrs", "1e-4/kl3", "--part", "train"]
+        try:
+            SW.main()
+            raise AssertionError("--lrs with /kl should have been refused")
+        except SystemExit as exc:
+            assert "--lrs takes learning rates only" in str(exc), exc
+        assert not CALLS
+        assert run("--n", "20", cands="1e-4,1e-4/kl3,1e-4/kl0.33,1e-4/half") == 0
+        full, kl3, half = SW.Cand(1e-4), SW.Cand(1e-4, 3.0), SW.Cand(1e-4, None, True)
+        t = yaml.safe_load(open(os.path.join(SW.cand_dir(3, kl3), "train.yaml")))
+        assert t["kl_think_beta"] == 3.0 and t["short_run_fractions"] == [0.5]
+        assert yaml.safe_load(open(os.path.join(SW.cand_dir(3, full), "train.yaml")))["kl_think_beta"] == 1.0
+        assert os.path.basename(SW.cand_dir(3, kl3)) == "r003_lr1.00e-04_kl3"
+        assert os.path.basename(SW.cand_dir(3, half)) == "r003_lr1.00e-04_half"
+        # the half-length run: a decay branch from the full run's checkpoint where a 10-step run starts decaying
+        b = json.load(open(os.path.join(SW.cand_dir(3, half), "branch.json")))
+        ms = os.path.join(SW.cand_dir(3, full), "train", "milestones", "checkpoint-8")
+        assert b == {"from": ms, "start": 8, "decay": 2, "steps": 10, "full_steps": STEPS, "fraction": 0.5}, b
+        ht = yaml.safe_load(open(os.path.join(SW.cand_dir(3, half), "train.yaml")))
+        assert ht["branch_decay_steps"] == 2 and "short_run_fractions" not in ht and ht["lr"] == 1e-4
+        branch_calls = [a for a in calls("train_longrun.py") if a.get("--branch-from")]
+        assert len(branch_calls) == 1 and branch_calls[0]["--branch-from"] == ms
+        assert SW.adapter_dir(3, half).endswith(os.path.join("r003_lr1.00e-04_half", "train", "branches",
+                                                             "checkpoint-8", "adapter"))
+        assert calls("convert_lora_to_gguf.py")[-1]["path"] == SW.adapter_dir(3, half)
+        assert all(a["--adapter"] == SW.adapter_dir(3, half) for a in calls("val_loss.py")[-len(L.HELDOUT):])
+        sums = {c: json.load(open(os.path.join(SW.cand_dir(3, c), "summary.json")))
+                for c in (full, kl3, SW.Cand(1e-4, 0.33), half)}
+        assert sums[half]["half"] and sums[half]["train"]["global_step"] == 10 and sums[kl3]["kl"] == 3.0
+        for c, sm in sums.items():  # each answered at its own strength
+            sel = json.load(open(os.path.join(SW.cand_dir(3, c), "selection.json")))["ids"]
+            want = want_gate(gate, sel, strength(c.lr, 1.0 if c.kl is None else c.kl, c.half))
+            assert sm["gate"]["all"]["cand"]["pass"] == sum(p for p, _ in want.values()), c
+        choice = json.load(open(SW.choice_path(3)))
+        best = max(sums.values(), key=SW.rank_key)
+        assert choice["chosen"]["tag"] == best["tag"] and len(choice["candidates"]) == 4 and "close_call" not in choice
+
+        # adopting the half-length run puts the branch's adapter where the loop looks for it
+        json.dump(dict(choice, chosen={"lr": 1e-4, "kl": None, "half": True, "tag": half.tag,
+                                       "folder": SW.cand_dir(3, half)}), open(SW.choice_path(3), "w"))
+        assert run("--part", "adopt", cands="1e-4/half") == 0
+        dst = os.path.join(SW.round_dir(3), "train")
+        assert SW.tree_sha(SW.adapter_dir(3, half)) == SW.tree_sha(os.path.join(dst, "adapter"))
+        assert not os.path.exists(os.path.join(dst, "branches")) and not os.path.exists(os.path.join(dst, "checkpoints"))
+        done = json.load(open(os.path.join(SW.round_dir(3), "stages", "train.done.json")))
+        assert done["global_step"] == 10 and done["strength_sweep"]["half"] and done["strength_sweep"]["branch"] == b
+        assert done["strength_sweep"]["adapter_from"] == SW.adapter_dir(3, half)
+
+
+def test_close_call():
+    with sweep_world():
+        SW.CLOSE_MARGIN = -1  # never close: picked on the 20
+        assert run("--n", "20", "--close-call", lrs=LRS[:2]) == 0
+        c1 = json.load(open(SW.choice_path(3)))
+        assert c1["close_call"]["triggered"] is False and "pair" not in c1["close_call"]
+        assert not any(os.path.exists(os.path.join(SW.cand_dir(3, lr), "summary-n40.json")) for lr in LRS)
+    with sweep_world() as (gate, plan):
+        SW.CLOSE_MARGIN = 10 ** 6  # always close: the top two answer 20, the pick is made on all 20
+        assert run("--n", "10", lrs=LRS) == 0  # no --close-call: picked on the 10
+        first = json.load(open(SW.choice_path(3)))
+        assert "close_call" not in first
+        CALLS.clear()
+        T.FakeServer.instances.clear()
+        assert run("--n", "10", "--part", "choose", "--close-call", lrs=LRS) == 0
+        assert not calls("train_longrun.py") and not calls("convert_lora_to_gguf.py")  # nothing trains again
+        ch = json.load(open(SW.choice_path(3)))
+        pair = [p["tag"] for p in ch["close_call"]["pair"]]
+        assert ch["close_call"]["triggered"] and ch["close_call"]["n"] == 20 and len(pair) == 2
+        ranked = sorted((json.load(open(os.path.join(SW.cand_dir(3, lr), "summary.json"))) for lr in LRS),
+                        key=SW.rank_key, reverse=True)
+        assert pair == [r["tag"] for r in ranked[:2]]  # the top two on the 10
+        for lr in LRS:
+            d = SW.cand_dir(3, lr)
+            ext = os.path.join(d, "summary-n20.json")
+            if SW.Cand(lr).tag in pair:
+                sm = json.load(open(ext))
+                ids = json.load(open(os.path.join(d, "selection-n20.json")))["ids"]
+                assert set(json.load(open(os.path.join(d, "selection.json")))["ids"]) < set(ids)  # the same 10 + 10 more
+                assert sm["gate"]["all"]["n"] == 20 and len(E.read_jsonl(os.path.join(d, "gate.seed1.jsonl"))) == 20
+                want = want_gate(gate, ids, strength(lr))
+                assert sm["gate"]["all"]["cand"]["pass"] == sum(p for p, _ in want.values())
+            else:
+                assert not os.path.exists(ext) and len(E.read_jsonl(os.path.join(d, "gate.seed1.jsonl"))) == 10
+        exts = [json.load(open(os.path.join(SW.cand_dir(3, SW.Cand(float(p["lr"]))), "summary-n20.json")))
+                for p in ch["close_call"]["pair"]]
+        assert ch["chosen"]["tag"] == max(exts, key=SW.rank_key)["tag"]
+        # the earlier pick is kept beside the new one
+        kept = [f for f in os.listdir(SW.OUT_ROOT) if f.startswith("r003_choice.") and f != "r003_choice.json"]
+        assert len(kept) == 1 and json.load(open(os.path.join(SW.OUT_ROOT, kept[0]))) == first
 
 
 if __name__ == "__main__":
