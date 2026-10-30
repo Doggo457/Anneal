@@ -722,11 +722,6 @@ def main():
     if plan and any(c.kl is not None and c.kl == own_kl(plan) for c in cands):
         raise SystemExit(f"a /kl value equals round {rnum}'s own KL weight ({own_kl(plan):g}); leave it out")
     halves = [c for c in cands if c.half]
-    if args.part in ("all", "train") and any(
-            c.full() not in cands[:i] and
-            (maybe_json(os.path.join(cand_dir(rnum, c.full()), "train", "status.json")) or {}).get("state")
-            != "finished" for i, c in enumerate(cands) if c.half):
-        raise SystemExit("a /half candidate needs its full-length run finished first (or listed before it)")
     if args.plan:
         gate = E.read_jsonl(E.GATE_PATH)
         picked = S.draw(gate, args.n)
@@ -752,6 +747,11 @@ def main():
             log(f"{c.label}: " + (f"branch from step {short_run_start(fsum['total_steps'], HALF)[0]} of "
                                   f"{fsum['total_steps']}" if fsum else "its full-length run has not trained yet"))
         return 0
+    if args.part in ("all", "train") and any(
+            c.full() not in cands[:i] and
+            (maybe_json(os.path.join(cand_dir(rnum, c.full()), "train", "status.json")) or {}).get("state")
+            != "finished" for i, c in enumerate(cands) if c.half):
+        raise SystemExit("a /half candidate needs its full-length run finished first (or listed before it)")
     if args.part == "adopt":
         adopt_part(cfg, rnum)
         return 0
