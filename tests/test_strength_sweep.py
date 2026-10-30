@@ -374,6 +374,7 @@ def test_rank_tie_breaks_kl_and_length():
 def test_kl_and_half_length_candidates():
     with sweep_world(kl=1.0) as (gate, plan):
         refused(["--part", "train"], "/half candidate needs its full-length run", cands="1e-4/half")
+        assert run("--plan", cands="1e-4/half") == 0 and not CALLS  # --plan only reports
         refused(["--part", "train"], "equals round 3's own KL weight", cands="1e-4/kl1")
         refused(["--part", "train"], "cannot read candidate", cands="1e-4/kl")
         refused(["--part", "train"], "cannot read candidate", cands="1e-4/half/half")
