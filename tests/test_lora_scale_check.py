@@ -113,6 +113,26 @@ class FakeServer:
         self.httpd.server_close()
 
 
+def fake_bfcl_module():
+    """anneal/bfcl.py's interface: each item is one prompt to the fake server; "OK" passes."""
+    import urllib.request
+
+    def request(url, item, seed, max_tokens, sampling):
+        body = {"messages": [{"role": "user", "content": item["prompt"]}], "seed": seed, "max_tokens": max_tokens}
+        req = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read())
+        msg = data["choices"][0]["message"]
+        return {"content": msg["content"], "reasoning": msg["reasoning_content"],
+                "finish_reason": data["choices"][0]["finish_reason"],
+                "completion_tokens": data["usage"]["completion_tokens"], "seconds": 0.0, "answer": msg["content"]}
+
+    return types.SimpleNamespace(HARNESS="fake-bfcl-1", prepare=lambda: None, request=request,
+                                 judge=lambda item, r: (r["content"] == "OK", "ok" if r["content"] == "OK" else "x"),
+                                 probe=lambda rows: None, language=lambda item: item["language"])
+
+
 def fake_val_loss(cmd, cwd=None, stdout=None, stderr=None, env=None):
     """scripts/val_loss.py --no-base: adapter loss = base - 0.1 x (lora_alpha / 32), base from the row key."""
     a, rest = {}, list(cmd[3:])
@@ -131,7 +151,18 @@ def fake_val_loss(cmd, cwd=None, stdout=None, stderr=None, env=None):
 
 # ============================================================================================ a fake loop folder
 
-def make_world(tmp, n_write=23, n_fix=17, rejects=1):
+def bfcl_rows(items, scale, path):
+    """Stored BFCL rows by the fake server's rule at this scale (seed 1)."""
+    rows = []
+    for i, it in enumerate(items):
+        seed = 100000 + i
+        n = int((2000 + h(it["prompt"]) % 3000) * (1.6 - scale))
+        rows.append({"id": it["id"], "seed": 1, "pass": h(it["prompt"], seed) % 100 < 50 + 30 * (1 - scale),
+                     "finish_reason": "stop", "completion_tokens": n + 50, "reasoning_tokens": n, "budget_hit": False})
+    E.write_jsonl(path, rows)
+
+
+def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30):
     gate = [{"id": f"{k}/{lang}/cc/test/{i}", "kind": k, "lang": lang, "prompt": f"problem {k} {i}"}
             for k, n in (("write", n_write), ("fix", n_fix)) for i in range(n)
             for lang in [("cpp", "java", "go")[i % 3]]]
@@ -177,6 +208,20 @@ def make_world(tmp, n_write=23, n_fix=17, rejects=1):
         json.dump({"sha": L.file_sha(f), "summary": summ},
                   open(os.path.join(r2, "stages", f"{hh['stage']}.done.json"), "w"))
         state["base"][hh["key"]] = {"path": summ, "field": "base_loss", "round": 0}
+    bitems = [{"id": f"bfcl/{i}", "language": ("java", "javascript")[i % 2], "prompt": f"call {i}"}
+              for i in range(n_bfcl)]
+    bpath = os.path.join(tmp, "bfcl.jsonl")
+    E.write_jsonl(bpath, bitems)
+    cfg["guards"] = dict(cfg.get("guards") or {}, bfcl={"file": bpath, "seed": 1, "tolerance": 0.06})
+    brows = os.path.join(S.LOOP_DIR, "rounds", "r000", "guards", "bfcl.x.jsonl")
+    os.makedirs(os.path.dirname(brows))
+    bfcl_rows(bitems, 0.0, brows)
+    state["base_guards"] = {"bfcl": {"rows": brows, "pass": 0,
+                                     "fingerprint": L.Loop.guard_fingerprint(S._LoopView(), cfg, "bfcl")}}
+    os.makedirs(os.path.join(r2, "guards"))
+    bfcl_rows(bitems, 1.0, os.path.join(r2, "guards", "bfcl.seed1.jsonl"))
+    json.dump({"rows": os.path.join(r2, "guards", "bfcl.seed1.jsonl")},
+              open(os.path.join(r2, "stages", "bfcl.done.json"), "w"))
     json.dump({"gguf": os.path.join(r2, "r002.gguf")}, open(os.path.join(r2, "stages", "convert.done.json"), "w"))
     json.dump({"gate_rows": os.path.join(r2, "gate.seed1.jsonl"), "gate_seed": 1},
               open(os.path.join(r2, "stages", "evaluate.done.json"), "w"))
@@ -196,7 +241,9 @@ def world(**kw):
              (sys, "argv")]
     old = [(o, k, getattr(o, k)) for o, k in saved]
     tmp = tempfile.mkdtemp()
+    old_bfcl = L.GUARDS["bfcl"]["module"]
     try:
+        L.GUARDS["bfcl"]["module"] = fake_bfcl_module()
         S.llama_running = lambda: False
         S.toolchain_check = lambda gate, state: "fp"
         S.llama.Server = FakeServer
@@ -208,6 +255,7 @@ def world(**kw):
     finally:
         for o, k, v in old:
             setattr(o, k, v)
+        L.GUARDS["bfcl"]["module"] = old_bfcl
         FakeServer.ignore_scale = False
         shutil.rmtree(tmp)
 
@@ -249,6 +297,7 @@ def test_probe_diff():
 def test_full_run_and_resume():
     with world() as gate:
         assert run("--n", "20", "--plan") == 0
+        assert not os.path.exists(os.path.join(S.OUT_ROOT, "r002_x0.50"))  # --plan starts nothing
         assert run("--n", "20") == 0
         out = os.path.join(S.OUT_ROOT, "r002_x0.50")
         rows = E.read_jsonl(os.path.join(out, "gate.seed1.jsonl"))
@@ -267,16 +316,58 @@ def test_full_run_and_resume():
         for kind in L.HELDOUT:
             s = summ["loss"][kind]
             assert s["rows"] == 30 and abs(s["gain_kept"] - 0.5) < 1e-6, s
+        b = summ["bfcl"]
+        assert b["all"]["n"] == 30 and b["java"]["n"] == 15 and b["javascript"]["n"] == 15, b
+        brows = E.read_jsonl(os.path.join(out, "bfcl.seed1.jsonl"))
+        bitems = E.read_jsonl(L.Loop.guard_file(None, L.load_config(L.CONFIG), "bfcl"))
+        want = {it["id"]: h(it["prompt"], 100000 + i) % 100 < 65 for i, it in enumerate(bitems)}
+        assert len(brows) == 30 and all(r["pass"] == want[r["id"]] for r in brows)  # answered at scale 0.5
+        assert b["all"]["part"] == sum(want.values())
+        assert any(f.startswith("probe-bfcl-") for f in os.listdir(out))
         ac = json.load(open(os.path.join(out, "adapter", "adapter_config.json")))
         assert ac["lora_alpha"] == 16 and isinstance(ac["lora_alpha"], int)
         src = json.load(open(os.path.join(S.LOOP_DIR, "rounds", "r002", "train", "adapter", "adapter_config.json")))
         assert src["lora_alpha"] == 32  # the round's own adapter untouched
-        probe = [json.load(open(os.path.join(out, f))) for f in os.listdir(out) if f.startswith("probe-")]
+        probe = [json.load(open(os.path.join(out, f))) for f in os.listdir(out)
+                 if f.startswith("probe-") and not f.startswith("probe-bfcl-")]
         assert len(probe) == 1 and probe[0]["ok"] and probe[0]["scale_now"] == {"0": 0.5}
         # a second run answers nothing again and starts no server
         FakeServer.instances.clear()
         assert run("--n", "20") == 0
         assert not FakeServer.instances and len(E.read_jsonl(os.path.join(out, "gate.seed1.jsonl"))) == 20
+        assert len(E.read_jsonl(os.path.join(out, "bfcl.seed1.jsonl"))) == 30
+
+
+def test_bfcl_part_alone_then_summary_keeps_both():
+    with world():
+        assert run("--n", "10", "--part", "gate") == 0
+        out = os.path.join(S.OUT_ROOT, "r002_x0.25")
+        assert run("--n", "10", "--scale", "0.25", "--part", "bfcl") == 0
+        summ = json.load(open(os.path.join(out, "summary.json")))
+        assert "gate" not in summ and summ["bfcl"]["all"]["n"] == 30  # x0.25 has no gate answers yet
+        b = summ["bfcl"]["all"]
+        assert b["part_vs_full"]["wins"] >= b["part_vs_full"]["losses"]  # weaker adapter: fake passes rise
+        summ5 = json.load(open(os.path.join(S.OUT_ROOT, "r002_x0.50", "summary.json")))
+        assert summ5["gate"]["all"]["n"] == 10 and "bfcl" not in summ5
+        assert run("--n", "10", "--part", "bfcl") == 0  # x0.5: bfcl added after its gate part
+        summ5 = json.load(open(os.path.join(S.OUT_ROOT, "r002_x0.50", "summary.json")))
+        assert summ5["gate"]["all"]["n"] == 10 and summ5["bfcl"]["all"]["n"] == 30
+
+
+def test_bfcl_refuses_base_rows_from_other_settings():
+    with world():
+        path = os.path.join(S.LOOP_DIR, "state.json")
+        with open(path) as fh:
+            st = json.load(fh)
+        st["base_guards"]["bfcl"]["fingerprint"]["budget"] = 16384
+        with open(path, "w") as fh:
+            json.dump(st, fh)
+        try:
+            run("--n", "10", "--part", "bfcl")
+            raise AssertionError("should have refused")
+        except SystemExit as exc:
+            assert "other settings" in str(exc) and "budget" in str(exc), exc
+        assert not os.path.exists(os.path.join(S.OUT_ROOT, "r002_x0.50", "bfcl.seed1.jsonl"))
 
 
 def test_probe_fails_when_scale_does_nothing():
