@@ -13,6 +13,10 @@ Parts (each resumes where it stopped; output in results/research/lora_scale/rNNN
   loss     the held-out bug-fix and terminal steps (loop.yaml swe_loss and term_loss, same file, rows and length) on a
            copy of the adapter whose lora_alpha (and alpha_pattern) is x S (PEFT scales by lora_alpha / r), through
            scripts/val_loss.py --no-base; compared row by row with the base and the round at full strength.
+  bfcl     BFCL's 150 Java and JavaScript tool calls (loop.yaml guards.bfcl: the clearest drop of round 2, 92 -> 72 of
+           150) with the round's GGUF LoRA at scale S, on the gate server's settings and the guard's seed, after the
+           same scale probe; paired per item with the base's rows (state base_guards, same fingerprint only) and the
+           round's own (its bfcl stage). Added 30 Oct 2026 for the strength sweep (scales 0.25, 0.5 and 0.75).
   gate     --n gate problems drawn without looking at any answer: the same number of each kind (write, fix), within
            a kind the first by sha256 of "lora-scale:" + id. Answered on the gate server's exact settings (loop.py
            gate_flags, build, slots, cache, budget, sampling) with the round's GGUF LoRA at scale S (POST
@@ -23,11 +27,14 @@ Parts (each resumes where it stopped; output in results/research/lora_scale/rNNN
   summary  pass counts, reasoning tokens, budget hits and finish reasons of the base, the round and the round at S on
            the same problems (all, write, fix), and the loss comparisons -> summary.json (numbers only).
 
-  python scripts\\lora_scale_check.py [--round 2] [--scale 0.5] [--n 60] [--part all|loss|gate|summary] [--plan]
+  python scripts\\lora_scale_check.py [--round 2] [--scale 0.5] [--n 60] [--part all|loss|bfcl|gate|summary] [--plan]
 
---plan checks the inputs and prints the draw, and starts nothing. The loss and gate parts run only while the loop is
-not running and would hold if the watchdog started it (pause_after_rejects_in_row reached), and with no
-llama-server.exe running. A STOP file in the output folder stops the gate part cleanly (answers so far are kept).
+all runs loss, bfcl, gate and summary in that order.
+
+--plan checks the inputs and prints the draw, and starts nothing. The loss, bfcl and gate parts run only while the
+loop is not running and would hold if the watchdog started it (pause_after_rejects_in_row reached), and with no
+llama-server.exe running. A STOP file in the output folder stops the bfcl and gate parts cleanly (answers so far are
+kept).
 """
 
 import argparse
@@ -375,6 +382,96 @@ def loss_part(cfg, state, info, out, scale):
         log(f"loss {kind}: done in {(time.time() - t0) / 60:.0f} min")
 
 
+class _LoopView:
+    """What loop.Loop.guard_fingerprint reads from a Loop, without a loop run."""
+
+    def guard_file(self, cfg, name):
+        return L.Loop.guard_file(None, cfg, name)
+
+    def gate_flags(self, cfg, lora=None):
+        return L.Loop.gate_flags(None, cfg, lora=lora)
+
+
+def guard_refs(cfg, state, info, name):
+    """(items, seed, base rows, round rows) of a no-worse check: the base's rows only if they were scored under the
+    settings in force now, the round's from its own stage."""
+    gc = (cfg.get("guards") or {}).get(name)
+    if not isinstance(gc, dict):
+        raise SystemExit(f"loop.yaml has no guards.{name}")
+    fp = L.Loop.guard_fingerprint(_LoopView(), cfg, name)
+    have = (state.get("base_guards") or {}).get(name) or {}
+    if have.get("fingerprint") != fp:
+        diff = sorted(k for k in set(fp) | set(have.get("fingerprint") or {})
+                      if fp.get(k) != (have.get("fingerprint") or {}).get(k))
+        raise SystemExit(f"the base's {name} rows were scored under other settings ({diff}); nothing to pair with")
+    try:
+        done = read_json(os.path.join(info["rdir"], "stages", f"{name}.done.json"))
+    except (OSError, ValueError):
+        raise SystemExit(f"the round has no finished {name} stage to pair with")
+    seed = int(gc.get("seed", 1))
+    items = E.read_jsonl(L.Loop.guard_file(None, cfg, name))
+    if not items:
+        raise SystemExit(f"{L.Loop.guard_file(None, cfg, name)} is empty")
+    base_rows = {r["id"]: r for r in E.read_jsonl(resolve(have["rows"])) if r["seed"] == seed}
+    full_rows = {r["id"]: r for r in E.read_jsonl(resolve(done["rows"])) if r["seed"] == seed}
+    missing = [it["id"] for it in items if it["id"] not in base_rows or it["id"] not in full_rows]
+    if missing:
+        raise SystemExit(f"{len(missing)} {name} items have no seed-{seed} answer from the base or the round")
+    return items, seed, base_rows, full_rows
+
+
+def bfcl_part(cfg, state, info, out, scale, port):
+    name = "bfcl"
+    items, seed, _, _ = guard_refs(cfg, state, info, name)
+    path = os.path.join(out, f"{name}.seed{seed}.jsonl")
+    have = {r["id"] for r in E.read_jsonl(path) if r["seed"] == seed}
+    if all(it["id"] in have for it in items):
+        log(f"{name}: every item answered before")
+        return
+    require_gpu_free(cfg, state)
+    gate_server_check(cfg, state)
+    mod = L.GUARDS[name]["module"]
+    mod.prepare()
+    g = cfg["gate"]
+    os.makedirs(os.path.join(out, "logs"), exist_ok=True)
+    srv = llama.Server(L.Loop.gate_flags(None, cfg, lora=info["gguf"]), os.path.join(out, "logs", f"server-{name}.log"),
+                       port=port, binary=llama.server_binary(L.gate_build(cfg)))
+    log(f"llama-server ({name}): {srv.describe()}")
+    with srv:
+        log(f"llama-server up in {srv.load_s} s")
+        probe = scale_probe(srv.url, scale)
+        write_json(os.path.join(out, f"probe-{name}-{time.strftime('%Y%m%d-%H%M%S')}.json"), probe)
+        log("scale probe: " + json.dumps(probe))
+        if not probe["ok"]:
+            raise SystemExit("scale probe failed: the adapter's scale could not be shown to change the answers; "
+                             "nothing answered")
+        stop = os.path.join(out, "STOP")
+        first = [r for r in E.read_jsonl(path) if r["seed"] == seed][:L.GUARD_PROBE_ROWS]
+        err = mod.probe(first) if len(first) == L.GUARD_PROBE_ROWS else None
+        if err:
+            raise SystemExit(err)
+
+        def on_row(r, k, tot, tps):
+            log(f"{name} {k}/{tot}: {r['id']} pass {r['pass']} verdict {r.get('verdict')} ({tps:.1f} tok/s)")
+            if len(first) < L.GUARD_PROBE_ROWS:
+                first.append(r)
+                bad = mod.probe(first) if len(first) == L.GUARD_PROBE_ROWS else None
+                if bad:
+                    raise RuntimeError(bad)
+
+        try:
+            E.score(srv.url, items, path, seed, g["max_tokens"], None, None, ew.count_tokens, g["budget"],
+                    concurrency=L.gate_concurrency(cfg), stop_check=lambda: os.path.exists(stop), log=log,
+                    request=lambda u, it, sd, mt: mod.request(u, it, sd, mt, ew.SAMPLING), judge=mod.judge,
+                    on_row=on_row)
+        except E.Stopped:
+            log(f"{name}: stopped by STOP; answers so far kept")
+        after = lora_scales(srv.url)
+        write_json(os.path.join(out, f"scale_after-{name}.json"), {"scales": {str(k): v for k, v in after.items()}})
+        if after != {0: float(scale)}:
+            raise SystemExit(f"the adapter's scale read {after} after answering, not {scale}")
+
+
 def gate_part(cfg, state, info, base, out, scale, n, port):
     gate = E.read_jsonl(E.GATE_PATH)
     seed = info["gate_seed"]
@@ -491,6 +588,26 @@ def loss_summary(base_loss, full_loss, part_loss, weights):
             "part_vs_full": {k: part_vs_full[k] for k in ("wins", "losses", "p_one_sided")}}
 
 
+def bfcl_summary(cfg, state, info, out):
+    name = "bfcl"
+    items, seed, base_rows, full_rows = guard_refs(cfg, state, info, name)
+    part_rows = {r["id"]: r for r in E.read_jsonl(os.path.join(out, f"{name}.seed{seed}.jsonl")) if r["seed"] == seed}
+    mod = L.GUARDS[name]["module"]
+    res = {}
+    for lang in ["all"] + sorted({mod.language(it) for it in items}):
+        ids = [it["id"] for it in items if it["id"] in part_rows and (lang == "all" or mod.language(it) == lang)]
+        n_all = sum(1 for it in items if lang == "all" or mod.language(it) == lang)
+        g = {"n": len(ids), "items": n_all}
+        if ids:
+            g.update({k: sum(1 for i in ids if rows[i]["pass"]) for k, rows in
+                      (("base", base_rows), ("full", full_rows), ("part", part_rows))},
+                     part_vs_full=paired(full_rows, part_rows, ids), part_vs_base=paired(base_rows, part_rows, ids))
+            gap = g["base"] - g["full"]
+            g["pass_gap_closed"] = round((g["part"] - g["full"]) / gap, 3) if gap > 0 else None
+        res[lang] = g
+    return res
+
+
 def summary_part(cfg, state, info, base, out, scale, n):
     res = {"round": info["rdir"][-4:], "scale": scale, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
     gate = E.read_jsonl(E.GATE_PATH)
@@ -499,6 +616,9 @@ def summary_part(cfg, state, info, base, out, scale, n):
     if os.path.exists(gpath):
         res["gate"] = gate_summary(gate, draw(gate, n), seed_rows(base["gate_rows"], seed),
                                    seed_rows(info["gate_rows"], seed), seed_rows(gpath, seed))
+    seed_b = int(((cfg.get("guards") or {}).get("bfcl") or {}).get("seed", 1))
+    if os.path.exists(os.path.join(out, f"bfcl.seed{seed_b}.jsonl")):
+        res["bfcl"] = bfcl_summary(cfg, state, info, out)
     res["loss"] = {}
     for kind, h in L.HELDOUT.items():
         ps = os.path.join(out, f"loss_{kind}", "summary.json")
@@ -526,6 +646,14 @@ def summary_part(cfg, state, info, base, out, scale, n):
                 f"closed {g['thinking_gap_closed']}, pass gap closed {g['pass_gap_closed']}; x{scale} vs full "
                 f"{g['part_vs_full']['wins']} won {g['part_vs_full']['losses']} lost "
                 f"(p {g['part_vs_full']['p_two_sided']})")
+    for lang, b in (res.get("bfcl") or {}).items():
+        if b["n"]:
+            log(f"bfcl {lang} ({b['n']} of {b['items']}): pass base {b['base']} / full {b['full']} / x{scale} "
+                f"{b['part']}; pass gap closed {b['pass_gap_closed']}; x{scale} vs full "
+                f"{b['part_vs_full']['wins']} won {b['part_vs_full']['losses']} lost "
+                f"(p {b['part_vs_full']['p_two_sided']}); vs base "
+                f"{b['part_vs_base']['wins']} won {b['part_vs_base']['losses']} lost "
+                f"(p {b['part_vs_base']['p_two_sided']})")
     for kind, s in res["loss"].items():
         log(f"loss {kind} ({s['rows']} rows): base {s['base']:.4f} / full {s['full']:.4f} "
             f"({100 * s['full_rel_to_base']:+.1f}%) / x{scale} {s['part']:.4f} ({100 * s['part_rel_to_base']:+.1f}%); "
@@ -540,7 +668,7 @@ def main():
     ap.add_argument("--round", type=int, default=2)
     ap.add_argument("--scale", type=float, default=0.5)
     ap.add_argument("--n", type=int, default=60)
-    ap.add_argument("--part", choices=["all", "loss", "gate", "summary"], default="all")
+    ap.add_argument("--part", choices=["all", "loss", "bfcl", "gate", "summary"], default="all")
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--plan", action="store_true", help="check the inputs and print the draw; start nothing")
     args = ap.parse_args()
@@ -565,6 +693,11 @@ def main():
         log(f"base gate rows: {base.get('gate_rows')} seed {base.get('gate_seed')}")
         log(f"loop: {loop_would_hold(cfg, state) or 'not running and would hold'}; llama-server running: "
             f"{llama_running()}")
+        try:
+            items, seed, _, _ = guard_refs(cfg, state, info, "bfcl")
+            log(f"bfcl: {len(items)} items, seed {seed}; base and round rows found under today's settings")
+        except SystemExit as exc:
+            log(f"bfcl: not ready: {exc}")
         return 0
     if info["missing"]:
         raise SystemExit("not ready: " + "; ".join(info["missing"]))
@@ -573,6 +706,8 @@ def main():
     os.makedirs(out, exist_ok=True)
     if args.part in ("all", "loss"):
         loss_part(cfg, state, info, out, args.scale)
+    if args.part in ("all", "bfcl"):
+        bfcl_part(cfg, state, info, out, args.scale, args.port)
     if args.part in ("all", "gate"):
         gate_part(cfg, state, info, base, out, args.scale, args.n, args.port)
     summary_part(cfg, state, info, base, out, args.scale, args.n)
