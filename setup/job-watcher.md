@@ -6,9 +6,9 @@ goes idle or closes.
 
 | It sees | It does |
 |---|---|
-| a job running | checks the RAM hard line every minute: free RAM under 1.5 GiB or committed memory over 74 GiB writes `STOP` in the job's folders (the job saves and exits); it never kills anything |
+| a job running | checks the RAM hard line every minute: free RAM under 1.5 GiB or committed memory over 74 GB (decimal) writes `STOP` in the job's folders (the job saves and exits); it never kills anything |
+| the job exited, a `STOP` file is there | moves it to `held\`; a person decides (a stopped job can still write its done files, so `STOP` is checked first) |
 | the job exited, its done files exist | moves it to `done\` and starts the next one |
-| the job exited, a `STOP` file is there | moves it to `held\`; a person decides |
 | the job exited within 2 minutes without finishing | tries again 10 minutes later, 12 times at most |
 | the job stopped later without finishing | starts it again (the jobs skip work already saved), up to `max_attempts`, then moves it to `failed\` |
 | no job running | starts the first queued job once the GPU has been free for 3 checks in a row: no `llama-server.exe` and no other training or scoring script running |

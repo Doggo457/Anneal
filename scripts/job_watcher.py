@@ -9,12 +9,12 @@ Queue: results\jobs\queue\*.json, run in file-name order. Each file holds
 "args" run with the venv's python.exe in C:\AI\training. The job is finished when every "done" path exists.
 
 Every minute:
-  - while a job runs: if free RAM is under 1.5 GiB or committed memory is over 74 GiB, it writes STOP into each
-    existing stop_dirs folder (the job saves and exits). It never kills anything.
-  - once the job has exited: finished, so it goes to done\. A STOP file is there, so it goes to held\ and a person
-    decides. It exited within 2 minutes without finishing (it refused to start), so it is tried again 10 minutes
-    later, 12 times at most. Otherwise it is started again (the jobs skip saved work), up to max_attempts, and then
-    goes to failed\.
+  - while a job runs: if free RAM is under 1.5 GiB or committed memory is over 74 GB (decimal, like the RAM guard),
+    it writes STOP into each existing stop_dirs folder (the job saves and exits). It never kills anything.
+  - once the job has exited: a STOP file is there, so it goes to held\ and a person decides (a stopped job may still
+    write its done files). Finished, so it goes to done\. It exited within 2 minutes without finishing (it refused
+    to start), so it is tried again 10 minutes later, 12 times at most. Otherwise it is started again (the jobs skip
+    saved work), up to max_attempts, and then goes to failed\.
   - with no job running: a queued job whose done paths all exist goes to done\. The first other job starts once the
     GPU has been free for 3 checks in a row: no llama-server.exe and no other training or scoring script running.
 Files in results\jobs: state.json, status.json (rewritten every check), watcher.log, logs\NAME.log (job output).
@@ -36,7 +36,7 @@ from operator import ge, gt, lt
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JOBS = os.path.join(ROOT, "results", "jobs")
-MIN_FREE_GIB, MAX_COMMIT_GIB = 1.5, 74.0
+MIN_FREE_GIB, MAX_COMMIT_GB = 1.5, 74.0
 FREE_CHECKS, EVERY_S = 3, 60
 QUICK_EXIT_S, QUICK_RETRY_S, MAX_QUICK = 120, 600, 12
 BUSY = ("lora_scale_check.py", "strength_sweep.py", "train_longrun.py", "train_qlora.py", "val_loss.py",
@@ -81,14 +81,14 @@ class Machine:
             return 0.0
 
     def memory(self):
-        """Free RAM, committed memory and the commit limit, in GiB."""
+        """Free RAM in GiB; committed memory and the commit limit in GB (10**9 bytes)."""
         class MS(ctypes.Structure):
             _fields_ = [("n", ctypes.c_ulong), ("load", ctypes.c_ulong)] + \
                        [(k, ctypes.c_ulonglong) for k in ("tp", "ap", "tf", "af", "tv", "av", "ae")]
         st = MS()
         st.n = ctypes.sizeof(MS)
         ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st))
-        return st.ap / 2 ** 30, (st.tf - st.af) / 2 ** 30, st.tf / 2 ** 30
+        return st.ap / 2 ** 30, (st.tf - st.af) / 1e9, st.tf / 1e9
 
     def start(self, args, log_path):
         exe = os.path.join(ROOT, ".venv", "Scripts", "python.exe")
@@ -154,6 +154,10 @@ def busy(m):
     return None
 
 
+def moved(dry, folder):
+    return f"would move to {folder} (dry run)" if dry else f"moved to {folder}"
+
+
 def move(f, folder, dry, counts=None):
     if not dry:
         os.replace(jpath("queue", f), jpath(folder, f))
@@ -165,17 +169,17 @@ def step(m, st, dry=False):
     """One check. Updates the state dict st and returns the log lines."""
     out = []
     free, commit, limit = m.memory()
-    st["memory"] = {"free_gib": round(free, 2), "committed_gib": round(commit, 2), "limit_gib": round(limit, 2)}
+    st["memory"] = {"free_gib": round(free, 2), "committed_gb": round(commit, 2), "limit_gb": round(limit, 2)}
     counts = st.setdefault("counts", {})
     job = st.get("job")
     if job and m.alive(job["pid"], job["created"]):
         job["low_free_gib"] = round(min(job.get("low_free_gib", free), free), 2)
-        job["high_commit_gib"] = round(max(job.get("high_commit_gib", commit), commit), 2)
-        if lt(free, MIN_FREE_GIB) or gt(commit, MAX_COMMIT_GIB):
+        job["high_commit_gb"] = round(max(job.get("high_commit_gb", commit), commit), 2)
+        if lt(free, MIN_FREE_GIB) or gt(commit, MAX_COMMIT_GB):
             spec = read_json(jpath("queue", job["file"])) or {}
             for f in stop_files(spec):
                 if os.path.isdir(os.path.dirname(f)) and not os.path.exists(f):
-                    out.append(f"{job['name']}: RAM hard line (free {free:.2f} GiB, committed {commit:.1f} GiB), "
+                    out.append(f"{job['name']}: RAM hard line (free {free:.2f} GiB, committed {commit:.1f} GB), "
                                f"STOP written in {os.path.dirname(f)}")
                     if not dry:
                         open(f, "w").close()
@@ -186,19 +190,20 @@ def step(m, st, dry=False):
         spec = read_json(jpath("queue", f))
         ran = m.now() - job["started"]
         c = counts.setdefault(f, {"attempts": 0, "quick": 0})
-        lows = f"low free {job.get('low_free_gib')} GiB, high committed {job.get('high_commit_gib')} GiB"
+        lows = f"low free {job.get('low_free_gib')} GiB, high committed {job.get('high_commit_gb')} GB"
         if spec is None or not isinstance(spec.get("done"), list):
             out.append(f"{name}: exited and its job file is gone or broken; left as it is")
+        elif any(os.path.exists(s) for s in stop_files(spec)):
+            out.append(f"{name}: stopped by a STOP file after {ran / 3600:.2f} h; {moved(dry, 'held')} for a person")
+            move(f, "held", dry, counts)
         elif finished(spec):
             out.append(f"{name}: finished after {ran / 3600:.2f} h ({lows})")
             move(f, "done", dry, counts)
-        elif any(os.path.exists(s) for s in stop_files(spec)):
-            out.append(f"{name}: stopped by a STOP file after {ran / 3600:.2f} h; moved to held for a person")
-            move(f, "held", dry, counts)
         elif lt(ran, QUICK_EXIT_S):
             c["quick"] += 1
             if ge(c["quick"], MAX_QUICK):
-                out.append(f"{name}: exited within {QUICK_EXIT_S} s without finishing {c['quick']} times; failed")
+                out.append(f"{name}: exited within {QUICK_EXIT_S} s without finishing {c['quick']} times; "
+                           f"{moved(dry, 'failed')}")
                 move(f, "failed", dry, counts)
             else:
                 st["retry_after"] = m.now() + QUICK_RETRY_S
@@ -207,7 +212,7 @@ def step(m, st, dry=False):
         else:
             c["attempts"] += 1
             if ge(c["attempts"], int(spec.get("max_attempts", 4))):
-                out.append(f"{name}: stopped without finishing {c['attempts']} times; failed")
+                out.append(f"{name}: stopped without finishing {c['attempts']} times; {moved(dry, 'failed')}")
                 move(f, "failed", dry, counts)
             else:
                 out.append(f"{name}: stopped after {ran / 3600:.2f} h without finishing ({lows}); "
@@ -215,22 +220,21 @@ def step(m, st, dry=False):
     if lt(m.now(), st.get("retry_after", 0)):
         return out
     q = queue()
-    while q and (q[0][1] is None or finished(q[0][1])):
+    while q and (q[0][1] is None or any(os.path.exists(s) for s in stop_files(q[0][1])) or finished(q[0][1])):
         f, spec = q.pop(0)
         if spec is None:
-            out.append(f"{f}: not a valid job file; moved to failed")
+            out.append(f"{f}: not a valid job file; {moved(dry, 'failed')}")
             move(f, "failed", dry)
+        elif any(os.path.exists(s) for s in stop_files(spec)):
+            out.append(f"{spec['name']}: a STOP file is in its folder; {moved(dry, 'held')} for a person, not started")
+            move(f, "held", dry)
         else:
-            out.append(f"{spec['name']}: already finished; moved to done")
+            out.append(f"{spec['name']}: already finished; {moved(dry, 'done')}")
             move(f, "done", dry)
     if not q:
         st["free_checks"], st["busy"] = 0, None
         return out
     f, spec = q[0]
-    if any(os.path.exists(s) for s in stop_files(spec)):
-        out.append(f"{spec['name']}: a STOP file is in its folder; moved to held for a person, not started")
-        move(f, "held", dry)
-        return out
     why = busy(m)
     if why:
         if why != st.get("busy"):
