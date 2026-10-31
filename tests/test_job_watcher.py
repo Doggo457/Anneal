@@ -182,7 +182,7 @@ def test_commit_line_and_low_points(env):
     m.mem = (9.0, 74.5, 74.8)
     checks(m, st, 1)
     assert (root / "out" / "a" / "STOP").exists()
-    assert st["job"]["low_free_gib"] == 9.0 and st["job"]["high_commit_gib"] == 74.5
+    assert st["job"]["low_free_gib"] == 9.0 and st["job"]["high_commit_gb"] == 74.5
 
 
 def test_already_finished_and_invalid_jobs(env):
@@ -219,6 +219,7 @@ def test_dry_run_changes_nothing(env):
     lines = W.step(m, st, dry=True)
     assert m.started == []
     assert os.path.exists(W.jpath("queue", "01-a.json"))
+    assert any("would move to done" in x for x in lines) and not any("moved to" in x for x in lines)
     assert any("would start" in x for x in lines)
 
 
@@ -245,3 +246,23 @@ def test_run_once_writes_status_and_respects_lock(env, capsys):
     st = W.read_json(W.jpath("status.json"))
     assert st["queue"] == ["a"] and st["memory"]["free_gib"] == 20.0
     assert "watcher started" in open(W.jpath("watcher.log")).read()
+
+
+def test_stop_wins_over_done_files(env):
+    root, m = env
+    add_job(root, "01-a.json", "a")
+    add_job(root, "02-b.json", "b")
+    st = {}
+    checks(m, st, 3)
+    m.t += 3600
+    (root / "out" / "a" / "STOP").write_text("")
+    finish(root, "a")  # a stopped job can still write its summary
+    m.exit(m.started[-1][0])
+    lines = checks(m, st, 1)
+    assert "STOP" in lines[0] and "held" in lines[0]
+    assert os.path.exists(W.jpath("held", "01-a.json"))
+    (root / "out" / "b" / "STOP").write_text("")
+    finish(root, "b")
+    checks(m, st, 3)
+    assert os.path.exists(W.jpath("held", "02-b.json"))
+    assert len(m.started) == 1
