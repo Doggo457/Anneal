@@ -45,6 +45,10 @@ __pycache__/
 .env
 *.token
 
+# EvalPlus self-test: the benchmark's reference answers, the dummy answers and EvalPlus's raw output stay on the machine; summary.json is the result
+results/evalplus-selftest/*.jsonl
+results/evalplus-selftest/*_eval_results.json
+
 # Shared run inputs: one copy each is kept (results/README.md, "Shared inputs")
 results/baseloss-27b-plain/eval_text.txt
 results/baseloss-27b-plain-eager/eval_text.txt
