@@ -48,6 +48,13 @@ __pycache__/
 # Outline build: generated figure page
 dissertation/build/fig1.html
 
+# Outline build: the university's Word template
+dissertation/build/tpl/
+
+# EvalPlus self-test: the benchmark's reference answers, the dummy answers and EvalPlus's raw output stay on the machine; summary.json is the result
+results/evalplus-selftest/*.jsonl
+results/evalplus-selftest/*_eval_results.json
+
 # Same file as dissertation/build/fig1.png (the build's input)
 dissertation/figure1-pipeline.png
 
