@@ -18,6 +18,7 @@ Each run is skipped when its summary.json already exists, so a rerun picks up wh
 """
 import json
 import math
+import operator
 import os
 import subprocess
 import sys
@@ -93,8 +94,9 @@ def main():
     res["weights"]["ratio"] = res["weights"]["B_vs_C"] / max(res["weights"]["step3_change_in_C"], 1e-12)
     checks = {"A ran 6 steps": res["A_steps"] == 6, "C ran 3 steps": res["C_steps"] == 3,
               "B ended at step 3": res["B_steps"] == 3, "B saved its adapter": res["B_adapter_exists"],
-              "losses agree": all(v <= LOSS_TOL for v in res["loss_rel_diff"].values()),
-              "B matches C": res["weights"]["step3_change_in_C"] > 0 and res["weights"]["ratio"] <= WEIGHT_TOL}
+              "losses agree": all(operator.le(v, LOSS_TOL) for v in res["loss_rel_diff"].values()),
+              "B matches C": operator.gt(res["weights"]["step3_change_in_C"], 0)
+              and operator.le(res["weights"]["ratio"], WEIGHT_TOL)}
     res["checks"] = checks
     res["ok"] = all(checks.values())
     with open(os.path.join(OUT, "branch_smoke.json"), "w", encoding="utf-8") as f:
