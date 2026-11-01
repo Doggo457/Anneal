@@ -63,3 +63,7 @@ results/parity-llama-hf-4/tokens.json
 results/parity-evaltext-2048-b/tokens.json
 results/parity-evaltext-2048-c/tokens.json
 results/parity-lora-smoke-27b-stock-b/tokens.json
+
+# Dissertation folder: only the outline document
+dissertation/*
+!dissertation/Anneal_Dissertation_Outline.docx
