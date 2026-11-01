@@ -27,9 +27,13 @@ prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is 
                            # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
                            # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
                            # decides what the next round continues from.
-hold_before_train: [3]     # 30 Oct 2026: round 3 waits once its data is built (no train stage yet) while
-                           # scripts/strength_sweep.py trains it at three learning rates around the strength
-                           # curve's best point; the chosen one becomes its train stage and the loop carries on
+hold_before_train: []      # a listed round waits once its data is built (no train stage yet), for training outside
+                           # the loop (scripts/strength_sweep.py). Round 3 waited here 30 Oct-1 Nov 2026 for three
+                           # learning rates; dropped 1 Nov: rounds train as usual and are used at adapter_scale.
+adapter_scale: 0.25        # 1 Nov 2026: every test uses a round's adapter at 0.25 strength (lora_alpha x 0.25), from
+                           # the strength curve on round 2 (research/strength/curve.md: 42 of 60 gate problems at 0.25
+                           # against 40 for the base and 33 at full strength; BFCL 96, 92 and 72 of 150). Training
+                           # carries on from the full-strength adapter.
 reworded_check_required: true   # no round trains until the reworded-copy check (scripts/paraphrase_check.py on the
 # NPU) has covered the current gate and every usable pool (data/eval/paraphrase/covered.json); the loop waits otherwise
 
@@ -302,6 +306,11 @@ sources:
 #     configured mix), on whatever is left (rows rolled forward + the last fresh rows, min_rows of them), before waiting
 #   A kept recipe's LoRA shape carries on into later rounds, so they continue that adapter.
 recipes:
+  - id: r002-x0.25
+    note: "round 2's adapter (the prototype, rejected at full strength) at 0.25 strength, with no training: the whole
+      keep test against the base. Kept, it is the best and its rows its lineage, and the next round continues it with
+      1,000 fresh rows + replay; rejected, the next round trains from the base on its rows rolled forward + fresh rows."
+    adopt_round: 2
   - id: v4pro-1
     note: >-
       first public round, from the base: the configured mix, Open-SWE DeepSeek V4-Flash bug-fix steps first, then

@@ -76,6 +76,17 @@ answered (no early look), every no-worse check and EvalPlus run whatever decide 
 worse, and a rejected prototype keeps its adapter, checkpoints and GGUF. The keep rule is unchanged: it still decides
 whether the round becomes the best, so what the next round continues from, and the confirm pass runs only for a keep.
 
+Adapter strength (loop.yaml adapter_scale, 1 Nov 2026, from the strength curve on round 2: research/strength/curve.md):
+every test of a round (valloss, sweloss, termloss, the gate, the no-worse checks, EvalPlus, confirm) uses its adapter at
+this strength, through a copy with lora_alpha x adapter_scale (train/adapter-x0.25, made before convert; PEFT and the
+llama.cpp GGUF LoRA both multiply B A by lora_alpha / r, so the copy is the adapter at that strength). Training goes on
+from the full-strength adapter (train/adapter): a later round trains as before and is used at the same strength. The
+scale is fixed in the round's plan.
+A recipe with adopt_round: N trains nothing: round N's finished adapter, built on round N's rows, takes this round's
+whole keep test at the plan's strength, against the best so far (round N's folder is only read). Kept, it becomes the
+best and round N's rows join the best's lineage (and leave the rolled-forward stack); rejected, the stack stays as it was.
+A recipe with force_keep is kept whatever its tests show; it still takes every test and the confirm pass, for the record.
+
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
@@ -92,6 +103,7 @@ import glob
 import hashlib
 import json
 import math
+import operator
 import os
 import random
 import shutil
@@ -350,6 +362,130 @@ SHAPE_KEYS = ("lora_r", "lora_alpha", "target_modules", "expect_trainable_params
 
 def lora_shape(train_cfg):
     return {k: train_cfg.get(k) for k in ("lora_r", "lora_alpha", "target_modules")}
+
+
+def adapter_scale(cfg, recipe):
+    """The strength a round's tests use its adapter at: the recipe's adapter_scale, else loop.yaml's, else 1."""
+    s = float(recipe.get("adapter_scale", cfg.get("adapter_scale", 1.0)))
+    if not (operator.gt(s, 0) and operator.le(s, 1)):
+        raise ValueError(f"adapter_scale must be above 0 and at most 1, got {s}")
+    return s
+
+
+def scaled_name(scale):
+    return f"adapter-x{float(scale):g}"
+
+
+def tree_shas(d):
+    return {os.path.relpath(os.path.join(dp, f), d).replace("\\", "/"): file_sha(os.path.join(dp, f))
+            for dp, _, fs in os.walk(d) for f in fs}
+
+
+def copy_checked(src, dst):
+    """Copy folder src to dst, whole or not at all (through dst.tmp), every file compared by sha256. A dst that is
+    already a matching copy is kept; one that doesn't match is an error, never overwritten. src is only read."""
+    want = tree_shas(src)
+    if not want:
+        raise RuntimeError(f"{src} is empty or missing")
+    if os.path.exists(dst):
+        if tree_shas(dst) == want:
+            return want
+        raise RuntimeError(f"{dst} is there but is not a copy of {src}: move it aside")
+    tmp = dst + ".tmp"
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp)  # an unfinished copy of ours
+    shutil.copytree(src, tmp)
+    if tree_shas(tmp) != want:
+        raise RuntimeError(f"the copy of {src} does not match it")
+    os.replace(tmp, dst)
+    return want
+
+
+def scaled_adapter(src, dst, scale):
+    """A copy of the PEFT adapter in src at `scale` strength: lora_alpha x scale, weights unchanged, plus
+    adapter_scale.json. Refused for DoRA (its change is not linear in alpha) and for rank or alpha patterns
+    (convert_lora_to_gguf.py writes one alpha for the whole adapter). src is only read; a finished copy that still
+    matches src is reused, one that doesn't is an error. Returns adapter_scale.json's record."""
+    with open(os.path.join(src, "adapter_config.json"), encoding="utf-8") as fh:
+        ac = json.load(fh)
+    if ac.get("use_dora"):
+        raise RuntimeError(f"{src} is a DoRA adapter: scaling lora_alpha does not scale its change")
+    if ac.get("alpha_pattern") or ac.get("rank_pattern"):
+        raise RuntimeError(f"{src} has a rank or alpha pattern: the GGUF LoRA would carry one alpha only")
+    alpha = ac["lora_alpha"] * float(scale)
+    alpha = int(alpha) if float(alpha).is_integer() else alpha
+    new = dict(ac, lora_alpha=alpha)
+    weights = sorted(f for f in os.listdir(src) if f.endswith((".safetensors", ".bin")))
+    if not weights:
+        raise RuntimeError(f"no adapter weights in {src}")
+    rec = {"source": src, "scale": float(scale), "lora_alpha": [ac["lora_alpha"], alpha], "r": ac.get("r"),
+           "weights": {f: file_sha(os.path.join(src, f)) for f in weights}}
+
+    def matches(d):
+        def read(name):
+            try:
+                with open(os.path.join(d, name), encoding="utf-8") as fh:
+                    return json.load(fh)
+            except (OSError, ValueError):
+                return None
+        return (read("adapter_scale.json") == rec and read("adapter_config.json") == new
+                and all(os.path.exists(os.path.join(d, f)) and file_sha(os.path.join(d, f)) == s
+                        for f, s in rec["weights"].items()))
+
+    if os.path.exists(dst):
+        if matches(dst):
+            return rec
+        raise RuntimeError(f"{dst} is there but is not {src} at {scale:g} strength: move it aside")
+    tmp = dst + ".tmp"
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp)  # an unfinished copy of ours
+    shutil.copytree(src, tmp, ignore=shutil.ignore_patterns("adapter_config.json", "adapter_scale.json"))
+    write_json(os.path.join(tmp, "adapter_config.json"), new)
+    write_json(os.path.join(tmp, "adapter_scale.json"), rec)
+    if not matches(tmp):
+        raise RuntimeError(f"the {scale:g}-strength copy of {src} does not match it")
+    os.replace(tmp, dst)
+    return rec
+
+
+GGUF_SCALARS = {0: (1, "B"), 1: (1, "b"), 2: (2, "H"), 3: (2, "h"), 4: (4, "I"), 5: (4, "i"), 6: (4, "f"), 7: (1, "?"),
+                10: (8, "Q"), 11: (8, "q"), 12: (8, "d")}  # GGUF value type: (bytes, struct code)
+
+
+def gguf_value(path, key):
+    """One metadata value of a GGUF file (version 2 or later, little-endian), or None when it has no such key."""
+    import struct
+    with open(path, "rb") as fh:
+        def read(t):
+            n, code = GGUF_SCALARS[t]
+            b = fh.read(n)
+            if len(b) != n:
+                raise ValueError(f"{path}: the GGUF header is cut short")
+            return struct.unpack("!" + code, b[::-1])[0]  # little-endian bytes, reversed to network order
+
+        def string():
+            return fh.read(read(10)).decode("utf-8", "replace")
+
+        def value(t):
+            if t in GGUF_SCALARS:
+                return read(t)
+            if t == 8:
+                return string()
+            if t == 9:
+                it, n = read(4), read(10)
+                return [value(it) for _ in range(n)]
+            raise ValueError(f"{path}: unknown GGUF value type {t}")
+
+        if fh.read(4) != b"GGUF":
+            raise ValueError(f"{path} is not a GGUF file")
+        if operator.lt(read(4), 2):
+            raise ValueError(f"{path}: GGUF version 1 is not read here")
+        read(10)  # tensors
+        for _ in range(read(10)):
+            k, v = string(), value(read(4))
+            if k == key:
+                return v
+    return None
 
 
 def effective_train(cfg, recipe, best=None):
@@ -1185,6 +1321,10 @@ class Loop(fr.Controller):
             self.log(f"round {self.rnum}: a prototype round (loop.yaml prototype_rounds), so the whole gate is answered "
                      "(no early look)")
             return None
+        if self.forced(self.done("plan") or {}):
+            self.log(f"round {self.rnum}: its recipe keeps it whatever the tests show (force_keep), so the whole gate is "
+                     "answered (no early look)")
+            return None
         fell = E.open_loss_paths(cfg["rules"], self.heldout_losses())
         if fell:
             self.log(f"round {self.rnum}: {', '.join(E.LOSS_LABELS.get(k, k) for k in fell)} loss path open, so the "
@@ -1246,19 +1386,24 @@ class Loop(fr.Controller):
         conf = mile = None
         guards = {}
         proto = prototype_round(cfg, self.rnum)  # every check runs, whatever decide and the checks say (27 Oct 2026)
-        if d["keep"] or proto:  # the cheaper checks first (21 Oct 2026); a block skips the rest, as every check must pass
+        force = self.forced(plan)  # kept whatever the tests show: every test runs, and confirm
+        every = proto or force
+        if d["keep"] or every:  # the cheaper checks first (21 Oct 2026); a block skips the rest, as every check must pass
             for name in guard_names(cfg):
-                if guards_blocked(guards) and not proto:
+                if guards_blocked(guards) and not every:
                     break
                 guards[name] = self.run_stage(name, self.guard, cfg, name)
             evalplus = cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard")
-            if evalplus and (proto or not guards_blocked(guards)):
+            if evalplus and (every or not guards_blocked(guards)):
                 mile = self.run_stage("milestone", self.milestone, cfg)
-            if d["keep"] and guard_ok(cfg, mile, guards):
+            if force or (d["keep"] and guard_ok(cfg, mile, guards)):
                 conf = self.run_stage("confirm", self.confirm, cfg, d)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile, guards)
 
     def plan(self, cfg):
+        first = pick_recipe(cfg, self.state)
+        if first.get("adopt_round") is not None:
+            return self.adopt_plan(cfg, first)
         self.prepare_pools(cfg)
         best = self.state["best"]
         usable = {n: c for n, c in self.pool_rows(cfg).items()
@@ -1361,16 +1506,57 @@ class Loop(fr.Controller):
             self.log(f"rolled-forward rows under their source's min_think_tokens left out: {rolled_dropped}")
         n_rolled = sum(len(ix) for _, ix in rolled)
         frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
-        replay = pick_replay(best["lineage"], int(round(frac * (n_new + n_rolled))), self.rnum) if init == "best" else []
+        replay, replay_dropped = [], {}
+        if init == "best":  # replayed rows meet their source's min_think_tokens too, like rolled-forward rows
+            pool, replay_dropped = filter_rolled(best["lineage"], srcs, index)
+            replay = pick_replay(pool, int(round(frac * (n_new + n_rolled))), self.rnum)
+            if replay_dropped:
+                self.log(f"rows of the best's lineage under their source's min_think_tokens, never replayed: "
+                         f"{replay_dropped}")
         plan = {"recipe": recipe, "init": init, "init_adapter": best["adapter"] if init == "best" else None,
                 "slices": slices, "rolled": rolled, "lineage": lineage, "replay": replay,
-                "rolled_dropped": rolled_dropped,
+                "rolled_dropped": rolled_dropped, "replay_dropped": replay_dropped,
+                "adapter_scale": adapter_scale(cfg, recipe),
                 "stack_eligible": takes_stack(recipe), "stack_attempt": (stack["attempts"] + 1) if take_stack else 1,
                 "stack_rounds": (stack["rounds"] if take_stack else []) + [self.rnum],
                 "rows": n_new + n_rolled + sum(len(ix) for _, ix in lineage) + sum(len(ix) for _, ix in replay),
                 "best_round": best["round"], "train": tcfg}
         self.save()  # offsets advance with the plan, so a crash never hands these rows to another round
         return self.mark_done("plan", plan)
+
+    def adopt_plan(self, cfg, recipe):
+        """The plan of a recipe with adopt_round: N: round N's rows and settings, no new rows (nothing is taken from
+        the pools or the stack), at this recipe's adapter_scale. Round N must be a rejected round whose adapter is
+        still there, trained from the same best as now (so its rows join the right lineage on a keep)."""
+        n = int(recipe["adopt_round"])
+        src = os.path.join(self.dir, "rounds", f"r{n:03d}")
+        old = {s: self.read_json(os.path.join(src, "stages", f"{s}.done.json")) for s in ("plan", "data", "train")}
+        rec = next((r for r in self.state["rounds"] if r["round"] == n), {})
+        best = self.state["best"]
+        adapter = os.path.join(src, "train", "adapter")
+        why = None
+        if operator.ge(n, self.rnum):
+            why = f"round {n} is not before round {self.rnum}"
+        elif rec.get("status") != "rejected":
+            why = f"round {n} is {rec.get('status') or 'not on record'}, not a rejected round"
+        elif any(v is None for v in old.values()):
+            why = f"round {n} has no {', '.join(s for s, v in old.items() if v is None)} record"
+        elif not os.path.exists(os.path.join(adapter, "adapter_config.json")):
+            why = f"{adapter} is missing"
+        elif old["plan"]["best_round"] != best["round"]:
+            why = f"round {n} was trained from round {old['plan']['best_round']}, but the best is round {best['round']}"
+        if why:
+            raise Waiting(f"recipe {recipe['id']} in experiments/loop.yaml can't adopt round {n}: {why}")
+        p = old["plan"]
+        scale = adapter_scale(cfg, recipe)
+        self.log(f"round {self.rnum}: recipe {recipe['id']} adopts round {n}'s adapter ({p['rows']} rows, recipe "
+                 f"{p['recipe']['id']}), no training; tested at {scale:g} strength against round {best['round']}")
+        return self.mark_done("plan", {
+            "recipe": recipe, "init": p["init"], "init_adapter": p.get("init_adapter"), "slices": p["slices"],
+            "rolled": p.get("rolled") or [], "lineage": p.get("lineage") or [], "replay": p.get("replay") or [],
+            "rolled_dropped": {}, "replay_dropped": {}, "adapter_scale": scale, "stack_eligible": False,
+            "stack_attempt": 1, "stack_rounds": [self.rnum], "rows": p["rows"], "best_round": best["round"],
+            "train": p["train"], "adopted_from": {"round": n, "dir": src, "recipe": p["recipe"]["id"]}})
 
     def used_keys(self):
         """Keys (row_key) of every row any round or earlier run has trained on: never handed out again."""
@@ -1395,6 +1581,12 @@ class Loop(fr.Controller):
 
     def data(self, cfg, plan):
         root = os.path.join(self.rdir, "data")
+        ad = plan.get("adopted_from")
+        if ad:  # the adopted round's mix, copied (its val rows are this round's valloss rows)
+            copy_checked(os.path.join(ad["dir"], "data", "mix"), os.path.join(root, "mix"))
+            old = self.read_json(os.path.join(ad["dir"], "stages", "data.done.json")) or {}
+            return self.mark_done("data", dict({k: v for k, v in old.items() if k != "finished"},
+                                               adopted_from=ad["round"]))
         parts = {}
         for name, idx in plan["lineage"]:
             parts.setdefault(name, []).extend(idx)
@@ -1425,6 +1617,13 @@ class Loop(fr.Controller):
     def train_round(self, cfg, plan):
         tdir = os.path.join(self.rdir, "train")
         os.makedirs(tdir, exist_ok=True)
+        ad = plan.get("adopted_from")
+        if ad:  # no training: the adopted round's full-strength adapter, copied (a keep continues from this copy)
+            shas = copy_checked(os.path.join(ad["dir"], "train", "adapter"), os.path.join(tdir, "adapter"))
+            old = self.read_json(os.path.join(ad["dir"], "stages", "train.done.json")) or {}
+            return self.mark_done("train", dict({k: v for k, v in old.items() if k != "finished"},
+                                                adapter=os.path.join(tdir, "adapter"), adopted_from=ad["round"],
+                                                adapter_files=shas))
         t = copy.deepcopy(plan["train"])
         mix = os.path.join(self.rdir, "data", "mix")
         t.update(run_name=f"loop-r{self.rnum:03d}", train_file=os.path.join(mix, "train.jsonl").replace("\\", "/"),
@@ -1477,21 +1676,59 @@ class Loop(fr.Controller):
     def round_gguf(self):
         return os.path.join(self.rdir, "convert", f"loop-r{self.rnum:03d}-F16-LoRA.gguf")
 
+    def forced(self, plan):
+        """Whether this round's recipe has force_keep: in its plan, or set later on the same recipe in loop.yaml (read
+        again here, so it can be set while the round is being scored, before decide)."""
+        recipe = plan.get("recipe") or {}
+        if recipe.get("force_keep"):
+            return True
+        if not recipe.get("id"):
+            return False
+        try:
+            live = load_config(getattr(self.args, "config", CONFIG)).get("recipes") or []
+        except (OSError, yaml.YAMLError):
+            return False
+        return any(r.get("id") == recipe["id"] and r.get("force_keep") for r in live)
+
+    def round_scale(self):
+        return float((self.done("plan") or {}).get("adapter_scale", 1.0))
+
+    def round_adapter(self):
+        """The adapter this round's tests use: train/adapter (what training wrote, and what a later round continues
+        from) at full strength, else its copy at the plan's adapter_scale (train/adapter-x0.25), made when missing."""
+        raw = os.path.join(self.rdir, "train", "adapter")
+        scale = self.round_scale()
+        if scale == 1.0:
+            return raw
+        dst = os.path.join(self.rdir, "train", scaled_name(scale))
+        scaled_adapter(raw, dst, scale)
+        return dst
+
     def convert_round(self):
         out = self.round_gguf()
         os.makedirs(os.path.dirname(out), exist_ok=True)
+        adapter = self.round_adapter()
         rc = self.run_child([PY, "-u", fr.CONVERT, "--base", llama.LORA_BASE_CONFIG, "--outtype", "f16", "--outfile", out,
-                             os.path.join(self.rdir, "train", "adapter")], "convert_lora.log")
+                             adapter], "convert_lora.log")
         self.check_stop()  # a pause stops the child: that is a pause, not a failure
         if rc != 0 or not os.path.exists(out):
             raise RuntimeError(f"convert_lora_to_gguf.py exited with {rc}")
-        return self.mark_done("convert", {"gguf": out, "bytes": os.path.getsize(out)})
+        rec = {"gguf": out, "bytes": os.path.getsize(out)}
+        scale = self.round_scale()
+        if scale != 1.0:  # the GGUF must carry the copy's alpha, or the gate would see another strength
+            want = (self.read_json(os.path.join(adapter, "adapter_config.json")) or {}).get("lora_alpha")
+            got = gguf_value(out, "adapter.lora.alpha")
+            if want is None or got is None or operator.gt(abs(float(got) - float(want)), 1e-6 * max(1.0, abs(float(want)))):
+                raise RuntimeError(f"{out} carries LoRA alpha {got}, not the {scale:g}-strength copy's {want}")
+            rec.update(adapter=adapter, adapter_scale=scale, gguf_lora_alpha=got)
+            self.log(f"round {self.rnum}: tested at {scale:g} strength: {adapter} (lora_alpha {want}), GGUF alpha {got}")
+        return self.mark_done("convert", rec)
 
     def valloss(self):
         vdir = os.path.join(self.rdir, "valloss")
         if not os.path.exists(os.path.join(vdir, "summary.json")):
             rc = self.run_child([PY, "-u", os.path.join(ROOT, "scripts", "val_loss.py"), "--adapter",
-                                 os.path.join(self.rdir, "train", "adapter"), "--val-file",
+                                 self.round_adapter(), "--val-file",
                                  os.path.join(self.rdir, "data", "mix", "val.jsonl"), "--max-rows", "100",
                                  "--run-dir", vdir], "val_loss.log")
             self.check_stop()
@@ -1538,7 +1775,7 @@ class Loop(fr.Controller):
         val = self.read_json(summ)
         if val is None or (need_base and "base" not in (val.get("scored") or [])):
             cmd = [PY, "-u", os.path.join(ROOT, "scripts", "val_loss.py"), "--adapter",
-                   os.path.join(self.rdir, "train", "adapter"), "--val-file", path,
+                   self.round_adapter(), "--val-file", path,
                    "--seq-len", str(int(sc.get("seq_len", 8192))), "--max-rows", str(int(sc.get("max_rows", 200))),
                    "--run-dir", vdir]
             if not need_base:
@@ -1805,12 +2042,18 @@ class Loop(fr.Controller):
             c = conf["vs_previous_best"]
             reasons.append(f"the fresh-seed confirm did not win more problems than it lost against the best "
                            f"({c['wins']} wins / {c['losses']} losses)")
-        kept = d["keep"] and g_ok and conf is not None and conf.get("confirmed", True)
+        forced = self.forced(plan)
+        kept = forced or (d["keep"] and g_ok and conf is not None and conf.get("confirmed", True))
+        if forced:
+            rec["forced"] = f"kept whatever the tests show (recipe {plan['recipe']['id']}, force_keep)" + (
+                "; the keep rule alone would not have kept it" if not (d["keep"] and g_ok and conf is not None
+                                                                         and conf.get("confirmed", True)) else "")
         new_rows = [[n, list(idx)] for n, idx in plan.get("rolled") or []] + [[n, idx] for n, idx in plan["slices"].items()]
         n_new = sum(len(ix) for _, ix in new_rows)
         if kept:
             self.state["best"] = {"round": self.rnum, "name": f"r{self.rnum:03d}",
                                   "adapter": os.path.join(self.rdir, "train", "adapter"), "gguf": self.round_gguf(),
+                                  "adapter_scale": float(plan.get("adapter_scale", 1.0)),
                                   "gate_rows": conf["gate_rows"], "gate_seed": conf["gate_seed"],
                                   "lineage": (plan["lineage"] if plan["init"] == "base_lineage" else best["lineage"])
                                   + new_rows,
@@ -1819,7 +2062,9 @@ class Loop(fr.Controller):
                                   "recipe": plan["recipe"]["id"],
                                   **{h["key"]: (self.done(h["stage"]) or {}).get("own") for h in HELDOUT.values()}}
             self.state["rejects_in_row"] = 0
-            if plan.get("rolled"):
+            ad = plan.get("adopted_from")
+            stack = self.state.get("stack")
+            if plan.get("rolled") or (ad and stack and ad["round"] in (stack.get("rounds") or [])):
                 self.state["stack"] = None  # its rows are in the best's lineage now
             rec["status"] = "kept"
         else:
@@ -1829,8 +2074,10 @@ class Loop(fr.Controller):
                 rec["files_kept"] = "a prototype round (loop.yaml prototype_rounds): adapter, checkpoints and GGUF kept"
                 self.log(f"round {self.rnum}: {rec['files_kept']}")
             else:
-                rec["freed_bytes"] = safe_delete(self.rdir, ["train/adapter", "train/checkpoints", "train/milestones",
-                                                             "train/branches", "convert"], self.log)
+                scaled = scaled_name(plan.get("adapter_scale", 1.0))
+                rec["freed_bytes"] = safe_delete(self.rdir, ["train/adapter", "train/" + scaled, "train/" + scaled + ".tmp",
+                                                             "train/checkpoints", "train/milestones", "train/branches",
+                                                             "convert"], self.log)
             if plan.get("stack_eligible") and n_new:
                 cap = int(cfg.get("stack_max_new_rows", 0) or 0)
                 entry = {"rows": n_new, "attempts": plan.get("stack_attempt", 1),
@@ -1881,6 +2128,8 @@ class Loop(fr.Controller):
                        rec.get("path") or d.get("path"), "Kept."), ""]
         if rec.get("files_kept"):
             L += [f"Files: {rec['files_kept']}.", ""]
+        if rec.get("forced"):
+            L += [f"Kept by its recipe: {rec['forced']}.", ""]
         part_label = {"write": "write a program", "fix": "fix a wrong submission", "cc": "CodeContests",
                       "oci": "OpenCodeInstruct held-out"}
         rows = [("gate (all)", g)] + [(f"part: {part_label.get(k, k)}", c) for k, c in (d.get("parts") or {}).items()]
@@ -1919,6 +2168,18 @@ class Loop(fr.Controller):
                   f"mixed back in: {sum(len(i) for _, i in plan.get('replay') or [])}; rows from the best's lineage "
                   f"(retrain from the base): {sum(len(i) for _, i in plan['lineage'])}."
                   + (f" {rec['stack']}." if rec.get("stack") else ""), ""]
+            if plan.get("adopted_from"):
+                ad = plan["adopted_from"]
+                L += [f"No training in this round: round {ad['round']}'s adapter (recipe `{ad['recipe']}`), copied, on "
+                      f"round {ad['round']}'s rows; the rows above are round {ad['round']}'s.", ""]
+            if float(plan.get("adapter_scale", 1.0)) != 1.0:
+                cv = self.done("convert") or {}
+                L += [f"Every test used the adapter at {float(plan['adapter_scale']):g} strength (train/"
+                      f"{scaled_name(plan['adapter_scale'])}, GGUF LoRA alpha {cv.get('gguf_lora_alpha')}); a later round "
+                      "continues the full-strength train/adapter.", ""]
+            if plan.get("replay_dropped"):
+                L += [f"Rows of the best's lineage under their source's min_think_tokens, never replayed: "
+                      f"{json.dumps(plan['replay_dropped'])}.", ""]
             if plan["init"] == "base_lineage" and not plan["slices"] and not plan.get("rolled"):
                 L += [f"Paired comparison: every row the best (round {plan['best_round']}) was built from, retrained from "
                       f"the base instead of continued; scored against the best's fresh-seed rows.", ""]

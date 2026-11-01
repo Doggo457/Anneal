@@ -582,6 +582,26 @@ CWEVAL_EMPTY = set()  # models whose answers are all reasoning, no text (the pro
 LANGS = ("cpp", "java", "go", "rust", "javascript", "typescript")
 
 
+def write_gguf(path, kv, tensors=0):
+    """A GGUF file (version 3) with these metadata keys and no tensor data: what convert_lora_to_gguf.py's header
+    looks like, for the loop's alpha check."""
+    import struct
+    u32, u64 = (lambda x: x.to_bytes(4, "little")), (lambda x: x.to_bytes(8, "little"))  # noqa: E731
+    enc = lambda t: u64(len(t.encode())) + t.encode()  # noqa: E731
+    out = b"GGUF" + u32(3) + u64(tensors) + u64(len(kv))
+    for k, v in kv.items():
+        out += enc(k)
+        if isinstance(v, str):
+            out += u32(8) + enc(v)
+        elif isinstance(v, float):
+            out += u32(6) + struct.pack("!f", v)[::-1]
+        elif isinstance(v, list):
+            out += u32(9) + u32(8) + u64(len(v)) + b"".join(enc(x) for x in v)
+        else:
+            out += u32(10) + u64(v)
+    open(path, "wb").write(out)
+
+
 class FakeServer:
     def __init__(self, flags):
         self.lora = flags[flags.index("--lora") + 1] if "--lora" in flags else None
@@ -613,6 +633,7 @@ class World:
         self.cweval_requests = []  # the same for CWEval
         self.served = []  # (stage, flags) for each server the loop started
         self.binaries = []  # (stage, llama-server binary or None for the default build) for the same servers
+        self.converted = []  # the adapter folder of each GGUF convert
 
     def model(self):
         lora = self.server.lora if self.server else None
@@ -701,7 +722,9 @@ class World:
                 return 0
             os.makedirs(os.path.join(rd, "adapter"), exist_ok=True)
             os.makedirs(os.path.join(rd, "checkpoints", "checkpoint-20"), exist_ok=True)
-            open(os.path.join(rd, "adapter", "adapter_model.safetensors"), "wb").write(b"w" * 100)
+            open(os.path.join(rd, "adapter", "adapter_model.safetensors"), "wb").write(cfg["run_name"].encode() * 10)
+            json.dump({"r": 16, "lora_alpha": 32, "use_dora": False, "alpha_pattern": {}, "rank_pattern": {}},
+                      open(os.path.join(rd, "adapter", "adapter_config.json"), "w"))
             json.dump({"state": "finished"}, open(os.path.join(rd, "status.json"), "w"))
             json.dump({"global_step": 12, "adapter": os.path.join(rd, "adapter"), "rows": len(E.read_jsonl(cfg["train_file"])),
                        "init_adapter": cfg.get("init_adapter")}, open(os.path.join(rd, "summary.json"), "w"))
@@ -712,7 +735,13 @@ class World:
                 self.pause_convert_once.discard(name)
                 ctl.stop.set()  # as if Pause was pressed while converting: the child is stopped and exits 1
                 return 1
-            open(arg("--outfile"), "wb").write(b"gguf")
+            self.converted.append(cmd[-1])
+            try:
+                alpha = json.load(open(os.path.join(cmd[-1], "adapter_config.json")))["lora_alpha"]
+            except OSError:
+                alpha = 32
+            write_gguf(arg("--outfile"), {"general.type": "adapter", "adapter.type": "lora",
+                                          "adapter.lora.alpha": float(alpha)})
             return 0
         if script == "val_loss.py":
             rd = arg("--run-dir")
@@ -842,6 +871,9 @@ def setup_world(tmp):
     cfg["rules"]["confirm_net_win"] = True  # exercised here; off in loop.yaml until chosen
     cfg["reworded_check_required"] = False  # the pools are made during the run; test_reworded_check_guard covers it
     cfg["pause_after_rejects_in_row"] = 0  # rounds go on after a reject here (loop.yaml holds after round 2 for now)
+    cfg["hold_before_train"] = []  # test_hold_before_train covers the hold
+    cfg["adapter_scale"] = 1.0  # full strength here; test_adapter_scale_and_adopt covers a scaled adapter
+    cfg["recipes"] = [r for r in cfg["recipes"] if r.get("adopt_round") is None]  # the same
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -935,9 +967,11 @@ def run_main(argv):
 
 def test_simulated_loop():
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
     try:
         _simulated_loop(tmp)
     finally:
+        restore_world(before)
         restore_polyglot()
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1103,9 +1137,11 @@ def _simulated_loop(tmp):
 def test_loss_path_and_guards():
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(SWE_LOSS)
+    before = world_patches()
     try:
         _loss_path_and_guards(tmp)
     finally:
+        restore_world(before)
         PASSING.clear()
         PASSING.update(saved[0])
         SWE_LOSS.clear()
@@ -1186,9 +1222,11 @@ def test_terminal_path_and_evalplus_guard():
     confirm pass."""
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(SWE_LOSS), dict(TERM_LOSS), set(EVALPLUS_WORSE)
+    before = world_patches()
     try:
         _terminal_path_and_evalplus_guard(tmp)
     finally:
+        restore_world(before)
         PASSING.clear()
         PASSING.update(saved[0])
         SWE_LOSS.clear()
@@ -1601,6 +1639,219 @@ def _hold_before_train(tmp):
     assert os.path.exists(os.path.join(stages, "convert.done.json")) and os.path.exists(os.path.join(stages, "decide.done.json"))
     assert json.load(open(os.path.join(stages, "train.done.json")))["strength_sweep"] == {"lr": 5e-05}
 
+
+
+def test_scaled_adapter_and_gguf_alpha():
+    """1 Nov 2026: the adapter at a lower strength is a copy with lora_alpha x scale and the same weights; the copy is
+    reused while it matches, never overwritten when it doesn't; DoRA and rank/alpha patterns are refused. gguf_value
+    reads a GGUF header's metadata (the loop checks the converted GGUF carries the copy's alpha)."""
+    tmp = tempfile.mkdtemp(prefix="anneal-scale-test-")
+    try:
+        src = os.path.join(tmp, "adapter")
+        os.makedirs(src)
+        cfg = {"r": 16, "lora_alpha": 32, "use_dora": False, "alpha_pattern": {}, "rank_pattern": {},
+               "target_modules": ["q_proj"]}
+        json.dump(cfg, open(os.path.join(src, "adapter_config.json"), "w"))
+        open(os.path.join(src, "adapter_model.safetensors"), "wb").write(b"weights" * 50)
+        open(os.path.join(src, "README.md"), "w").write("card")
+        before = L.tree_shas(src)
+        dst = os.path.join(tmp, L.scaled_name(0.25))
+        assert os.path.basename(dst) == "adapter-x0.25" and L.scaled_name(1) == "adapter-x1"
+        rec = L.scaled_adapter(src, dst, 0.25)
+        got = json.load(open(os.path.join(dst, "adapter_config.json")))
+        assert got == dict(cfg, lora_alpha=8) and isinstance(got["lora_alpha"], int), got
+        assert rec["lora_alpha"] == [32, 8] and rec["scale"] == 0.25
+        assert open(os.path.join(dst, "adapter_model.safetensors"), "rb").read() == b"weights" * 50
+        assert os.path.exists(os.path.join(dst, "README.md")) and not os.path.exists(dst + ".tmp")
+        assert L.tree_shas(src) == before  # the source is only read
+        assert L.scaled_adapter(src, dst, 0.25) == rec  # reused
+        assert json.load(open(os.path.join(dst, "adapter_scale.json")))["scale"] == 0.25
+        odd = L.scaled_adapter(src, os.path.join(tmp, "x0.3"), 0.3)
+        assert round(odd["lora_alpha"][1], 9) == 9.6  # not a whole number: kept as a float
+        open(os.path.join(dst, "adapter_model.safetensors"), "wb").write(b"changed")
+        try:
+            L.scaled_adapter(src, dst, 0.25)
+            raise AssertionError("a copy that no longer matches must not be reused or overwritten")
+        except RuntimeError as exc:
+            assert "move it aside" in str(exc)
+        assert open(os.path.join(dst, "adapter_model.safetensors"), "rb").read() == b"changed"
+        for bad in ({"use_dora": True}, {"alpha_pattern": {"q_proj": 64}}, {"rank_pattern": {"q_proj": 8}}):
+            json.dump(dict(cfg, **bad), open(os.path.join(src, "adapter_config.json"), "w"))
+            try:
+                L.scaled_adapter(src, os.path.join(tmp, "bad"), 0.25)
+                raise AssertionError(f"{bad} must be refused")
+            except RuntimeError:
+                pass
+            assert not os.path.exists(os.path.join(tmp, "bad"))
+        for bad in (0, -0.5, 1.5):
+            try:
+                L.adapter_scale({"adapter_scale": bad}, {})
+                raise AssertionError(bad)
+            except ValueError:
+                pass
+        assert L.adapter_scale({}, {}) == 1.0 and L.adapter_scale({"adapter_scale": 0.25}, {}) == 0.25
+        assert L.adapter_scale({"adapter_scale": 0.25}, {"adapter_scale": 0.5}) == 0.5
+        # copy_checked: whole or nothing, a matching copy kept, a different one refused
+        a = os.path.join(tmp, "a")
+        os.makedirs(os.path.join(a, "sub"))
+        open(os.path.join(a, "sub", "f.txt"), "w").write("x")
+        b = os.path.join(tmp, "b")
+        assert L.copy_checked(a, b) == {"sub/f.txt": L.file_sha(os.path.join(a, "sub", "f.txt"))}
+        assert L.copy_checked(a, b) and not os.path.exists(b + ".tmp")
+        open(os.path.join(b, "sub", "f.txt"), "w").write("y")
+        try:
+            L.copy_checked(a, b)
+            raise AssertionError("a different copy must be refused")
+        except RuntimeError:
+            pass
+        # GGUF metadata
+        g = os.path.join(tmp, "x.gguf")
+        write_gguf(g, {"general.type": "adapter", "general.tags": ["a", "b"], "n": 7, "adapter.lora.alpha": 8.0})
+        assert L.gguf_value(g, "adapter.lora.alpha") == 8.0 and L.gguf_value(g, "general.tags") == ["a", "b"]
+        assert L.gguf_value(g, "n") == 7 and L.gguf_value(g, "missing") is None
+        open(g, "wb").write(b"GGML....")
+        try:
+            L.gguf_value(g, "adapter.lora.alpha")
+            raise AssertionError("not a GGUF")
+        except ValueError:
+            pass
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_adapter_scale_and_adopt():
+    """1 Nov 2026: round 2 (a rejected prototype, files kept) is adopted by round 3 at 0.25 strength: no training,
+    its adapter and mix copied, every test on the 0.25 copy (valloss, held-out losses, the GGUF with alpha 8), round 2's
+    folder untouched. Kept: it becomes the best, round 2's rows its lineage, the rolled-forward stack is cleared, and
+    round 4 continues the full-strength copy with fresh rows + replay (rows under min_think_tokens never replayed),
+    tested at 0.25 too. Rejected: its copies are deleted, the stack stays, and round 4 starts from the base on the
+    stack + fresh rows. With force_keep, a round behind the base is kept anyway after every test and confirm."""
+    for case in ("kept", "rejected", "forced"):
+        tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+        saved = dict(PASSING), L.count_tokens
+        before = world_patches()
+        try:
+            _adapter_scale_and_adopt(tmp, case)
+        finally:
+            restore_world(before)
+            PASSING.clear()
+            PASSING.update(saved[0])
+            L.count_tokens = saved[1]
+            restore_polyglot()
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _adapter_scale_and_adopt(tmp, case):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, prototype_rounds=[2])
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    has = lambda n, stage: os.path.exists(os.path.join(rd(n), "stages", f"{stage}.done.json"))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    n_rows = lambda parts: sum(len(ix) for _, ix in parts)  # noqa: E731
+    adapter_of = lambda cmd: cmd[cmd.index("--adapter") + 1]  # noqa: E731
+    PASSING["r002"] = 18
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    plan2 = done(2, "plan")
+    assert rec(2)["status"] == "rejected" and state()["best"]["round"] == 0
+    stack = state()["stack"]
+    assert stack["rounds"] == [2] and stack["rows"] == n_rows(plan2["slices"].items()), stack
+    assert plan2["adapter_scale"] == 1.0 and w.converted[-1] == os.path.join(rd(2), "train", "adapter")
+    r2_files = L.tree_shas(rd(2))
+    # round 3 adopts round 2 at 0.25
+    cfg["adapter_scale"] = 0.25
+    cfg["recipes"].insert(0, dict({"id": "r002-x0.25", "adopt_round": 2, "note": "round 2 at 0.25 strength"},
+                                  **({"force_keep": True} if case == "forced" else {})))
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    PASSING["r003"] = 30 if case == "kept" else 18
+    trains = sum(1 for script, _ in w.calls if script == "train_longrun.py")
+    n_calls = len(w.calls)
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    plan3 = done(3, "plan")
+    assert plan3["recipe"]["id"] == "r002-x0.25" and plan3["adopted_from"]["round"] == 2, plan3
+    assert plan3["slices"] == plan2["slices"] and plan3["rows"] == plan2["rows"] and plan3["adapter_scale"] == 0.25
+    assert not plan3["stack_eligible"] and plan3["init"] == plan2["init"] == "base"
+    assert sum(1 for script, _ in w.calls if script == "train_longrun.py") == trains  # nothing trained
+    assert not any(script in ("mix_datasets.py", "prepare_dataset.py", "public_source.py") for script, _ in w.calls[n_calls:])
+    assert done(3, "train")["adopted_from"] == 2 and done(3, "data")["adopted_from"] == 2
+    assert done(3, "data")["train_rows"] == done(2, "data")["train_rows"]
+    scaled = os.path.join(rd(3), "train", "adapter-x0.25")
+    assert w.converted[-1] == scaled
+    vals = [adapter_of(cmd) for script, cmd in w.calls[n_calls:] if script == "val_loss.py"]
+    assert vals and all(v == scaled for v in vals) and len(vals) == 3, vals  # valloss, bug-fix and terminal steps
+    assert done(3, "convert")["gguf_lora_alpha"] == 8.0 and done(3, "convert")["adapter_scale"] == 0.25
+    assert L.tree_shas(rd(2)) == r2_files  # round 2's folder is only read
+    if case == "rejected":
+        assert rec(3)["status"] == "rejected" and not has(3, "bfcl") and not has(3, "confirm")
+        for p in ("train/adapter", "train/adapter-x0.25", "convert"):
+            assert not os.path.exists(os.path.join(rd(3), p)), p
+        assert state()["stack"] == stack and state()["best"]["round"] == 0 and state()["rejects_in_row"] == 2
+        assert "r002-x0.25" in state()["recipes_done"]
+        assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+        plan4 = done(4, "plan")
+        assert plan4["recipe"]["id"] == "default" and plan4["init"] == "base" and plan4["replay"] == []
+        assert dict((n, ix) for n, ix in plan4["rolled"]) == plan2["slices"] and plan4["stack_attempt"] == 2
+        assert plan4["adapter_scale"] == 0.25 and w.converted[-1] == os.path.join(rd(4), "train", "adapter-x0.25")
+        return
+    r3 = rec(3)
+    assert r3["status"] == "kept", r3
+    assert has(3, "bfcl") and has(3, "milestone") and has(3, "confirm")
+    if case == "forced":
+        assert not done(3, "decide")["keep"] and "force_keep" in r3["forced"] and "would not" in r3["forced"]
+        assert "Kept by its recipe" in open(os.path.join(rd(3), "report.md")).read()
+    else:
+        assert done(3, "decide")["keep"] and "forced" not in r3
+    best = state()["best"]
+    assert best["round"] == 3 and best["adapter"] == os.path.join(rd(3), "train", "adapter") and best["adapter_scale"] == 0.25
+    assert L.tree_shas(best["adapter"]) == L.tree_shas(os.path.join(rd(2), "train", "adapter"))  # the full-strength copy
+    assert json.load(open(os.path.join(scaled, "adapter_config.json")))["lora_alpha"] == 8
+    assert json.load(open(os.path.join(best["adapter"], "adapter_config.json")))["lora_alpha"] == 32
+    assert dict((n, ix) for n, ix in best["lineage"]) == plan2["slices"] and state()["stack"] is None
+    assert best["lora_shape"] == L.lora_shape(plan2["train"]) and best["gate_seed"] == 1003
+    report = open(os.path.join(rd(3), "report.md")).read()
+    assert "No training in this round: round 2's adapter" in report and "at 0.25 strength" in report, report
+    if case == "forced":
+        ns = types.SimpleNamespace(args=types.SimpleNamespace(config=cpath))
+        cfg["recipes"][0].pop("force_keep")
+        yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+        assert L.Loop.forced(ns, {"recipe": {"id": "r002-x0.25", "force_keep": True}})  # the plan's own setting
+        assert not L.Loop.forced(ns, {"recipe": {"id": "r002-x0.25"}}) and not L.Loop.forced(ns, {})
+        cfg["recipes"][0]["force_keep"] = True  # set in loop.yaml after the plan: read again at decide and finish
+        yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+        assert L.Loop.forced(ns, {"recipe": {"id": "r002-x0.25"}}) and not L.Loop.forced(ns, {"recipe": {"id": "x"}})
+        return
+    # round 4: the default recipe continues the full-strength adapter; tachibana4 rows now need 20 reasoning tokens,
+    # so the lineage's shorter tachibana4 rows are never replayed
+    L.count_tokens = lambda texts: [(37 * i) % 101 for i in range(len(texts))]
+    tach = "tachibana4_v4pro"
+    for src in cfg["sources"]:
+        if src["name"] == tach:
+            src["min_think_tokens"] = 20
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    plan4 = done(4, "plan")
+    assert plan4["recipe"]["id"] == "default" and plan4["init"] == "best" and plan4["rolled"] == []
+    assert plan4["init_adapter"] == os.path.join(rd(3), "train", "adapter") and plan4["adapter_scale"] == 0.25
+    y4 = yaml.safe_load(open(os.path.join(rd(4), "train.yaml")))
+    assert y4["init_adapter"].replace("/", os.sep) == os.path.join(rd(3), "train", "adapter")
+    n_new = sum(len(ix) for ix in plan4["slices"].values())
+    assert n_rows(plan4["replay"]) == round(0.25 * n_new), (n_rows(plan4["replay"]), n_new)
+    tokens = L.think_index(os.path.join(L.POOLS, tach))[1]
+    short = [i for i in plan2["slices"][tach] if tokens[i] not in range(20, 10 ** 9)]
+    replayed = dict((n, ix) for n, ix in plan4["replay"])
+    assert short and plan4["replay_dropped"] == {tach: len(short)}, plan4["replay_dropped"]
+    assert all(tokens[i] in range(20, 10 ** 9) for i in replayed.get(tach, []))
+    assert set(replayed.get(tach, [])).issubset(plan2["slices"][tach])
+    assert w.converted[-1] == os.path.join(rd(4), "train", "adapter-x0.25")
+    assert done(4, "convert")["gguf_lora_alpha"] == 8.0
+    assert "never replayed" in open(os.path.join(rd(4), "report.md")).read()
 
 def test_bfcl_harness():
     """anneal/bfcl.py: BFCL's request building (rebuilt here; checked byte for byte against BFCL 2026.3.23's own

@@ -139,8 +139,7 @@ def make_round3(init_adapter=None, hold=True, data=True, kl=None):
         json.dump({"train_rows": 50, "val_rows": 10}, open(os.path.join(r3, "stages", "data.done.json"), "w"))
     cfg = yaml.safe_load(open(L.CONFIG))
     cfg["min_free_gb"] = 0
-    if hold:
-        cfg["hold_before_train"] = [3]
+    cfg["hold_before_train"] = [3] if hold else []
     yaml.safe_dump(cfg, open(L.CONFIG, "w"))
     return plan
 
