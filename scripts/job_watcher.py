@@ -9,7 +9,7 @@ Queue: results\jobs\queue\*.json, run in file-name order. Each file holds
 "args" run with the venv's python.exe in C:\AI\training. The job is finished when every "done" path exists.
 
 Every minute:
-  - while a job runs: if free RAM is under 1.5 GiB or committed memory is over 74 GB (decimal, like the RAM guard),
+  - while a job runs: if free RAM is under 1.5 GiB or committed memory is over 80 GB (decimal, like the RAM guard),
     it writes STOP into each existing stop_dirs folder (the job saves and exits). It never kills anything.
   - once the job has exited: a STOP file is there, so it goes to held\ and a person decides (a stopped job may still
     write its done files). Finished, so it goes to done\. It exited within 2 minutes without finishing (it refused
@@ -36,7 +36,7 @@ from operator import ge, gt, lt
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 JOBS = os.path.join(ROOT, "results", "jobs")
-MIN_FREE_GIB, MAX_COMMIT_GB = 1.5, 74.0
+MIN_FREE_GIB, MAX_COMMIT_GB = 1.5, 80.0
 FREE_CHECKS, EVERY_S = 3, 60
 QUICK_EXIT_S, QUICK_RETRY_S, MAX_QUICK = 120, 600, 12
 BUSY = ("lora_scale_check.py", "strength_sweep.py", "train_longrun.py", "train_qlora.py", "val_loss.py",

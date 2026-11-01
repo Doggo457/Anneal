@@ -6,7 +6,7 @@ closes.
 
 | It sees | It does |
 |---|---|
-| a job running | checks the RAM hard line every minute: free RAM under 1.5 GiB or committed memory over 74 GB (decimal) writes `STOP` in the job's folders (the job saves and exits); it never kills anything |
+| a job running | checks the RAM hard line every minute: free RAM under 1.5 GiB or committed memory over 80 GB (decimal; the page file is system-managed and grows past the first 74.8 GB limit) writes `STOP` in the job's folders (the job saves and exits); it never kills anything |
 | the job exited, a `STOP` file is there | moves it to `held\`; a person decides (a stopped job can still write its done files, so `STOP` is checked first) |
 | the job exited, its done files exist | moves it to `done\` and starts the next one |
 | the job exited within 2 minutes without finishing | tries again 10 minutes later, 12 times at most |

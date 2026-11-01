@@ -179,10 +179,13 @@ def test_commit_line_and_low_points(env):
     add_job(root, "01-a.json", "a")
     st = {}
     checks(m, st, 3)
-    m.mem = (9.0, 74.5, 74.8)
+    m.mem = (3.0, 75.5, 76.0)  # 1 Nov 2026: the page file grew past the first 74.8 GB limit; not a reason to stop
+    checks(m, st, 1)
+    assert not (root / "out" / "a" / "STOP").exists()
+    m.mem = (9.0, 80.5, 81.0)
     checks(m, st, 1)
     assert (root / "out" / "a" / "STOP").exists()
-    assert st["job"]["low_free_gib"] == 9.0 and st["job"]["high_commit_gb"] == 74.5
+    assert st["job"]["low_free_gib"] == 3.0 and st["job"]["high_commit_gb"] == 80.5
 
 
 def test_already_finished_and_invalid_jobs(env):
