@@ -87,6 +87,14 @@ whole keep test at the plan's strength, against the best so far (round N's folde
 best and round N's rows join the best's lineage (and leave the rolled-forward stack); rejected, the stack stays as it was.
 A recipe with force_keep is kept whatever its tests show; it still takes every test and the confirm pass, for the record.
 
+On par is kept (2 Nov 2026), my rule: "base is always base round 2 is always round 2 the base model is always the OG
+model without lora and even if its not better if its on par then its also kept and then train on again". loop.yaml
+compare_to: base: every round is compared with the base model without LoRA (round 0's gate rows, at its seed, and its
+held-out losses), never with an earlier round; training still goes on from the best (the last round kept). Rules
+par_rule: a round whose gate score is on par with the base (not lower by more than gate_tolerance, and not
+significantly lower: the no-worse test every other check uses) is kept; every other check still blocks a clear drop.
+Under par_rule the early look stops only a round that is not on par on the part answered.
+
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
@@ -1071,13 +1079,14 @@ class Loop(fr.Controller):
                     gate_pass(order[:k])
                     cand = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
                     chk = E.early_reject_check(early["best_rows"], cand, [gate[i]["id"] for i in order[:k]],
-                                               int(early["max_diff"]))
+                                               int(early["max_diff"]), early.get("par"))
                     out["early_checks"].append(chk)
                     out["early_check"] = chk
+                    why = ("not on par, so the pass stops here" if early.get("par") else
+                           "not ahead by more than %d, so the pass stops here" % chk["max_diff"])
                     self.log(f"round {self.rnum}: early look after {chk['n']} of {len(gate)} gate problems: "
-                             f"{chk['diff']:+g} vs the best ({chk['wins']} wins / {chk['losses']} losses); "
-                             + ("not ahead by more than %d, so the pass stops here" % chk["max_diff"] if chk["stop"]
-                                else "the pass goes on"))
+                             f"{chk['diff']:+g} vs round {early.get('reference_round', '?')} ({chk['wins']} wins / "
+                             f"{chk['losses']} losses); " + (why if chk["stop"] else "the pass goes on"))
                     out["early_reject"] = chk["stop"]
                     if chk["stop"]:
                         break
@@ -1275,24 +1284,36 @@ class Loop(fr.Controller):
             self.log(f"round 0: the base's {GUARDS[name]['label']} failed ({type(exc).__name__}: {exc}); left to the "
                      "first round that needs it")
 
+    def reference(self, cfg):
+        """What a round is compared with: the best so far, or (loop.yaml compare_to: base, 2 Nov 2026) always the base
+        model without LoRA, so every round is judged against the original model while training goes on from the
+        best (the last round kept). Returns {round, gate_rows, gate_seed} (plus the best's held-out references)."""
+        if cfg.get("compare_to", "best") == "base":
+            b = self.state["base"]
+            return {"round": 0, "name": "base", "gate_rows": b["gate_rows"], "gate_seed": b["gate_seed"]}
+        if cfg.get("compare_to", "best") != "best":
+            raise ValueError(f"loop.yaml compare_to must be best or base, got {cfg.get('compare_to')!r}")
+        return self.state["best"]
+
     def decision(self, cfg, ev):
-        best_rows = E.read_jsonl(self.state["best"]["gate_rows"])
-        best_rows = [r for r in best_rows if r["seed"] == self.state["best"]["gate_seed"]]
+        ref = self.reference(cfg)
+        best_rows = [r for r in E.read_jsonl(ref["gate_rows"]) if r["seed"] == ref["gate_seed"]]
         cand_rows = [r for r in E.read_jsonl(ev["gate_rows"]) if r["seed"] == ev["gate_seed"]]
         base_nc = E.read_jsonl(self.state["base"]["noncoding_rows"])
         cand_nc = E.read_jsonl(ev["noncoding_rows"])
         losses = self.heldout_losses() if self.rnum >= 2 else {}
         d = E.decide(best_rows, cand_rows, base_nc, cand_nc, cfg["rules"], ev.get("samples_ok", True), losses=losses)
         d["best_round"] = self.state["best"]["round"]
+        d["reference_round"] = ref["round"]
         if not d["gate"]["n"]:
-            raise RuntimeError("no gate problems in common between the best and this round")
+            raise RuntimeError(f"no gate problems in common between round {ref['round']} and this round")
         if ev.get("early_reject"):  # only part of the gate was answered: never a keep (evaluate_model)
             chk = ev["early_check"]
             d.update(keep=False, path=None, early_reject=chk)
-            d["reasons"].insert(0, f"stopped early: {chk['diff']:+g} vs the best after {chk['n']} of "
+            d["reasons"].insert(0, f"stopped early: {chk['diff']:+g} vs round {ref['round']} after {chk['n']} of "
                                    f"{len(E.read_jsonl(E.GATE_PATH))} gate problems ({chk['wins']} wins / "
-                                   f"{chk['losses']} losses), not ahead by more than {chk['max_diff']}, with the "
-                                   "held-out loss paths closed")
+                                   f"{chk['losses']} losses), " + ("not on par" if chk.get("par") else
+                                   f"not ahead by more than {chk['max_diff']}") + ", with the held-out loss paths closed")
         self.log(f"round {self.rnum}: {'KEEP (' + d['path'] + ' path)' if d['keep'] else 'reject'}"
                  + (f" ({', '.join(d['loss_fell'])} loss fell)" if d.get("loss_fell") else "") + " - gate "
                  f"{d['gate']['best']:.4f} -> {d['gate']['candidate']:.4f} ({d['gate']['wins']} wins / "
@@ -1330,9 +1351,13 @@ class Loop(fr.Controller):
             self.log(f"round {self.rnum}: {', '.join(E.LOSS_LABELS.get(k, k) for k in fell)} loss path open, so the "
                      "whole gate is answered (no early look)")
             return None
-        best = self.state["best"]
-        return {"looks": early_looks(er), "max_diff": int(er.get("max_diff", 0)),
-                "best_rows": [r for r in E.read_jsonl(best["gate_rows"]) if r["seed"] == best["gate_seed"]]}
+        ref = self.reference(cfg)
+        rules = cfg["rules"]
+        par = ({"tolerance": float(rules.get("gate_tolerance", rules.get("part_tolerance", 0.05))),
+                "alpha": float(rules["alpha"])} if rules.get("par_rule") else None)
+        return {"looks": early_looks(er), "max_diff": int(er.get("max_diff", 0)), "par": par,
+                "reference_round": ref["round"],
+                "best_rows": [r for r in E.read_jsonl(ref["gate_rows"]) if r["seed"] == ref["gate_seed"]]}
 
     def next_round_number(self):
         nums = [r["round"] for r in self.state["rounds"]]
@@ -1381,7 +1406,7 @@ class Loop(fr.Controller):
             if cfg.get(h["key"]):
                 self.run_stage(h["stage"], self.heldout_loss, cfg, kind)
         ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
-            cfg, self.round_gguf(), self.state["best"]["gate_seed"], early=self.early_reject_plan(cfg))))
+            cfg, self.round_gguf(), self.reference(cfg)["gate_seed"], early=self.early_reject_plan(cfg))))
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
         conf = mile = None
         guards = {}
@@ -1744,12 +1769,14 @@ class Loop(fr.Controller):
     def swe_file(self, cfg):
         return self.heldout_file(cfg, "swe")
 
-    def heldout_reference(self, kind, sha):
-        """The best's per-step losses on a held-out set ({path, field, sha, round}), or None. While the base is the
-        best they are the base's (scored once, by the first training round's stage for that set)."""
+    def heldout_reference(self, kind, sha, cfg=None):
+        """The reference's per-step losses on a held-out set ({path, field, sha, round}), or None: the best's, or the
+        base's while the base is the best or loop.yaml has compare_to: base (scored once, by the first training round's
+        stage for that set)."""
         key = HELDOUT[kind]["key"]
         best = self.state["best"]
-        ref = best.get(key) if best["round"] != 0 else (self.state.get("base") or {}).get(key)
+        to_base = best["round"] == 0 or (cfg or {}).get("compare_to") == "base"
+        ref = (self.state.get("base") or {}).get(key) if to_base else best.get(key)
         if ref and ref.get("sha") != sha:
             self.log(f"the {HELDOUT[kind]['label']} changed since round {ref.get('round')} was scored on them: no reference")
             return None
@@ -1768,8 +1795,8 @@ class Loop(fr.Controller):
         if not os.path.exists(path):
             raise Waiting(f"the {h['label']} are not built: run {h['build']}")
         sha = file_sha(path)
-        ref = self.heldout_reference(kind, sha)
-        need_base = ref is None and self.state["best"]["round"] == 0
+        ref = self.heldout_reference(kind, sha, cfg)
+        need_base = ref is None and (self.state["best"]["round"] == 0 or cfg.get("compare_to") == "base")
         vdir = os.path.join(self.rdir, h["stage"])
         summ = os.path.join(vdir, "summary.json")
         val = self.read_json(summ)
@@ -1823,10 +1850,13 @@ class Loop(fr.Controller):
                            on_row=lambda r, n, tot, tps: self.status("confirm", f"gate {n}/{tot}"))
         finally:
             self.unserve()
-        best_old = [r for r in E.read_jsonl(self.state["best"]["gate_rows"]) if r["seed"] == self.state["best"]["gate_seed"]]
+        ref = self.reference(cfg)
+        best_old = [r for r in E.read_jsonl(ref["gate_rows"]) if r["seed"] == ref["gate_seed"]]
         vs = E.compare(best_old, rows)
-        # the net win guards a gate keep against a lucky draw; a loss-path keep held level on the gate by definition
-        need = bool(cfg["rules"].get("confirm_net_win")) and d.get("path") != "loss"
+        vs["reference_round"] = ref["round"]
+        # the net win guards a gate keep against a lucky draw; a loss-path or par keep held level on the gate by
+        # definition
+        need = bool(cfg["rules"].get("confirm_net_win")) and d.get("path") not in ("loss", "par")
         return self.mark_done("confirm", {"gate_rows": path, "gate_seed": seed, "pass": sum(r["pass"] for r in rows),
                                           "n": len(rows), "vs_previous_best": vs, "net_win_required": need,
                                           "confirmed": (not need) or vs["wins"] > vs["losses"]})
@@ -2040,8 +2070,8 @@ class Loop(fr.Controller):
                     else "no items in common with the base"))
         if d["keep"] and conf and not conf.get("confirmed", True):
             c = conf["vs_previous_best"]
-            reasons.append(f"the fresh-seed confirm did not win more problems than it lost against the best "
-                           f"({c['wins']} wins / {c['losses']} losses)")
+            reasons.append(f"the fresh-seed confirm did not win more problems than it lost against round "
+                           f"{c.get('reference_round', d['best_round'])} ({c['wins']} wins / {c['losses']} losses)")
         forced = self.forced(plan)
         kept = forced or (d["keep"] and g_ok and conf is not None and conf.get("confirmed", True))
         if forced:
@@ -2115,7 +2145,10 @@ class Loop(fr.Controller):
     def write_report(self, cfg, rec, ev, d, plan=None, conf=None, mile=None, guards=None):
         g, nc = d["gate"], d["noncoding"]
         L = [f"# Loop round {self.rnum} ({rec.get('name') or 'r%03d' % self.rnum}): {rec['status'].upper()}", "",
-             f"Compared with round {d['best_round']} (the best so far). Rules: {json.dumps(d['rules'])}.", ""]
+             ("Compared with the base model (round 0, no LoRA)" + (
+                 f"; trained on from round {d['best_round']}, the best so far" if d["best_round"] != 0 else "") + "."
+              if d.get("reference_round", d["best_round"]) == 0 else
+              f"Compared with round {d['best_round']} (the best so far).") + f" Rules: {json.dumps(d['rules'])}.", ""]
         reasons = rec.get("reasons") if rec.get("reasons") is not None else d["reasons"]
         if reasons:
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
@@ -2124,7 +2157,10 @@ class Loop(fr.Controller):
             fell = " and ".join(HELDOUT[k]["label"] for k in d.get("loss_fell") or [] if k in HELDOUT) or "held-out steps"
             L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
                    "loss": f"Kept on the held-out loss: its gate score held level and its loss on the {fell} fell, by "
-                           "a one-sided sign test (Holm-adjusted across the bug-fix and terminal sets)."}.get(
+                           "a one-sided sign test (Holm-adjusted across the bug-fix and terminal sets).",
+                   "par": "Kept on par: its gate score is not clearly lower (a drop of at most "
+                          f"{(d.get('par') or {}).get('tolerance')} and a one-sided sign test on its losses above "
+                          f"{d['rules'].get('alpha')}), and every other check is no worse."}.get(
                        rec.get("path") or d.get("path"), "Kept."), ""]
         if rec.get("files_kept"):
             L += [f"Files: {rec['files_kept']}.", ""]
@@ -2193,8 +2229,8 @@ class Loop(fr.Controller):
                          f"{a['adapter']['answer_token_loss']:.4f} (this adapter), {a['rows']} rows.")
         if conf:
             c = conf["vs_previous_best"]
-            L += ["", f"Confirm (fresh seed {conf['gate_seed']}): {conf['pass']}/{conf['n']}; vs previous best "
-                      f"{c['diff']:+.4f} ({c['wins']} / {c['losses']}, p {c['p_one_sided']:.4f})"
+            L += ["", f"Confirm (fresh seed {conf['gate_seed']}): {conf['pass']}/{conf['n']}; vs round "
+                      f"{c.get('reference_round', d['best_round'])} {c['diff']:+.4f} ({c['wins']} / {c['losses']}, p {c['p_one_sided']:.4f})"
                       + ("; net win required: " + ("yes, passed" if conf.get("confirmed", True) else "not met")
                          if conf.get("net_win_required") else "") + "."]
         if mile:

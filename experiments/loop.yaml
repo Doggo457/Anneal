@@ -75,7 +75,17 @@ gate: {seed: 1, budget: 32768, max_tokens: 40960, slots: 8, ctx: 352256, early_r
 # scripts/setup_toolchains.py).
 noncoding: {seeds: [1, 2], max_tokens: 40960}   # 22 Oct 2026: room to reach the gate's 32,768-token thinking budget
 rules: {alpha: 0.05, part_tolerance: 0.05, nc_tolerance: 0.05, confirm_net_win: false, loss_rule: true, loss_alpha: 0.05,
-        evalplus_guard: true, evalplus_tolerance: 0.03}
+        evalplus_guard: true, evalplus_tolerance: 0.03, par_rule: true, gate_tolerance: 0.05}
+compare_to: base   # 2 Nov 2026: every round is compared with the base model without LoRA, never an earlier round
+# par_rule and compare_to (2 Nov 2026, my words: "the base model is always the OG model without lora and even if its not
+# better if its on par then its also kept and then train on again"): a round whose gate score is on par with the base is
+# kept, and the next round trains on from it. On par = not lower than the base by more than gate_tolerance and not
+# significantly lower (one-sided sign test on its losses, p at most alpha): the no-worse test of the checks below. 0.05 is
+# EvalPlus's 0.03 scaled to the gate's 200 problems as BFCL's and CWEval's are (0.03 x sqrt(542 / 200) = 0.049), and
+# the same as part_tolerance. Every other part of the rule still holds (the write and fix parts, the non-coding check,
+# the no-worse checks and EvalPlus block a clear drop). The gate and loss paths stay, for the record of why a round is
+# kept. With compare_to: base a round's gate is answered at the base's seed, its held-out losses are compared with the
+# base's, and the confirm pass is compared with the base.
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
 # (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the

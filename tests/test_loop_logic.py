@@ -88,6 +88,53 @@ def test_compare_and_decide():
     assert not E.decide(base, better, nc, nc, rules, sanity_ok=False)["keep"]
 
 
+def test_par_rule_decide():
+    """2 Nov 2026 (rules par_rule): a round on par with the reference is kept (path "par"): not lower by more than
+    gate_tolerance and not significantly lower; a bigger or clear drop is not on par. The parts and the non-coding
+    check still block, and a clear gain still keeps on the gate path. The early look stops only a round not on par."""
+    ids = [f"write/{LANGS[i % 6]}/cc/valid/{i}" for i in range(60)] + [f"fix/{LANGS[i % 2]}/cc/test/{i}" for i in range(40)]
+    nc_ids = [f"mmlupro/{i}" for i in range(10)]
+    nc = rows(nc_ids, set(nc_ids[:7])) + rows(nc_ids, set(nc_ids[:7]), seed=2)
+    rules = {"alpha": 0.05, "part_tolerance": 0.05, "nc_tolerance": 0.05, "loss_rule": True, "loss_alpha": 0.05,
+             "par_rule": True, "gate_tolerance": 0.05}
+    base_pass = set(ids[:30]) | set(ids[60:80])                     # write 30/60, fix 20/40: 50/100
+    base = rows(ids, base_pass)
+    d = E.decide(base, base, nc, nc, rules)                          # the same score: on par
+    assert d["keep"] and d["path"] == "par" and d["par"]["ok"], d
+    assert not E.decide(base, base, nc, nc, dict(rules, par_rule=False))["keep"]  # not under keep-if-better
+    two_down = rows(ids, base_pass - {ids[0], ids[60]})              # 2 lower of 100, 2 losses: p 0.25
+    d = E.decide(base, two_down, nc, nc, rules)
+    assert d["keep"] and d["path"] == "par" and d["par"]["losses"] == 2 and d["par"]["p_worse"] == 0.25, d
+    loose = dict(rules, part_tolerance=0.2)  # the parts out of the way, for the gate's own test
+    churn = rows(ids, (base_pass - set(ids[:4]) - set(ids[60:64])) | set(ids[30:34]))  # 8 lost, 4 won: -4 of 100
+    d = E.decide(base, churn, nc, nc, loose)
+    assert d["keep"] and d["path"] == "par" and abs(d["par"]["diff"] + 0.04) < 1e-9 and d["par"]["p_worse"] > 0.05, d
+    six_down = rows(ids, base_pass - set(ids[:3]) - set(ids[60:63]))  # 6 lower of 100 (more than 0.05)
+    d = E.decide(base, six_down, nc, nc, rules)
+    assert not d["keep"] and d["path"] is None and d["reasons"][0].startswith("gate not on par: -0.0600"), d
+    clear = rows(ids, (base_pass - set(ids[:5])) | set(ids[30:31]))   # 5 lost, 1 won: -4, p_worse 0.109 (on par);
+    assert E.decide(base, clear, nc, nc, loose)["keep"]
+    clear = rows(ids, base_pass - set(ids[:5]))                       # 5 lost, none won: p 0.031, clearly lower
+    d = E.decide(base, clear, nc, nc, dict(rules, gate_tolerance=0.1, part_tolerance=0.2))
+    assert not d["keep"] and "gate not on par" in d["reasons"][0] and d["par"]["p_worse"] == 0.03125, d
+    fix_down = rows(ids, base_pass - set(ids[60:63]))                 # 3 lower overall (on par), the fix part 3 of 40
+    d = E.decide(base, fix_down, nc, nc, rules)                        # = 0.075 down: the part guard still blocks
+    assert not d["keep"] and d["path"] is None and any("fix part dropped" in r for r in d["reasons"]), d
+    worse_nc = rows(nc_ids, set(nc_ids[:5])) + rows(nc_ids, set(nc_ids[:5]), seed=2)
+    assert not E.decide(base, base, nc, worse_nc, rules)["keep"]
+    better = rows(ids, base_pass | set(ids[30:42]))                    # 12 won: still the gate path
+    assert E.decide(base, better, nc, nc, rules)["path"] == "gate"
+    # the early look under par_rule: it stops only a round not on par on the part answered
+    par = {"tolerance": 0.05, "alpha": 0.05}
+    part = [i for i in ids[:50]]
+    chk = E.early_reject_check(base, two_down, part, 0, par)
+    assert not chk["stop"] and chk["diff"] == -1 and chk["par"]["ok"], chk   # behind by 1 of 50: goes on
+    assert E.early_reject_check(base, two_down, part, 0)["stop"]              # (keep-if-better would stop it)
+    chk = E.early_reject_check(base, six_down, part, 0, par)
+    assert chk["stop"] and not chk["par"]["ok"], chk                         # 3 of 50 lower: not on par
+    assert not E.early_reject_check(base, six_down, part + ["missing/0"], 0, par)["stop"]  # not all answered yet
+
+
 def test_six_language_decide_and_loss():
     ids = [f"write/{LANGS[i % 6]}/cc/valid/{i}" for i in range(30)] + [f"fix/{LANGS[i % 2]}/cc/test/{i}" for i in range(20)]
     nc_ids = [f"mmlupro/{i}" for i in range(10)]
@@ -874,6 +921,8 @@ def setup_world(tmp):
     cfg["hold_before_train"] = []  # test_hold_before_train covers the hold
     cfg["adapter_scale"] = 1.0  # full strength here; test_adapter_scale_and_adopt covers a scaled adapter
     cfg["recipes"] = [r for r in cfg["recipes"] if r.get("adopt_round") is None]  # the same
+    cfg["rules"]["par_rule"] = False  # the keep-if-better rule here; test_par_rule_and_base_reference covers on par
+    cfg["compare_to"] = "best"  # the same
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -1852,6 +1901,71 @@ def _adapter_scale_and_adopt(tmp, case):
     assert w.converted[-1] == os.path.join(rd(4), "train", "adapter-x0.25")
     assert done(4, "convert")["gguf_lora_alpha"] == 8.0
     assert "never replayed" in open(os.path.join(rd(4), "report.md")).read()
+
+def test_par_rule_and_base_reference():
+    """2 Nov 2026 (loop.yaml compare_to: base, rules par_rule): every round is compared with the base model, never an
+    earlier round, and a round on par with the base is kept and trained on. r002 is clearly ahead of the base (kept on
+    the gate); r003 trains on from r002 and scores 1 below the base, far below r002: on par with the base, so kept,
+    with its gate answered at the base's seed and its held-out losses and confirm compared with the base's; r004 is
+    6 below the base on 40 problems: not on par, rejected, and r005 trains on from r003."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING)
+    before = world_patches()
+    try:
+        _par_rule_and_base_reference(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _par_rule_and_base_reference(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base")
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    PASSING.update({"r002": 30, "r003": 19, "r004": 14, "r005": 20})  # the base passes 20 of the 40
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert rec(2)["status"] == "kept" and done(2, "decide")["path"] == "gate" and state()["best"]["gate_seed"] == 1002
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    d3 = done(3, "decide")
+    assert rec(3)["status"] == "kept" and d3["path"] == "par" and d3["reference_round"] == 0 and d3["best_round"] == 2
+    assert d3["gate"]["best"] == 0.5 and d3["gate"]["candidate"] == 19 / 40 and d3["par"]["ok"], d3
+    assert done(3, "plan")["init"] == "best" and done(3, "plan")["init_adapter"] == os.path.join(rd(2), "train", "adapter")
+    assert done(3, "evaluate")["gate_seed"] == 1  # the base's seed, not r002's confirm seed
+    assert done(3, "sweloss")["vs_best"]["reference_round"] == 0
+    assert w.swe_calls == [("r002", False), ("r003", True)], w.swe_calls  # the base's losses scored once, by r002
+    conf = done(3, "confirm")
+    assert conf["vs_previous_best"]["reference_round"] == 0 and not conf["net_win_required"] and conf["confirmed"]
+    report = open(os.path.join(rd(3), "report.md")).read()
+    assert "Compared with the base model (round 0, no LoRA); trained on from round 2" in report, report
+    assert "Kept on par" in report
+    # with keep-if-better against the best (r002), r003 would have been rejected
+    old = E.decide([r for r in E.read_jsonl(os.path.join(rd(2), "gate.seed1002.jsonl"))],
+                   E.read_jsonl(os.path.join(rd(3), "gate.seed1.jsonl")), E.read_jsonl(state()["base"]["noncoding_rows"]),
+                   E.read_jsonl(os.path.join(rd(3), "noncoding.jsonl")), dict(cfg["rules"], par_rule=False))
+    assert not old["keep"]
+    assert state()["best"]["round"] == 3
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    d4 = done(4, "decide")
+    assert rec(4)["status"] == "rejected" and d4["reasons"][0].startswith("gate not on par: -0.1500 vs the reference"), d4
+    assert state()["best"]["round"] == 3  # (r004's recipe retrains from the base on the lineage)
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert done(5, "plan")["init"] == "best" and done(5, "plan")["init_adapter"] == os.path.join(rd(3), "train", "adapter")
+    assert rec(5)["status"] == "kept" and done(5, "decide")["path"] == "par" and done(5, "decide")["gate"]["diff"] == 0
+    assert done(5, "evaluate")["gate_seed"] == 1 and done(5, "decide")["reference_round"] == 0
+
 
 def test_bfcl_harness():
     """anneal/bfcl.py: BFCL's request building (rebuilt here; checked byte for byte against BFCL 2026.3.23's own
@@ -2844,7 +2958,7 @@ def test_second_early_look():
         rows = E.read_jsonl(os.path.join(rd2, "gate.seed1.jsonl"))
         assert sorted(r["id"] for r in rows) == sorted(gate[i]["id"] for i in order[:27])
         assert not E.read_jsonl(os.path.join(rd2, "noncoding.jsonl"))
-        assert not d["keep"] and d["reasons"][0].startswith("stopped early: -1 vs the best after 27 of 40"), d
+        assert not d["keep"] and d["reasons"][0].startswith("stopped early: -1 vs round 0 after 27 of 40"), d
         st = json.load(open(os.path.join(run_dir, "state.json")))
         assert [(r["round"], r["status"]) for r in st["rounds"]] == [(0, "reference"), (2, "rejected")], st["rounds"]
     finally:

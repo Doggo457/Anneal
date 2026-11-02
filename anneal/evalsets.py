@@ -549,17 +549,22 @@ def shuffled_order(items, salt):
     return sorted(range(len(items)), key=lambda i: hashlib.sha256(f"{salt}:{items[i]['id']}".encode()).hexdigest())
 
 
-def early_reject_check(best_rows, cand_rows, ids, max_diff):
+def early_reject_check(best_rows, cand_rows, ids, max_diff, par=None):
     """The interim look of the early reject (loop.yaml gate early_reject): on the gate problems ids, how many more the
     candidate solved than the best (diff, a count), and stop = diff <= max_diff. It only ever rejects early, so it
     can't make a keep more likely than the full test; it skips the rest of the gate pass for rounds that are behind
-    or level on the first part."""
+    or level on the first part. With par ({tolerance, alpha}: the keep rule's par_rule, 2 Nov 2026), where a round on
+    par is kept, it stops only a round that is not on par on the part answered (guard_check)."""
     b, c = per_problem(best_rows), per_problem(cand_rows)
     common = [i for i in ids if i in b and i in c]
     diff = sum(c[i] - b[i] for i in common)
-    return {"n": len(common), "of": len(ids), "diff": diff, "max_diff": max_diff,
+    look = {"n": len(common), "of": len(ids), "diff": diff, "max_diff": max_diff,
             "wins": sum(1 for i in common if c[i] > b[i]), "losses": sum(1 for i in common if c[i] < b[i]),
             "stop": len(common) == len(ids) and diff <= max_diff}
+    if par:
+        g = guard_check({i: b[i] for i in common}, {i: c[i] for i in common}, par["tolerance"], par["alpha"])
+        look.update(par=g, stop=len(common) == len(ids) and not g["ok"])
+    return look
 
 
 def guard_check(base_pass, cand_pass, tolerance, alpha):
@@ -599,20 +604,23 @@ PART_NAMES = {"write": "write part", "fix": "fix part", "cc": "CodeContests part
 
 def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=None, losses=None):
     """The keep rule. Keep the candidate only if
-      EITHER its gate score (paired per problem against the best so far) is higher and a one-sided exact sign test on
+      EITHER its gate score (paired per problem against best_gate: the best so far, or the base when loop.yaml has
+        compare_to: base) is higher and a one-sided exact sign test on
         the problems that changed gives p <= alpha,
       OR (rules loss_rule, 21 Oct 2026) its gate score is not lower AND its loss on held-out steps (losses:
         {"swe": bug-fix steps, "terminal": terminal steps}, each compare_loss against the best; loss alone means the
         bug-fix steps) is lower on more steps than chance, Holm-adjusted across the paths, p <= loss_alpha
         (loss_paths);
-    and in both cases all hold:
+      OR (rules par_rule, 2 Nov 2026) its gate score is on par: not lower by more than gate_tolerance and not
+        significantly lower (guard_check, the no-worse test of every other check);
+    and in every case all hold:
       - each guarded part (write, fix; cc in the old Python gate) is not worse than the best by more than
         part_tolerance (cc_tolerance in older configs), and not significantly worse (one-sided sign test on its
         losses, p <= alpha);
       - the non-coding check (per question, mean over seeds, paired against the BASE model so drift can't build
         up over rounds) is not worse by more than nc_tolerance, and not significantly worse;
       - the sample generations thought, answered and stopped cleanly.
-    Returns a dict with keep, path ("gate" / "loss" / None), the reasons for a reject, and every number: per part
+    Returns a dict with keep, path ("gate" / "loss" / "par" / None), the reasons for a reject, and every number: per part
     and, for write and fix items, per language (for the record)."""
     allp = compare(best_gate, cand_gate)
     ids = set(per_problem(best_gate)) & set(per_problem(cand_gate))
@@ -634,8 +642,15 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
     losses = {k: v for k, v in losses.items() if v is not None}
     lp = loss_paths(dict(rules, loss_rule=True), losses)
     fell = sorted(k for k, v in lp.items() if v["open"])
+    par = guard_check(per_problem(best_gate), per_problem(cand_gate), float(rules.get("gate_tolerance", tol)), alpha)
     path = "gate" if gate_gain else ("loss" if rules.get("loss_rule") and gate_level and fell else None)
-    if path is None:
+    if path is None and rules.get("par_rule") and par["ok"]:
+        path = "par"
+    if path is None and rules.get("par_rule"):
+        reasons.append("gate not on par: no problems in common" if not par["n"] else
+                       f"gate not on par: {par['diff']:+.4f} vs the reference ({par['losses']} losses / {par['wins']} wins, "
+                       f"p {par['p_worse']:.4f}; on par needs a drop of at most {par['tolerance']} and p above {alpha})")
+    elif path is None:
         if allp["n"] == 0 or allp["diff"] is None or allp["diff"] <= 0:
             reasons.append(f"gate not higher (diff {allp['diff']})")
         else:
@@ -660,7 +675,7 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
             reasons.append(f"{name} dropped {c['diff']:+.4f} (tolerance {t})")
         elif p_worse <= alpha:
             reasons.append(f"{name} significantly worse: {c['losses']} losses vs {c['wins']} wins, p {p_worse:.4f}")
-    out = {"keep": not reasons, "path": path if not reasons else None, "reasons": reasons, "gate": allp,
+    out = {"keep": not reasons, "path": path if not reasons else None, "reasons": reasons, "gate": allp, "par": par,
            "parts": parts, "langs": by_lang, "noncoding": nc, "loss": losses.get("swe"),
            "losses": {k: dict(losses[k], **lp.get(k, {})) for k in losses}, "loss_fell": fell, "rules": dict(rules)}
     for k in ("cc", "oci"):  # the old Python gate's report fields
