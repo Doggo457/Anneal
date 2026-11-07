@@ -50,6 +50,8 @@ Rounds (results/loop/rounds/rNNN):
                held-out terminal loss lower on more steps than chance, Holm-adjusted across the two, p <= loss_alpha).
                Either way the write and fix parts and the non-coding check are not worse beyond tolerance nor
                significantly worse, and the samples are clean.
+    recheck    (loop.yaml second_pass: worse; decide rejected the round on the gate or on its write or fix part) the
+               gate again with a fresh seed, then decide again on both passes together; kept there, the round goes on.
     bfcl       (passed decide) the no-worse checks in loop.yaml's guards, 21 Oct 2026, in GUARDS order: BFCL's 150
     cweval     Java and JavaScript function calls (anneal/bfcl.py), then CWEval's 32 Go and JavaScript secure-coding
                tasks (anneal/cweval.py). Same rule as EvalPlus, on the gate's server settings, paired per item against
@@ -85,7 +87,8 @@ scale is fixed in the round's plan.
 A recipe with adopt_round: N trains nothing: round N's finished adapter, built on round N's rows, takes this round's
 whole keep test at the plan's strength, against the best so far (round N's folder is only read). Kept, it becomes the
 best and round N's rows join the best's lineage (and leave the rolled-forward stack); rejected, the stack stays as it was.
-A recipe with force_keep is kept whatever its tests show; it still takes every test and the confirm pass, for the record.
+A recipe with force_keep is kept whatever its tests show; it still takes every test (and, with second_pass: kept, the
+confirm pass), for the record.
 
 On par is kept (2 Nov 2026), my rule: "base is always base round 2 is always round 2 the base model is always the OG
 model without lora and even if its not better if its on par then its also kept and then train on again". loop.yaml
@@ -94,6 +97,15 @@ held-out losses), never with an earlier round; training still goes on from the b
 par_rule: a round whose gate score is on par with the base (not lower by more than gate_tolerance, and not
 significantly lower: the no-worse test every other check uses) is kept; every other check still blocks a clear drop.
 Under par_rule the early look stops only a round that is not on par on the part answered.
+
+Second pass only for a worse round (7 Nov 2026), my rule: "only do a second pass to confirm its worse if one turns out
+to be worse". loop.yaml second_pass: worse: a round kept on its gate pass has no confirm pass (it goes from its checks
+straight to the next round, and its gate pass is the best's reference rows). A round that decide rejects on the gate
+or on its write or fix part answers the gate again with a fresh seed (recheck), and decide runs again on both passes
+together (each problem's mean over the two, against the same reference): kept there, it takes every other check as a
+kept round does; worse there too, the reject stands. A reject on the non-coding check or the samples has no second
+pass (the gate can't confirm it). The whole gate is always answered (no early look), as a reject needs both passes.
+second_pass: kept (the default) is the old way: a confirm pass for every kept round and none for a reject.
 
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
@@ -142,7 +154,7 @@ GUARDS = {
     "cweval": {"label": "CWEval Go and JavaScript", "module": cweval, "build": "scripts/build_guards.py --cweval"},
 }
 ROUND_STAGES = ["plan", "data", "train", "convert", "valloss", "sweloss", "termloss", "evaluate",
-                "decide"] + list(GUARDS) + ["milestone", "confirm", "finish"]
+                "decide", "recheck"] + list(GUARDS) + ["milestone", "confirm", "finish"]
 # Held-out loss sets (sweloss, termloss): the loop.yaml key, the stage, the default file, what a report calls it.
 HELDOUT = {"swe": {"key": "swe_loss", "stage": "sweloss", "file": os.path.join("data", "eval", "swe_heldout.jsonl"),
                    "label": "held-out bug-fix steps", "build": "scripts/build_swe_heldout.py"},
@@ -837,6 +849,39 @@ def prototype_round(cfg, rnum):
     return int(rnum) in {int(r) for r in (cfg.get("prototype_rounds") or [])}
 
 
+def second_pass(cfg):
+    """loop.yaml second_pass (7 Nov 2026): "worse", the gate's second pass only for a round decide rejects on it, to
+    confirm the reject; "kept" (the default), the confirm pass for every kept round."""
+    mode = cfg.get("second_pass", "kept")
+    if mode not in ("kept", "worse"):
+        raise ValueError(f"loop.yaml second_pass must be kept or worse, got {mode!r}")
+    return mode
+
+
+GATE_BLOCKS = {"gate"} | set(E.PART_NAMES.values())  # the rejects a second pass of the gate can confirm or overturn
+
+
+def needs_second_pass(cfg, d):
+    """Whether a rejected round answers the gate again (second_pass: worse): decide rejected it on the gate or on a
+    part of it only, not on the non-coding check or the samples, which a gate pass can't confirm."""
+    blocks = d.get("blocked_by")
+    return (second_pass(cfg) == "worse" and not d["keep"] and not d.get("early_reject") and bool(blocks)
+            and set(blocks).issubset(GATE_BLOCKS))
+
+
+def with_second_pass(d, rc):
+    """The decision after the second pass (rc: the recheck stage): decide on both passes together, with the first
+    pass's numbers and the second pass under "second_pass". Kept there, the round goes on as kept; a reject leads with
+    both passes."""
+    d2 = rc["decision"]
+    out = dict(d2, second_pass={"gate_rows": rc["gate_rows"], "gate_seed": rc["gate_seed"], "pass": rc["pass"],
+                                "n": rc["n"], "kept": d2["keep"], "first": {k: d.get(k) for k in ("gate", "par", "reasons")}})
+    if not d2["keep"]:
+        out["reasons"] = [f"worse on both passes of the gate together (second pass at seed {rc['gate_seed']}: "
+                          f"{rc['pass']}/{rc['n']})"] + list(d2["reasons"])
+    return out
+
+
 class Loop(fr.Controller):
     def __init__(self, args, run):
         super().__init__(args, run)
@@ -1295,10 +1340,13 @@ class Loop(fr.Controller):
             raise ValueError(f"loop.yaml compare_to must be best or base, got {cfg.get('compare_to')!r}")
         return self.state["best"]
 
-    def decision(self, cfg, ev):
+    def decision(self, cfg, ev, extra=None):
+        """decide (evalsets.decide) on this round's gate pass against the reference; extra: more of its gate rows
+        (another seed), judged together with the pass (each problem's mean over the seeds)."""
         ref = self.reference(cfg)
         best_rows = [r for r in E.read_jsonl(ref["gate_rows"]) if r["seed"] == ref["gate_seed"]]
         cand_rows = [r for r in E.read_jsonl(ev["gate_rows"]) if r["seed"] == ev["gate_seed"]]
+        cand_rows += list(extra or [])
         base_nc = E.read_jsonl(self.state["base"]["noncoding_rows"])
         cand_nc = E.read_jsonl(ev["noncoding_rows"])
         losses = self.heldout_losses() if self.rnum >= 2 else {}
@@ -1337,6 +1385,10 @@ class Loop(fr.Controller):
         needs the whole pass)."""
         er = (cfg.get("gate") or {}).get("early_reject")
         if not er:
+            return None
+        if second_pass(cfg) == "worse":
+            self.log(f"round {self.rnum}: a reject needs both passes of the gate (loop.yaml second_pass: worse), so the "
+                     "whole gate is answered (no early look)")
             return None
         if prototype_round(cfg, self.rnum):
             self.log(f"round {self.rnum}: a prototype round (loop.yaml prototype_rounds), so the whole gate is answered "
@@ -1408,6 +1460,8 @@ class Loop(fr.Controller):
         ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
             cfg, self.round_gguf(), self.reference(cfg)["gate_seed"], early=self.early_reject_plan(cfg))))
         d = self.run_stage("decide", lambda: self.mark_done("decide", self.decision(cfg, ev)))
+        if needs_second_pass(cfg, d) and not self.forced(plan):
+            d = with_second_pass(d, self.run_stage("recheck", self.recheck, cfg, ev))
         conf = mile = None
         guards = {}
         proto = prototype_round(cfg, self.rnum)  # every check runs, whatever decide and the checks say (27 Oct 2026)
@@ -1421,7 +1475,7 @@ class Loop(fr.Controller):
             evalplus = cfg.get("milestone_evalplus", True) or cfg["rules"].get("evalplus_guard")
             if evalplus and (every or not guards_blocked(guards)):
                 mile = self.run_stage("milestone", self.milestone, cfg)
-            if force or (d["keep"] and guard_ok(cfg, mile, guards)):
+            if second_pass(cfg) == "kept" and (force or (d["keep"] and guard_ok(cfg, mile, guards))):
                 conf = self.run_stage("confirm", self.confirm, cfg, d)
         self.run_stage("finish", self.finish, cfg, plan, ev, d, conf, mile, guards)
 
@@ -1835,21 +1889,35 @@ class Loop(fr.Controller):
     def sweloss(self, cfg):
         return self.heldout_loss(cfg, "swe")
 
-    def confirm(self, cfg, d):
-        """The kept adapter on the gate again with a fresh seed: its unbiased reference for later rounds."""
+    def fresh_gate_pass(self, cfg, stage):
+        """The round's adapter on the gate again with a fresh seed (1000 + the round), resumable by problem:
+        (path, seed, rows)."""
         seed = 1000 + self.rnum
         g = cfg["gate"]
         gate = E.read_jsonl(E.GATE_PATH)
         self.toolchain_check(gate)
-        self.serve_gate(cfg, self.round_gguf(), "confirm")
+        self.serve_gate(cfg, self.round_gguf(), stage)
         try:
             path = os.path.join(self.rdir, f"gate.seed{seed}.jsonl")
             rows = E.score(self.server.url, gate, path, seed, g["max_tokens"], self.gate_checker(),
                            lambda u, m, s, mt: ew.chat_request(u, m, s, mt), ew.count_tokens, g["budget"],
                            concurrency=gate_concurrency(cfg), stop_check=self.stopping, log=self.log,
-                           on_row=lambda r, n, tot, tps: self.status("confirm", f"gate {n}/{tot}"))
+                           on_row=lambda r, n, tot, tps: self.status(stage, f"gate {n}/{tot}"))
         finally:
             self.unserve()
+        return path, seed, rows
+
+    def recheck(self, cfg, ev):
+        """second_pass: worse (7 Nov 2026): a round decide rejected on the gate answers it again with a fresh seed, and
+        decide runs again on both passes together, so a reject needs both and one unlucky draw can't lose a level
+        round."""
+        path, seed, rows = self.fresh_gate_pass(cfg, "recheck")
+        return self.mark_done("recheck", {"gate_rows": path, "gate_seed": seed, "pass": sum(r["pass"] for r in rows),
+                                          "n": len(rows), "decision": self.decision(cfg, ev, extra=rows)})
+
+    def confirm(self, cfg, d):
+        """The kept adapter on the gate again with a fresh seed: its unbiased reference for later rounds."""
+        path, seed, rows = self.fresh_gate_pass(cfg, "confirm")
         ref = self.reference(cfg)
         best_old = [r for r in E.read_jsonl(ref["gate_rows"]) if r["seed"] == ref["gate_seed"]]
         vs = E.compare(best_old, rows)
@@ -2073,18 +2141,18 @@ class Loop(fr.Controller):
             reasons.append(f"the fresh-seed confirm did not win more problems than it lost against round "
                            f"{c.get('reference_round', d['best_round'])} ({c['wins']} wins / {c['losses']} losses)")
         forced = self.forced(plan)
-        kept = forced or (d["keep"] and g_ok and conf is not None and conf.get("confirmed", True))
+        conf_ok = conf.get("confirmed", True) if conf is not None else second_pass(cfg) == "worse"
+        kept = forced or (d["keep"] and g_ok and conf_ok)
         if forced:
             rec["forced"] = f"kept whatever the tests show (recipe {plan['recipe']['id']}, force_keep)" + (
-                "; the keep rule alone would not have kept it" if not (d["keep"] and g_ok and conf is not None
-                                                                         and conf.get("confirmed", True)) else "")
+                "; the keep rule alone would not have kept it" if not (d["keep"] and g_ok and conf_ok) else "")
         new_rows = [[n, list(idx)] for n, idx in plan.get("rolled") or []] + [[n, idx] for n, idx in plan["slices"].items()]
         n_new = sum(len(ix) for _, ix in new_rows)
         if kept:
             self.state["best"] = {"round": self.rnum, "name": f"r{self.rnum:03d}",
                                   "adapter": os.path.join(self.rdir, "train", "adapter"), "gguf": self.round_gguf(),
                                   "adapter_scale": float(plan.get("adapter_scale", 1.0)),
-                                  "gate_rows": conf["gate_rows"], "gate_seed": conf["gate_seed"],
+                                  "gate_rows": (conf or ev)["gate_rows"], "gate_seed": (conf or ev)["gate_seed"],
                                   "lineage": (plan["lineage"] if plan["init"] == "base_lineage" else best["lineage"])
                                   + new_rows,
                                   "lora_shape": lora_shape(plan["train"]), "init": plan["init"],
@@ -2135,6 +2203,10 @@ class Loop(fr.Controller):
                    guards={n: {k: g["guard"].get(k) for k in ("base", "candidate", "diff", "wins", "losses", "p_worse",
                                                              "ok")} for n, g in guards.items()} or None,
                    finished=time.strftime("%Y-%m-%d %H:%M:%S"))
+        if d.get("second_pass"):
+            sp = d["second_pass"]
+            rec["second_pass"] = f"{sp['pass']}/{sp['n']} at seed {sp['gate_seed']}, " + (
+                "kept on both passes together" if sp["kept"] else "worse on both passes together")
         self.save()
         self.write_report(cfg, rec, ev, d, plan, conf, mile, guards)
         self.write_summary()
@@ -2166,6 +2238,13 @@ class Loop(fr.Controller):
             L += [f"Files: {rec['files_kept']}.", ""]
         if rec.get("forced"):
             L += [f"Kept by its recipe: {rec['forced']}.", ""]
+        sp = d.get("second_pass")
+        if sp:
+            f1 = sp["first"]["gate"]
+            L += [f"Second pass (loop.yaml second_pass: worse): the first gate pass ({ev['gate_pass']}/{ev['gate_n']}, "
+                  f"{f1['diff']:+.4f} vs round {d.get('reference_round', d['best_round'])}) was rejected, so the gate was "
+                  f"answered again at seed {sp['gate_seed']} ({sp['pass']}/{sp['n']}); the table below is both passes "
+                  "together (each problem's mean over the two).", ""]
         part_label = {"write": "write a program", "fix": "fix a wrong submission", "cc": "CodeContests",
                       "oci": "OpenCodeInstruct held-out"}
         rows = [("gate (all)", g)] + [(f"part: {part_label.get(k, k)}", c) for k, c in (d.get("parts") or {}).items()]

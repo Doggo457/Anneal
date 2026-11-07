@@ -86,6 +86,15 @@ compare_to: base   # 2 Nov 2026: every round is compared with the base model wit
 # the no-worse checks and EvalPlus block a clear drop). The gate and loss paths stay, for the record of why a round is
 # kept. With compare_to: base a round's gate is answered at the base's seed, its held-out losses are compared with the
 # base's, and the confirm pass is compared with the base.
+second_pass: worse   # 7 Nov 2026: the gate's second pass only for a round that looks worse, to confirm it
+# second_pass (7 Nov 2026, my words: "only do a second pass to confirm its worse if one turns out to be worse"): a round
+# kept on its gate pass goes straight on to the next round, with no confirm pass (about 40 hours a round). A round that
+# decide rejects on the gate or on its write or fix part answers the gate again with a fresh seed, and decide runs
+# again on both passes together (each problem's mean over the two, against the base): kept there, it takes the other
+# checks as a kept round does; worse there too, it is rejected. Judging both passes together, not the second alone,
+# means a level round isn't lost to one unlucky draw and a worse round gets no second try of its own. The whole gate is
+# always answered (no early look), as a reject needs both passes. kept (the default): a confirm pass for every kept
+# round, as before.
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
 # (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the

@@ -923,6 +923,7 @@ def setup_world(tmp):
     cfg["recipes"] = [r for r in cfg["recipes"] if r.get("adopt_round") is None]  # the same
     cfg["rules"]["par_rule"] = False  # the keep-if-better rule here; test_par_rule_and_base_reference covers on par
     cfg["compare_to"] = "best"  # the same
+    cfg["second_pass"] = "kept"  # a confirm pass for every kept round here; test_second_pass_only_when_worse covers worse
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -1967,6 +1968,111 @@ def _par_rule_and_base_reference(tmp):
     assert done(5, "evaluate")["gate_seed"] == 1 and done(5, "decide")["reference_round"] == 0
 
 
+def test_second_pass_rules():
+    """7 Nov 2026 (loop.yaml second_pass): decide says what rejected a round (blocked_by), and only a reject on the gate
+    or its write or fix part gets the second pass, and only with second_pass: worse."""
+    rules = {"alpha": 0.05, "part_tolerance": 0.05, "nc_tolerance": 0.05, "par_rule": True, "gate_tolerance": 0.05}
+    row = lambda i, kind, ok, seed=1: {"id": f"{kind}/cpp/cc/valid/{i}", "seed": seed, "pass": ok}  # noqa: E731
+    base = [row(i, "write", i % 2 == 0) for i in range(20)] + [row(i, "fix", i % 2 == 0) for i in range(20)]
+    nc = [{"id": f"mmlupro/{i}", "seed": 1, "pass": True} for i in range(20)]
+    worse = [row(i, "write", i % 4 == 0) for i in range(20)] + [row(i, "fix", i % 2 == 0) for i in range(20)]
+    d = E.decide(base, worse, nc, nc, rules)
+    assert not d["keep"] and d["blocked_by"] == ["gate", "write part"], d["blocked_by"]
+    assert E.decide(base, base, nc, nc, rules)["blocked_by"] == []
+    nc_bad = [dict(r, **{"pass": False}) for r in nc]
+    d_nc = E.decide(base, base, nc, nc_bad, rules, sanity_ok=False)
+    assert d_nc["blocked_by"] == ["sanity", "non-coding check"], d_nc["blocked_by"]
+    worse_cfg, kept_cfg = {"second_pass": "worse"}, {}
+    assert L.needs_second_pass(worse_cfg, d) and not L.needs_second_pass(kept_cfg, d)
+    assert not L.needs_second_pass(worse_cfg, d_nc)
+    assert not L.needs_second_pass(worse_cfg, dict(d, blocked_by=["gate", "non-coding check"]))
+    assert not L.needs_second_pass(worse_cfg, dict(d, early_reject={"n": 14}))
+    assert not L.needs_second_pass(worse_cfg, dict(d, keep=True, blocked_by=[]))
+    assert not L.needs_second_pass(worse_cfg, {k: v for k, v in d.items() if k != "blocked_by"})  # decided before 7 Nov
+    try:
+        L.second_pass({"second_pass": "always"})
+        raise AssertionError("an unknown second_pass must stop the loop")
+    except ValueError:
+        pass
+    # both passes together: the second pass levels the first, so the round is on par
+    second = [row(i, "write", i % 4 != 3, seed=1003) for i in range(20)] + \
+        [row(i, "fix", i % 2 == 0, seed=1003) for i in range(20)]
+    d2 = E.decide(base, worse + second, nc, nc, rules)
+    out = L.with_second_pass(d, {"gate_rows": "g", "gate_seed": 1003, "pass": 20, "n": 40, "decision": d2})
+    assert out["keep"] and out["path"] == "par" and out["second_pass"]["kept"] and out["second_pass"]["first"]["gate"] == d["gate"]
+    out = L.with_second_pass(d, {"gate_rows": "g", "gate_seed": 1003, "pass": 15, "n": 40, "decision": d})
+    assert not out["keep"] and out["reasons"][0] == "worse on both passes of the gate together (second pass at seed 1003: 15/40)"
+    assert out["reasons"][1:] == d["reasons"]
+
+
+def test_second_pass_only_when_worse():
+    """7 Nov 2026 (loop.yaml second_pass: worse), my rule: "only do a second pass to confirm its worse if one turns out
+    to be worse". r002 is kept on its gate pass and goes on with no confirm pass; r003's gate pass is 6 below the base
+    on 40 (not on par), so it answers the gate again at seed 1003 and is judged on both passes together: level with the
+    base, so kept, and it takes BFCL and EvalPlus as a kept round does; r004 is just as far below on both passes:
+    rejected. No round has an early look."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(CONFIRM_PASSING)
+    before = world_patches()
+    try:
+        _second_pass_only_when_worse(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        CONFIRM_PASSING.clear()
+        CONFIRM_PASSING.update(saved[1])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _second_pass_only_when_worse(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base", second_pass="worse")
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    cfg["gate"]["early_reject"] = {"looks": [0.3334, 0.6667], "max_diff": 0}  # loop.yaml's, skipped under worse
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    has = lambda n, stage: os.path.exists(os.path.join(rd(n), "stages", f"{stage}.done.json"))  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    half = lambda k: set(range(k)) | set(range(20, 20 + k))  # noqa: E731  (k write items and k fix items pass)
+    PASSING.update({None: half(10), "r002": half(15), "r003": half(7), "r004": half(7)})  # the base: 10 + 10 of 40
+    CONFIRM_PASSING.update({"r003": half(13)})  # r003's second pass (seed 1003); r004's is its first pass again
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert rec(2)["status"] == "kept" and done(2, "decide")["path"] == "gate" and done(2, "decide")["blocked_by"] == []
+    assert not has(2, "recheck") and not has(2, "confirm") and has(2, "bfcl") and has(2, "milestone")
+    assert state()["best"]["gate_seed"] == 1 and state()["best"]["gate_rows"] == os.path.join(rd(2), "gate.seed1.jsonl")
+    assert "r002-confirm" not in [n for n, _ in w.served]
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    d3 = done(3, "decide")
+    assert not d3["keep"] and set(d3["blocked_by"]) == {"gate", "write part", "fix part"}, d3
+    assert done(3, "evaluate").get("early_checks") is None  # the whole first pass, no early look
+    rc = done(3, "recheck")
+    assert (rc["gate_seed"], rc["pass"], rc["n"]) == (1003, 26, 40) and rc["decision"]["keep"], rc
+    assert rc["decision"]["path"] == "par" and rc["decision"]["gate"]["diff"] == 0 and rc["decision"]["reference_round"] == 0
+    assert rec(3)["status"] == "kept" and rec(3)["second_pass"] == "26/40 at seed 1003, kept on both passes together"
+    assert has(3, "bfcl") and has(3, "milestone") and not has(3, "confirm")
+    assert state()["best"]["round"] == 3 and state()["best"]["gate_seed"] == 1
+    assert [n for n, _ in w.served if n.startswith("r003-")][-3:] == ["r003-recheck", "r003-bfcl", "r003-evalplus"]
+    report = open(os.path.join(rd(3), "report.md")).read()
+    assert "Second pass (loop.yaml second_pass: worse): the first gate pass (14/40, -0.1500 vs round 0)" in report, report
+    assert "Kept on par" in report
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    rc4 = done(4, "recheck")
+    assert rc4["pass"] == 14 and not rc4["decision"]["keep"]
+    assert rec(4)["status"] == "rejected" and not has(4, "bfcl") and not has(4, "confirm")
+    assert rec(4)["reasons"][0] == "worse on both passes of the gate together (second pass at seed 1004: 14/40)", rec(4)
+    assert rec(4)["second_pass"] == "14/40 at seed 1004, worse on both passes together"
+    assert state()["best"]["round"] == 3
+
+
 def test_bfcl_harness():
     """anneal/bfcl.py: BFCL's request building (rebuilt here; checked byte for byte against BFCL 2026.3.23's own
     convert_to_tool output when the set was pinned), the judge on known answers through BFCL's real checker, and
@@ -2044,7 +2150,7 @@ def cweval_switched_on():
     saved = (dict(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES), C.prepare, C.request, C.judge_program)
     L.GUARDS.setdefault("cweval", {"label": "CWEval Go and JavaScript", "module": C,
                                    "build": "scripts/build_guards.py --cweval"})
-    i = L.ROUND_STAGES.index("decide") + 1
+    i = L.ROUND_STAGES.index("recheck") + 1
     L.ROUND_STAGES[:] = L.ROUND_STAGES[:i] + list(L.GUARDS) + ["milestone", "confirm", "finish"]
     L.REF_STAGES[:] = ["evaluate", "decide"] + list(L.GUARDS) + ["finish"]
     return saved
@@ -2064,7 +2170,8 @@ def test_cweval_guard():
     pass whose first answers have no text stops. The model and the judging of a program are faked; judge() itself is the real
     one (finish reason, empty answers, CWEval's program from the answer). Passes before and after the switch-on."""
     stages = (list(L.GUARDS), list(L.ROUND_STAGES), list(L.REF_STAGES))
-    assert L.ROUND_STAGES[L.ROUND_STAGES.index("decide") + 1:] == list(L.GUARDS) + ["milestone", "confirm", "finish"]
+    assert L.ROUND_STAGES[L.ROUND_STAGES.index("decide") + 1:] == ["recheck"] + list(L.GUARDS) + ["milestone", "confirm",
+                                                                                                "finish"]
     assert L.REF_STAGES == ["evaluate", "decide"] + list(L.GUARDS) + ["finish"] and list(L.GUARDS)[0] == "bfcl"
     tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
     saved = dict(PASSING), dict(CWEVAL_PASSING), set(CWEVAL_EMPTY)

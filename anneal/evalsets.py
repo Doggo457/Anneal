@@ -620,8 +620,9 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
       - the non-coding check (per question, mean over seeds, paired against the BASE model so drift can't build
         up over rounds) is not worse by more than nc_tolerance, and not significantly worse;
       - the sample generations thought, answered and stopped cleanly.
-    Returns a dict with keep, path ("gate" / "loss" / "par" / None), the reasons for a reject, and every number: per part
-    and, for write and fix items, per language (for the record)."""
+    Returns a dict with keep, path ("gate" / "loss" / "par" / None), the reasons for a reject, what gave them
+    (blocked_by: "sanity", "gate", a part's name, "non-coding check"), and every number: per part and, for write and
+    fix items, per language (for the record)."""
     allp = compare(best_gate, cand_gate)
     ids = set(per_problem(best_gate)) & set(per_problem(cand_gate))
     kinds = sorted({i.split("/")[0] for i in ids})
@@ -632,8 +633,10 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
     alpha = rules["alpha"]
     tol = rules.get("part_tolerance", rules.get("cc_tolerance", 0.05))
     reasons = []
+    blocked = []
     if not sanity_ok:
         reasons.append("sample generations did not think, answer and stop cleanly")
+        blocked.append("sanity")
     gate_gain = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] > 0 and allp["p_one_sided"] <= alpha
     gate_level = bool(allp["n"]) and allp["diff"] is not None and allp["diff"] >= 0
     loss_alpha = rules.get("loss_alpha", alpha)
@@ -665,19 +668,25 @@ def decide(best_gate, cand_gate, base_nc, cand_nc, rules, sanity_ok=True, loss=N
                 reasons.append(f"{LOSS_LABELS.get(k, k)} loss not clearly lower: {lo['best']:.4f} -> "
                                f"{lo['candidate']:.4f}, {lo['wins']} steps lower / {lo['losses']} higher, p "
                                f"{lo['p_one_sided']:.4f}, Holm-adjusted {lp[k]['p_holm']:.4f} (needs <= {loss_alpha})")
+    if path is None:
+        blocked.append("gate")
     guarded = [(PART_NAMES[k], parts[k], tol) for k in kinds if k in PART_NAMES]
     for name, c, t in guarded + [("non-coding check", nc, rules["nc_tolerance"])]:
         if not c["n"]:
             continue
         p_worse = sign_test_greater(c["losses"], c["wins"])
         c["p_worse"] = p_worse
+        before = len(reasons)
         if c["diff"] < -t:
             reasons.append(f"{name} dropped {c['diff']:+.4f} (tolerance {t})")
         elif p_worse <= alpha:
             reasons.append(f"{name} significantly worse: {c['losses']} losses vs {c['wins']} wins, p {p_worse:.4f}")
+        if len(reasons) != before:
+            blocked.append(name)
     out = {"keep": not reasons, "path": path if not reasons else None, "reasons": reasons, "gate": allp, "par": par,
            "parts": parts, "langs": by_lang, "noncoding": nc, "loss": losses.get("swe"),
            "losses": {k: dict(losses[k], **lp.get(k, {})) for k in losses}, "loss_fell": fell, "rules": dict(rules)}
+    out["blocked_by"] = blocked
     for k in ("cc", "oci"):  # the old Python gate's report fields
         if k in parts:
             out[f"gate_{k}"] = parts[k]
