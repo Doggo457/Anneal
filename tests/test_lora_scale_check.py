@@ -46,6 +46,7 @@ class FakeServer:
     """llama.Server's interface over an HTTP server whose answers depend on the LoRA scale: reasoning gets longer and
     passes come back as the scale falls. ignore_scale: POST /lora-adapters is accepted but changes nothing."""
     ignore_scale = False
+    gguf_strength = 1.0  # the strength the GGUF carries (a round tested at adapter_scale 0.25: 0.25)
     instances = []
 
     def __init__(self, flags, log_path, port=18090, binary=None, **kw):
@@ -75,7 +76,7 @@ class FakeServer:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
-                s = srv.applied
+                s = srv.applied * FakeServer.gguf_strength
                 if self.path == "/lora-adapters":
                     srv.scale = float(body[0]["scale"])
                     if not FakeServer.ignore_scale:
@@ -162,7 +163,7 @@ def bfcl_rows(items, scale, path):
     E.write_jsonl(path, rows)
 
 
-def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30):
+def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30, round_scale=1.0, own_bfcl=True):
     gate = [{"id": f"{k}/{lang}/cc/test/{i}", "kind": k, "lang": lang, "prompt": f"problem {k} {i}"}
             for k, n in (("write", n_write), ("fix", n_fix)) for i in range(n)
             for lang in [("cpp", "java", "go")[i % 3]]]
@@ -190,7 +191,7 @@ def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30):
         E.write_jsonl(path, rows)
 
     answers(0.0, os.path.join(S.LOOP_DIR, "rounds", "r000", "gate.seed1.jsonl"))
-    answers(1.0, os.path.join(r2, "gate.seed1.jsonl"))
+    answers(round_scale, os.path.join(r2, "gate.seed1.jsonl"))
     cfg = L.load_config(REAL_CONFIG)
     cfg["pause_after_rejects_in_row"] = 1
     state = {"gate_sha": L.file_sha(gpath), "gate_server": L.gate_server(cfg), "toolchains": "fp",
@@ -203,7 +204,7 @@ def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30):
         summ = os.path.join(r2, hh["stage"], "summary.json")
         os.makedirs(os.path.dirname(summ))
         per = [{"key": f"{kind}-{i}", "trained": 100, "base_loss": 1.0 + (h(f"{kind}-{i}") % 50) / 100,
-                "adapter_loss": 1.0 + (h(f"{kind}-{i}") % 50) / 100 - 0.1} for i in range(30)]
+                "adapter_loss": 1.0 + (h(f"{kind}-{i}") % 50) / 100 - 0.1 * round_scale} for i in range(30)]
         json.dump({"per_row": per}, open(summ, "w"))
         json.dump({"sha": L.file_sha(f), "summary": summ},
                   open(os.path.join(r2, "stages", f"{hh['stage']}.done.json"), "w"))
@@ -218,11 +219,15 @@ def make_world(tmp, n_write=23, n_fix=17, rejects=1, n_bfcl=30):
     bfcl_rows(bitems, 0.0, brows)
     state["base_guards"] = {"bfcl": {"rows": brows, "pass": 0,
                                      "fingerprint": L.Loop.guard_fingerprint(S._LoopView(), cfg, "bfcl")}}
-    os.makedirs(os.path.join(r2, "guards"))
-    bfcl_rows(bitems, 1.0, os.path.join(r2, "guards", "bfcl.seed1.jsonl"))
-    json.dump({"rows": os.path.join(r2, "guards", "bfcl.seed1.jsonl")},
-              open(os.path.join(r2, "stages", "bfcl.done.json"), "w"))
-    json.dump({"gguf": os.path.join(r2, "r002.gguf")}, open(os.path.join(r2, "stages", "convert.done.json"), "w"))
+    if own_bfcl:
+        os.makedirs(os.path.join(r2, "guards"))
+        bfcl_rows(bitems, round_scale, os.path.join(r2, "guards", "bfcl.seed1.jsonl"))
+        json.dump({"rows": os.path.join(r2, "guards", "bfcl.seed1.jsonl")},
+                  open(os.path.join(r2, "stages", "bfcl.done.json"), "w"))
+    conv = {"gguf": os.path.join(r2, "r002.gguf")}
+    if round_scale != 1.0:
+        conv.update(adapter_scale=round_scale, gguf_lora_alpha=32 * round_scale)
+    json.dump(conv, open(os.path.join(r2, "stages", "convert.done.json"), "w"))
     json.dump({"gate_rows": os.path.join(r2, "gate.seed1.jsonl"), "gate_seed": 1},
               open(os.path.join(r2, "stages", "evaluate.done.json"), "w"))
     cpath = os.path.join(tmp, "loop.yaml")
@@ -251,12 +256,14 @@ def world(**kw):
         L.llama.gpu_driver = lambda: L.llama.LEGACY_GPU_DRIVER
         L.Loop.gate_checker = lambda self: (lambda item, content: content == "OK")
         FakeServer.ignore_scale = False
+        FakeServer.gguf_strength = kw.get("round_scale", 1.0)
         yield make_world(tmp, **kw)
     finally:
         for o, k, v in old:
             setattr(o, k, v)
         L.GUARDS["bfcl"]["module"] = old_bfcl
         FakeServer.ignore_scale = False
+        FakeServer.gguf_strength = 1.0
         shutil.rmtree(tmp)
 
 
@@ -405,6 +412,113 @@ def test_refuses_other_gate_server():
             raise AssertionError("should have refused")
         except SystemExit as exc:
             assert "gate server settings differ" in str(exc), exc
+
+
+def set_config(**kw):
+    import yaml
+    cfg = L.load_config(L.CONFIG)
+    cfg.update(kw)
+    yaml.safe_dump(cfg, open(L.CONFIG, "w"))
+
+
+def set_state(**kw):
+    path = os.path.join(S.LOOP_DIR, "state.json")
+    st = json.load(open(path))
+    st.update(kw)
+    json.dump(st, open(path, "w"))
+
+
+def test_round_tested_at_a_quarter_strength():
+    """9 Nov 2026: the round's GGUF carries 0.25, so --scale 0.5 sets the GGUF to 2.0; the round has no BFCL stage."""
+    with world(round_scale=0.25, own_bfcl=False) as gate:
+        idx = {it["id"]: i for i, it in enumerate(gate)}
+        assert run("--n", "20", "--plan") == 0
+        assert run("--n", "20", "--scale", "0.5") == 0
+        out = os.path.join(S.OUT_ROOT, "r002_x0.50")
+        rows = E.read_jsonl(os.path.join(out, "gate.seed1.jsonl"))
+        assert len(rows) == 20
+        for r in rows:  # answered at strength 0.5 of the full adapter: x1.1
+            assert r["reasoning_tokens"] == int((2000 + h(gate[idx[r["id"]]]["prompt"]) % 3000) * 1.1), r
+        assert json.load(open(os.path.join(out, "scale_after.json")))["scales"] == {"0": 2.0}
+        probe = [json.load(open(os.path.join(out, f))) for f in os.listdir(out)
+                 if f.startswith("probe-") and not f.startswith("probe-bfcl-")]
+        assert len(probe) == 1 and probe[0]["ok"] and probe[0]["scale_now"] == {"0": 2.0}
+        ac = json.load(open(os.path.join(out, "adapter", "adapter_config.json")))
+        assert ac["lora_alpha"] == 16  # the full-strength adapter x 0.5, not the round's x0.25 copy x 0.5
+        summ = json.load(open(os.path.join(out, "summary.json")))
+        assert summ["round_scale"] == 0.25 and summ["scale"] == 0.5
+        for kind in L.HELDOUT:  # x0.5 keeps twice the round's own (x0.25) loss gain
+            assert abs(summ["loss"][kind]["gain_kept"] - 2.0) < 1e-6, summ["loss"][kind]
+        b = summ["bfcl"]["all"]
+        assert b["n"] == 30 and b["full"] is None and b["part_vs_full"] is None and b["pass_gap_closed"] is None
+        bitems = E.read_jsonl(L.Loop.guard_file(None, L.load_config(L.CONFIG), "bfcl"))
+        want = {it["id"]: h(it["prompt"], 100000 + i) % 100 < 65 for i, it in enumerate(bitems)}
+        assert b["part"] == sum(want.values())
+
+        # at the round's own strength: no gate answers, no loss run, only BFCL (GGUF scale 1)
+        FakeServer.instances.clear()
+        assert run("--n", "20", "--scale", "0.25") == 0
+        out = os.path.join(S.OUT_ROOT, "r002_x0.25")
+        assert not os.path.exists(os.path.join(out, "gate.seed1.jsonl"))
+        assert not os.path.exists(os.path.join(out, "adapter"))
+        assert len(FakeServer.instances) == 1  # the BFCL server only
+        assert json.load(open(os.path.join(out, "scale_after-bfcl.json")))["scales"] == {"0": 1.0}
+        summ = json.load(open(os.path.join(out, "summary.json")))
+        g = summ["gate"]["all"]
+        assert g["n"] == 20 and g["part"]["pass"] == g["full"]["pass"] and summ["note"].startswith("the round's own")
+        for kind in L.HELDOUT:
+            assert abs(summ["loss"][kind]["gain_kept"] - 1.0) < 1e-6
+        want = {it["id"]: h(it["prompt"], 100000 + i) % 100 < 50 + 30 * 0.75 for i, it in enumerate(bitems)}
+        brows = E.read_jsonl(os.path.join(out, "bfcl.seed1.jsonl"))
+        assert len(brows) == 30 and all(r["pass"] == want[r["id"]] for r in brows)
+
+        # an eighth: GGUF scale 0.5, its own folder name
+        assert run("--n", "20", "--scale", "0.125", "--part", "gate") == 0
+        out = os.path.join(S.OUT_ROOT, "r002_x0.125")
+        assert json.load(open(os.path.join(out, "scale_after.json")))["scales"] == {"0": 0.5}
+        for r in E.read_jsonl(os.path.join(out, "gate.seed1.jsonl")):
+            assert r["reasoning_tokens"] == int((2000 + h(gate[idx[r["id"]]]["prompt"]) % 3000) * (1.6 - 0.125))
+
+
+def test_round_own_strength_with_own_bfcl_answers_nothing():
+    """A kept round tested at 0.25 has BFCL answers of its own at 0.25: --scale 0.25 answers nothing at all."""
+    with world(round_scale=0.25, own_bfcl=True):
+        FakeServer.instances.clear()
+        assert run("--n", "20", "--scale", "0.25") == 0
+        out = os.path.join(S.OUT_ROOT, "r002_x0.25")
+        assert not FakeServer.instances and not os.path.exists(os.path.join(out, "bfcl.seed1.jsonl"))
+        summ = json.load(open(os.path.join(out, "summary.json")))
+        b = summ["bfcl"]["all"]
+        assert b["n"] == 30 and b["part"] == b["full"] and b["part_vs_full"]["wins"] == 0
+        assert summ["gate"]["all"]["part"]["pass"] == summ["gate"]["all"]["full"]["pass"]
+
+
+def test_hold_before_train_lets_it_run():
+    with world(rejects=0):
+        for part in ("loss", "gate"):  # no pause, no hold: refused
+            try:
+                run("--n", "10", "--part", part)
+                raise AssertionError("should have refused")
+            except SystemExit as exc:
+                assert "would train a round" in str(exc), exc
+        set_state(rounds=[{"round": 2, "status": "kept"}, {"round": 3, "status": "rejected"}])
+        set_config(hold_before_train=[3])  # the next round is 4, not 3
+        try:
+            run("--n", "10", "--part", "gate")
+            raise AssertionError("should have refused")
+        except SystemExit as exc:
+            assert "would train a round" in str(exc), exc
+        set_config(hold_before_train=[4])
+        assert run("--n", "10", "--part", "gate") == 0  # the loop would wait before training round 4
+        assert len(E.read_jsonl(os.path.join(S.OUT_ROOT, "r002_x0.50", "gate.seed1.jsonl"))) == 10
+        set_state(rounds=[{"round": 2, "status": "kept"}, {"round": 3, "status": "running"}])
+        set_config(hold_before_train=[3])
+        os.makedirs(os.path.join(S.LOOP_DIR, "rounds", "r003", "stages"))
+        assert S.loop_would_hold(L.load_config(L.CONFIG), json.load(open(os.path.join(S.LOOP_DIR, "state.json")))) \
+            is None  # round 3 open, held, not trained yet
+        open(os.path.join(S.LOOP_DIR, "rounds", "r003", "stages", "train.done.json"), "w").write("{}")
+        assert "would train" in S.loop_would_hold(L.load_config(L.CONFIG),
+                                                  json.load(open(os.path.join(S.LOOP_DIR, "state.json"))))
 
 
 if __name__ == "__main__":

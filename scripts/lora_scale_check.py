@@ -35,12 +35,22 @@ all runs loss, bfcl, gate and summary in that order.
 loop is not running and would hold if the watchdog started it (pause_after_rejects_in_row reached), and with no
 llama-server.exe running. A STOP file in the output folder stops the bfcl and gate parts cleanly (answers so far are
 kept).
+
+A round tested at a strength of its own (9 Nov 2026, my ask: is 0.25 still round 3's best strength after it trained on
+from round 2?): since 1 Nov every round is tested at loop.yaml adapter_scale, so its GGUF already carries that
+strength (convert.done.json adapter_scale). --scale is always the strength of the full-strength adapter
+(train/adapter), so the GGUF is set to --scale / adapter_scale (0.5 on a 0.25 round = 2.0). The round's own answers
+and losses are its "full" reference in the summary, at round_scale. At --scale equal to the round's own strength the
+gate and loss parts are not answered again (the round's own rows are that strength); only a missing BFCL part runs.
+A round with no BFCL stage of its own (a rejected one) is compared with the base only.
+The loop may also wait at loop.yaml hold_before_train for the round it would run next.
 """
 
 import argparse
 import hashlib
 import json
 import math
+import operator
 import os
 import shutil
 import statistics
@@ -145,10 +155,13 @@ def seed_rows(path, seed):
 def round_info(rnum):
     """The round's GGUF LoRA, adapter folder and gate answers; missing pieces listed under "missing"."""
     rdir = os.path.join(LOOP_DIR, "rounds", f"r{rnum:03d}")
-    out = {"rdir": rdir, "adapter": os.path.join(rdir, "train", "adapter"), "missing": []}
+    out = {"rdir": rdir, "adapter": os.path.join(rdir, "train", "adapter"), "missing": [], "round_scale": 1.0}
     try:
         conv = read_json(os.path.join(rdir, "stages", "convert.done.json"))
         out["gguf"] = resolve(conv["gguf"])
+        out["round_scale"] = float(conv.get("adapter_scale", 1.0))
+        if not (operator.gt(out["round_scale"], 0) and operator.le(out["round_scale"], 1)):
+            raise SystemExit(f"convert.done.json adapter_scale {out['round_scale']} is not in (0, 1]")
         if not os.path.exists(out["gguf"]):
             out["missing"].append(f"GGUF {out['gguf']}")
     except (OSError, ValueError, KeyError):
@@ -173,11 +186,37 @@ def loop_would_hold(cfg, state):
         pid = 0
     if pid and L.pid_alive(pid):
         return f"loop.py is running (pid {pid})"
+    if held_next(cfg, state):
+        return None  # the loop would wait at loop.yaml hold_before_train for the round it runs next
     pause = int(cfg.get("pause_after_rejects_in_row") or 0)
     if not pause or int(state.get("rejects_in_row") or 0) < pause:
         return (f"the loop would train a round if started (pause_after_rejects_in_row {pause}, rejects in a row "
                 f"{state.get('rejects_in_row')})")
     return None
+
+
+def held_next(cfg, state):
+    """True when loop.yaml hold_before_train lists the round the loop would run next and that round has not trained."""
+    nxt = next_round(state)
+    held = {int(r) for r in (cfg.get("hold_before_train") or [])}
+    return nxt in held and not os.path.exists(os.path.join(LOOP_DIR, "rounds", f"r{nxt:03d}", "stages",
+                                                           "train.done.json"))
+
+
+def next_round(state):
+    """The round loop.py would run next (Loop.next_round_number)."""
+    rounds = state.get("rounds") or []
+    open_ = [r["round"] for r in rounds if r.get("status") == "running"]
+    return min(open_) if open_ else max([1] + [r["round"] for r in rounds]) + 1
+
+
+def gguf_scale(info, scale):
+    """The GGUF's scale that gives the full-strength adapter at --scale (the GGUF carries the round's own strength)."""
+    return scale / info["round_scale"]
+
+
+def scale_name(scale):
+    return f"{scale:.2f}" if round(scale, 2) == scale else f"{scale:g}"
 
 
 def llama_running():
@@ -290,22 +329,31 @@ def probe_diff(a, b):
 
 def scale_probe(url, scale):
     """Greedy probes at scales 1, 0, S, 1, S (that order); leaves the server at S. ok when each scale repeats and the
-    three scales all differ."""
+    three scales all differ. At S = 1 (the GGUF's own strength): 1, 0, 1, and ok when 1 repeats and differs from 0."""
     if set(lora_scales(url)) != {0}:
         raise SystemExit(f"expected one LoRA adapter on the server, /lora-adapters reads {lora_scales(url)}")
+    same = scale == 1.0
     runs = {}
-    for name, s in (("full", 1.0), ("zero", 0.0), ("part", scale), ("full2", 1.0), ("part2", scale)):
+    order = (("full", 1.0), ("zero", 0.0), ("full2", 1.0)) if same else \
+        (("full", 1.0), ("zero", 0.0), ("part", scale), ("full2", 1.0), ("part2", scale))
+    for name, s in order:
         set_scale(url, s)
         runs[name] = probe_once(url)
     res = {"repeat_full": probe_diff(runs["full"], runs["full2"]),
-           "repeat_part": probe_diff(runs["part"], runs["part2"]),
-           "full_vs_zero": probe_diff(runs["full"], runs["zero"]),
-           "part_vs_full": probe_diff(runs["part"], runs["full"]),
-           "part_vs_zero": probe_diff(runs["part"], runs["zero"])}
+           "full_vs_zero": probe_diff(runs["full"], runs["zero"])}
+    if same:  # S is the GGUF's own strength: part is full, so only full against zero and itself is checked
+        res.update(repeat_part=res["repeat_full"], part_vs_full=math.inf, part_vs_zero=res["full_vs_zero"])
+    else:
+        res.update(repeat_part=probe_diff(runs["part"], runs["part2"]),
+                   part_vs_full=probe_diff(runs["part"], runs["full"]),
+                   part_vs_zero=probe_diff(runs["part"], runs["zero"]))
     noise = max(res["repeat_full"], res["repeat_part"])
     need = max(DIFF_MIN, 3 * noise)
     res["tokens_per_probe"] = [len(p["steps"]) for p in runs["full"]]
     res["ok"] = noise <= REPEAT_TOL and all(res[k] > need for k in ("full_vs_zero", "part_vs_full", "part_vs_zero"))
+    if same:
+        for k in ("repeat_part", "part_vs_full", "part_vs_zero"):
+            del res[k]
     res["need"] = need
     res["scale_now"] = lora_scales(url)
     return {k: ("different text" if v == math.inf else v) for k, v in res.items()}
@@ -345,6 +393,9 @@ def scaled_adapter(src, dst, scale):
 
 
 def loss_part(cfg, state, info, out, scale):
+    if gguf_scale(info, scale) == 1.0:
+        log(f"loss: the round's own held-out losses are at {scale:g}; nothing to score")
+        return
     todo = []
     for kind, h in L.HELDOUT.items():
         sc = cfg.get(h["key"]) or {}
@@ -394,7 +445,7 @@ class _LoopView:
 
 def guard_refs(cfg, state, info, name):
     """(items, seed, base rows, round rows) of a no-worse check: the base's rows only if they were scored under the
-    settings in force now, the round's from its own stage."""
+    settings in force now, the round's from its own stage (None when the round has no such stage: a rejected round)."""
     gc = (cfg.get("guards") or {}).get(name)
     if not isinstance(gc, dict):
         raise SystemExit(f"loop.yaml has no guards.{name}")
@@ -404,17 +455,19 @@ def guard_refs(cfg, state, info, name):
         diff = sorted(k for k in set(fp) | set(have.get("fingerprint") or {})
                       if fp.get(k) != (have.get("fingerprint") or {}).get(k))
         raise SystemExit(f"the base's {name} rows were scored under other settings ({diff}); nothing to pair with")
+    done_path = os.path.join(info["rdir"], "stages", f"{name}.done.json")
     try:
-        done = read_json(os.path.join(info["rdir"], "stages", f"{name}.done.json"))
+        done = read_json(done_path) if os.path.exists(done_path) else None
     except (OSError, ValueError):
-        raise SystemExit(f"the round has no finished {name} stage to pair with")
+        raise SystemExit(f"the round's {name} stage file {done_path} cannot be read")
     seed = int(gc.get("seed", 1))
     items = E.read_jsonl(L.Loop.guard_file(None, cfg, name))
     if not items:
         raise SystemExit(f"{L.Loop.guard_file(None, cfg, name)} is empty")
     base_rows = {r["id"]: r for r in E.read_jsonl(resolve(have["rows"])) if r["seed"] == seed}
-    full_rows = {r["id"]: r for r in E.read_jsonl(resolve(done["rows"])) if r["seed"] == seed}
-    missing = [it["id"] for it in items if it["id"] not in base_rows or it["id"] not in full_rows]
+    full_rows = {r["id"]: r for r in E.read_jsonl(resolve(done["rows"])) if r["seed"] == seed} if done else None
+    missing = [it["id"] for it in items if it["id"] not in base_rows or (full_rows is not None
+                                                                         and it["id"] not in full_rows)]
     if missing:
         raise SystemExit(f"{len(missing)} {name} items have no seed-{seed} answer from the base or the round")
     return items, seed, base_rows, full_rows
@@ -422,7 +475,10 @@ def guard_refs(cfg, state, info, name):
 
 def bfcl_part(cfg, state, info, out, scale, port):
     name = "bfcl"
-    items, seed, _, _ = guard_refs(cfg, state, info, name)
+    items, seed, _, own = guard_refs(cfg, state, info, name)
+    if gguf_scale(info, scale) == 1.0 and own is not None:
+        log(f"{name}: the round's own BFCL answers are at {scale:g}; nothing to answer")
+        return
     path = os.path.join(out, f"{name}.seed{seed}.jsonl")
     have = {r["id"] for r in E.read_jsonl(path) if r["seed"] == seed}
     if all(it["id"] in have for it in items):
@@ -437,9 +493,11 @@ def bfcl_part(cfg, state, info, out, scale, port):
     srv = llama.Server(L.Loop.gate_flags(None, cfg, lora=info["gguf"]), os.path.join(out, "logs", f"server-{name}.log"),
                        port=port, binary=llama.server_binary(L.gate_build(cfg)))
     log(f"llama-server ({name}): {srv.describe()}")
+    gs = gguf_scale(info, scale)
     with srv:
-        log(f"llama-server up in {srv.load_s} s")
-        probe = scale_probe(srv.url, scale)
+        log(f"llama-server up in {srv.load_s} s; adapter at {scale:g} = GGUF scale {gs:g} "
+            f"(the GGUF carries {info['round_scale']:g})")
+        probe = scale_probe(srv.url, gs)
         write_json(os.path.join(out, f"probe-{name}-{time.strftime('%Y%m%d-%H%M%S')}.json"), probe)
         log("scale probe: " + json.dumps(probe))
         if not probe["ok"]:
@@ -468,11 +526,15 @@ def bfcl_part(cfg, state, info, out, scale, port):
             log(f"{name}: stopped by STOP; answers so far kept")
         after = lora_scales(srv.url)
         write_json(os.path.join(out, f"scale_after-{name}.json"), {"scales": {str(k): v for k, v in after.items()}})
-        if after != {0: float(scale)}:
-            raise SystemExit(f"the adapter's scale read {after} after answering, not {scale}")
+        if after != {0: float(gs)}:
+            raise SystemExit(f"the adapter's scale read {after} after answering, not {gs}")
 
 
 def gate_part(cfg, state, info, base, out, scale, n, port):
+    gs = gguf_scale(info, scale)
+    if gs == 1.0:
+        log(f"gate: the round's own gate answers are at {scale:g}; nothing to answer")
+        return
     gate = E.read_jsonl(E.GATE_PATH)
     seed = info["gate_seed"]
     picked = draw(gate, n)
@@ -498,8 +560,9 @@ def gate_part(cfg, state, info, base, out, scale, n, port):
                        port=port, binary=llama.server_binary(L.gate_build(cfg)))
     log(f"llama-server: {srv.describe()}")
     with srv:
-        log(f"llama-server up in {srv.load_s} s")
-        probe = scale_probe(srv.url, scale)
+        log(f"llama-server up in {srv.load_s} s; adapter at {scale:g} = GGUF scale {gs:g} "
+            f"(the GGUF carries {info['round_scale']:g})")
+        probe = scale_probe(srv.url, gs)
         write_json(os.path.join(out, f"probe-{time.strftime('%Y%m%d-%H%M%S')}.json"), probe)
         log("scale probe: " + json.dumps(probe))
         if not probe["ok"]:
@@ -520,8 +583,8 @@ def gate_part(cfg, state, info, base, out, scale, n, port):
             log("gate: stopped by STOP; answers so far kept")
         after = lora_scales(srv.url)
         write_json(os.path.join(out, "scale_after.json"), {"scales": {str(k): v for k, v in after.items()}})
-        if after != {0: float(scale)}:
-            raise SystemExit(f"the adapter's scale read {after} after answering, not {scale}")
+        if after != {0: float(gs)}:
+            raise SystemExit(f"the adapter's scale read {after} after answering, not {gs}")
 
 
 # ============================================================================================ summary
@@ -588,10 +651,14 @@ def loss_summary(base_loss, full_loss, part_loss, weights):
             "part_vs_full": {k: part_vs_full[k] for k in ("wins", "losses", "p_one_sided")}}
 
 
-def bfcl_summary(cfg, state, info, out):
+def bfcl_summary(cfg, state, info, out, same=False):
     name = "bfcl"
     items, seed, base_rows, full_rows = guard_refs(cfg, state, info, name)
+    own = full_rows is not None
+    full_rows = full_rows if own else base_rows  # a stand-in, cleared below
     part_rows = {r["id"]: r for r in E.read_jsonl(os.path.join(out, f"{name}.seed{seed}.jsonl")) if r["seed"] == seed}
+    if not part_rows and own and same:
+        part_rows = full_rows  # the round's own answers are this strength
     mod = L.GUARDS[name]["module"]
     res = {}
     for lang in ["all"] + sorted({mod.language(it) for it in items}):
@@ -604,29 +671,40 @@ def bfcl_summary(cfg, state, info, out):
                      part_vs_full=paired(full_rows, part_rows, ids), part_vs_base=paired(base_rows, part_rows, ids))
             gap = g["base"] - g["full"]
             g["pass_gap_closed"] = round((g["part"] - g["full"]) / gap, 3) if gap > 0 else None
+            if not own:  # the round has no BFCL stage of its own: the base is the only reference
+                g.update(full=None, part_vs_full=None, pass_gap_closed=None)
         res[lang] = g
     return res
 
 
 def summary_part(cfg, state, info, base, out, scale, n):
-    res = {"round": info["rdir"][-4:], "scale": scale, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    same = gguf_scale(info, scale) == 1.0  # the round's own answers and losses are this strength
+    res = {"round": info["rdir"][-4:], "scale": scale, "round_scale": info["round_scale"],
+           "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    if same:
+        res["note"] = "the round's own gate answers and held-out losses are this strength: part = full"
     gate = E.read_jsonl(E.GATE_PATH)
     seed = info["gate_seed"]
     gpath = os.path.join(out, f"gate.seed{seed}.jsonl")
-    if os.path.exists(gpath):
+    if os.path.exists(gpath) or same:
         res["gate"] = gate_summary(gate, draw(gate, n), seed_rows(base["gate_rows"], seed),
-                                   seed_rows(info["gate_rows"], seed), seed_rows(gpath, seed))
+                                   seed_rows(info["gate_rows"], seed),
+                                   seed_rows(gpath if os.path.exists(gpath) else info["gate_rows"], seed))
     seed_b = int(((cfg.get("guards") or {}).get("bfcl") or {}).get("seed", 1))
-    if os.path.exists(os.path.join(out, f"bfcl.seed{seed_b}.jsonl")):
-        res["bfcl"] = bfcl_summary(cfg, state, info, out)
+    if os.path.exists(os.path.join(out, f"bfcl.seed{seed_b}.jsonl")) or (
+            same and os.path.exists(os.path.join(info["rdir"], "stages", "bfcl.done.json"))):
+        res["bfcl"] = bfcl_summary(cfg, state, info, out, same)
     res["loss"] = {}
     for kind, h in L.HELDOUT.items():
         ps = os.path.join(out, f"loss_{kind}", "summary.json")
         ref = (state.get("base") or {}).get(h["key"])
+        stage = os.path.join(info["rdir"], "stages", f"{h['stage']}.done.json")
+        if same and not os.path.exists(ps) and os.path.exists(stage):
+            ps = resolve(read_json(stage)["summary"])
         if not os.path.exists(ps) or not ref:
             log(f"loss {kind}: " + ("not scored at this scale yet" if ref else "no base reference in state.json"))
             continue
-        done = read_json(os.path.join(info["rdir"], "stages", f"{h['stage']}.done.json"))
+        done = read_json(stage)
         full = read_json(resolve(done["summary"]))
         bsum = read_json(resolve(ref["path"]))
         part = read_json(ps)
@@ -636,27 +714,30 @@ def summary_part(cfg, state, info, base, out, scale, n):
             {r["key"]: r["adapter_loss"] for r in part["per_row"]},
             {r["key"]: r["trained"] for r in full["per_row"]})
     write_json(os.path.join(out, "summary.json"), res)
+    full = "full" if info["round_scale"] == 1.0 else f"round x{info['round_scale']:g}"
     for name in ("all", "write", "fix"):
         g = (res.get("gate") or {}).get(name)
         if g and g["n"]:
-            log(f"gate {name} ({g['n']} of {g['drawn']}): pass base {g['base']['pass']} / full {g['full']['pass']} / "
-                f"x{scale} {g['part']['pass']}; reasoning mean {g['base']['reasoning_mean']} / "
+            log(f"gate {name} ({g['n']} of {g['drawn']}): pass base {g['base']['pass']} / {full} {g['full']['pass']} / "
+                f"x{scale:g} {g['part']['pass']}; reasoning mean {g['base']['reasoning_mean']} / "
                 f"{g['full']['reasoning_mean']} / {g['part']['reasoning_mean']}; budget hits "
                 f"{g['base']['budget_hits']} / {g['full']['budget_hits']} / {g['part']['budget_hits']}; thinking gap "
-                f"closed {g['thinking_gap_closed']}, pass gap closed {g['pass_gap_closed']}; x{scale} vs full "
+                f"closed {g['thinking_gap_closed']}, pass gap closed {g['pass_gap_closed']}; x{scale:g} vs {full} "
                 f"{g['part_vs_full']['wins']} won {g['part_vs_full']['losses']} lost "
-                f"(p {g['part_vs_full']['p_two_sided']})")
+                f"(p {g['part_vs_full']['p_two_sided']}); vs base {g['part_vs_base']['wins']} won "
+                f"{g['part_vs_base']['losses']} lost (p {g['part_vs_base']['p_two_sided']})")
     for lang, b in (res.get("bfcl") or {}).items():
         if b["n"]:
-            log(f"bfcl {lang} ({b['n']} of {b['items']}): pass base {b['base']} / full {b['full']} / x{scale} "
-                f"{b['part']}; pass gap closed {b['pass_gap_closed']}; x{scale} vs full "
-                f"{b['part_vs_full']['wins']} won {b['part_vs_full']['losses']} lost "
-                f"(p {b['part_vs_full']['p_two_sided']}); vs base "
+            vs_full = (f"x{scale:g} vs {full} {b['part_vs_full']['wins']} won {b['part_vs_full']['losses']} lost "
+                       f"(p {b['part_vs_full']['p_two_sided']}); " if b["part_vs_full"] else
+                       f"no BFCL answers of the round's own; ")
+            log(f"bfcl {lang} ({b['n']} of {b['items']}): pass base {b['base']} / {full} {b['full']} / x{scale:g} "
+                f"{b['part']}; pass gap closed {b['pass_gap_closed']}; {vs_full}vs base "
                 f"{b['part_vs_base']['wins']} won {b['part_vs_base']['losses']} lost "
                 f"(p {b['part_vs_base']['p_two_sided']})")
     for kind, s in res["loss"].items():
-        log(f"loss {kind} ({s['rows']} rows): base {s['base']:.4f} / full {s['full']:.4f} "
-            f"({100 * s['full_rel_to_base']:+.1f}%) / x{scale} {s['part']:.4f} ({100 * s['part_rel_to_base']:+.1f}%); "
+        log(f"loss {kind} ({s['rows']} rows): base {s['base']:.4f} / {full} {s['full']:.4f} "
+            f"({100 * s['full_rel_to_base']:+.1f}%) / x{scale:g} {s['part']:.4f} ({100 * s['part_rel_to_base']:+.1f}%); "
             f"gain kept {s['gain_kept']}")
     return res
 
@@ -678,14 +759,15 @@ def main():
     state = read_json(os.path.join(LOOP_DIR, "state.json"))
     base = state.get("base") or {}
     info = round_info(args.round)
-    out = os.path.join(OUT_ROOT, f"r{args.round:03d}_x{args.scale:.2f}")
+    out = os.path.join(OUT_ROOT, f"r{args.round:03d}_x{scale_name(args.scale)}")
     gate = E.read_jsonl(E.GATE_PATH)
     picked = draw(gate, args.n)
     kinds, langs = {}, {}
     for i in picked:
         kinds[gate[i]["kind"]] = kinds.get(gate[i]["kind"], 0) + 1
         langs[gate[i]["lang"]] = langs.get(gate[i]["lang"], 0) + 1
-    log(f"round {args.round} at scale {args.scale}: {len(picked)} of {len(gate)} gate problems drawn, kinds {kinds}, "
+    log(f"round {args.round} at scale {args.scale:g} (the round is tested at {info['round_scale']:g}, so GGUF scale "
+        f"{gguf_scale(info, args.scale):g}): {len(picked)} of {len(gate)} gate problems drawn, kinds {kinds}, "
         f"languages {langs}; output {out}")
     if args.plan:
         log(f"draw sha {hashlib.sha256(json.dumps([gate[i]['id'] for i in picked]).encode()).hexdigest()[:16]}")
@@ -694,8 +776,9 @@ def main():
         log(f"loop: {loop_would_hold(cfg, state) or 'not running and would hold'}; llama-server running: "
             f"{llama_running()}")
         try:
-            items, seed, _, _ = guard_refs(cfg, state, info, "bfcl")
-            log(f"bfcl: {len(items)} items, seed {seed}; base and round rows found under today's settings")
+            items, seed, _, own = guard_refs(cfg, state, info, "bfcl")
+            log(f"bfcl: {len(items)} items, seed {seed}; base rows found under today's settings; the round's own: "
+                + ("found" if own is not None else "none (compared with the base only)"))
         except SystemExit as exc:
             log(f"bfcl: not ready: {exc}")
         return 0

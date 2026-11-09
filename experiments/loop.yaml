@@ -22,14 +22,18 @@ min_free_gb: 60
 valloss: true
 milestone_evalplus: true   # EvalPlus on rounds that pass the keep rule only; since 21 Oct 2026 a no-worse check against the
                            # base (rules.evalplus_guard), not a measure of gain
-pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead (1 from 28 Oct 2026 until round 3's change was in, so the loop held after round 2)
+pause_after_rejects_in_row: 1   # 0 = never pause; check-ins change the recipe instead (1 from 28 Oct 2026 until round 3's change was in, so the loop held after round 2)
+                                # 1 again from 9 Nov 2026 while round 3's strength is checked (scripts/scale_curve.py): if round 3 is
+                                # rejected the loop waits before planning round 4 (PC r005); back to 0 after the check
 prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is the prototype. Even if it scores worse, it
                            # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
                            # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
                            # decides what the next round continues from.
-hold_before_train: []      # a listed round waits once its data is built (no train stage yet), for training outside
+hold_before_train: [5]     # a listed round waits once its data is built (no train stage yet), for training outside
                            # the loop (scripts/strength_sweep.py). Round 3 waited here 30 Oct-1 Nov 2026 for three
                            # learning rates; dropped 1 Nov: rounds train as usual and are used at adapter_scale.
+                           # [5] from 9 Nov 2026: if round 3 (PC r004) is kept, round 4 (r005) waits here while round
+                           # 3's adapter is checked at other strengths (my ask); back to [] after the check.
 adapter_scale: 0.25        # 1 Nov 2026: every test uses a round's adapter at 0.25 strength (lora_alpha x 0.25), from
                            # the strength curve on round 2 (research/strength/curve.md: 42 of 60 gate problems at 0.25
                            # against 40 for the base and 33 at full strength; BFCL 96, 92 and 72 of 150). Training
