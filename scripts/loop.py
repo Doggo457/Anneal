@@ -107,6 +107,18 @@ kept round does; worse there too, the reject stands. A reject on the non-coding 
 pass (the gate can't confirm it). The whole gate is always answered (no early look), as a reject needs both passes.
 second_pass: kept (the default) is the old way: a confirm pass for every kept round and none for a reject.
 
+Training starts from the best so far (10 Nov 2026), my rule: "lets say round 4 is better clearly than round 2 then we
+use round 4 as the base if its worse then we use the last best one". loop.yaml new_best: clearly_better: a round that
+passes its tests against the base (above) becomes the best, so what the next round trains from, only if it is also
+clearly better than the best so far by the keep test used before 2 Nov (evalsets.decide without par_rule: the gate
+higher by a one-sided sign test, or the gate not lower and a held-out loss lower, Holm-adjusted; the write and fix parts
+not worse), with each side's gate passes pooled (each problem's mean over its passes). Otherwise the round is
+"passed": the best stays, its new rows roll into the next round as a rejected round's do (one more reject in a row),
+and its files stay. new_best: kept (the default) is the old way: every kept round is the new best. loop.yaml
+rejudge_best judges once, this way, a round that became the best under the old rule, against the best before it (from
+a copy of state.json made before its finish); a later round planned from it, not trained yet and with no fresh rows of
+its own, is then planned again from the best.
+
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
@@ -858,6 +870,37 @@ def second_pass(cfg):
     return mode
 
 
+def new_best_rule(cfg):
+    """loop.yaml new_best (10 Nov 2026): "clearly_better", a kept round is the new best only if it is clearly better
+    than the best so far (Loop.promotion); "kept" (the default), every kept round is the new best."""
+    mode = cfg.get("new_best", "kept")
+    if mode not in ("kept", "clearly_better"):
+        raise ValueError(f"loop.yaml new_best must be kept or clearly_better, got {mode!r}")
+    return mode
+
+
+def promotion_brief(p):
+    """The round record's vs_best: a promotion check (Loop.promotion) in numbers."""
+    g = p["gate"]
+    return {"promoted": p["promoted"], "path": p["path"], "best_round": p["best_round"], "gate_best": g["best"],
+            "gate": g["candidate"], "diff": g["diff"], "wins": g["wins"], "losses": g["losses"],
+            "p": g["p_one_sided"], "passes": len(p["passes"]), "best_passes": len(p["best_passes"]),
+            "losses_vs_best": {k: {x: v.get(x) for x in ("best", "candidate", "wins", "losses", "p_holm")}
+                               for k, v in (p.get("losses") or {}).items()},
+            "reasons": p["reasons"]}
+
+
+def promotion_text(vb):
+    """One sentence for a report: what the promotion check said (vb: promotion_brief)."""
+    head = (f"Clearly better than round {vb['best_round']}, the best so far, so it is the new best" if vb["promoted"]
+            else f"Not clearly better than round {vb['best_round']}, the best so far, so round {vb['best_round']} stays "
+                 "the best and the next round trains from it")
+    nums = (f" (loop.yaml new_best: clearly_better; its {vb['passes']} gate pass(es) pooled against the best's "
+            f"{vb['best_passes']}: {vb['gate_best']:.4f} to {vb['gate']:.4f}, {vb['wins']} won / {vb['losses']} lost, "
+            f"one-sided p {vb['p']:.4f})" if isinstance(vb.get("gate"), (int, float)) else "")
+    return head + nums + ("" if vb["promoted"] or not vb["reasons"] else ": " + "; ".join(vb["reasons"])) + "."
+
+
 GATE_BLOCKS = {"gate"} | set(E.PART_NAMES.values())  # the rejects a second pass of the gate can confirm or overturn
 
 
@@ -1368,6 +1411,162 @@ class Loop(fr.Controller):
                  f"{d['gate']['losses']} losses, p {d['gate']['p_one_sided']:.4f}); reasons: {d['reasons']}")
         return d
 
+    # ----------------------------------------------------------------------------------------- the best so far
+
+    def round_passes(self, rdir):
+        """[[rows file, seed], ...]: a round's gate passes on record, in order (evaluate, recheck, confirm)."""
+        out = []
+        for stage in ("evaluate", "recheck", "confirm"):
+            s = self.read_json(os.path.join(rdir, "stages", f"{stage}.done.json")) or {}
+            p = [s.get("gate_rows"), s.get("gate_seed")]
+            if p[0] and p[1] is not None and p not in out:
+                out.append(p)
+        return out
+
+    def best_passes(self, best):
+        """The best's gate passes: as recorded when it became the best, else every pass in its round folder (a best
+        from before 10 Nov 2026), else its reference rows."""
+        if best.get("gate_passes"):
+            return [list(p) for p in best["gate_passes"]]
+        return (self.round_passes(os.path.join(self.dir, "rounds", f"r{int(best['round']):03d}"))
+                or [[best["gate_rows"], best["gate_seed"]]])
+
+    @staticmethod
+    def pooled_rows(passes):
+        rows = []
+        for path, seed in passes:
+            rows += [r for r in E.read_jsonl(path) if r["seed"] == seed]
+        return rows
+
+    def loss_map(self, ref):
+        """({held-out row: loss}, {held-out row: trained tokens}) from a held-out loss reference {path, field}."""
+        per = (self.read_json(ref["path"]) or {}).get("per_row") or []
+        return ({r["key"]: r[ref["field"]] for r in per if r.get(ref["field"]) is not None},
+                {r["key"]: r.get("trained", 1) for r in per})
+
+    def promotion(self, cfg, ev, best):
+        """new_best: clearly_better (10 Nov 2026): this round (self.rdir) against the best so far with the keep test
+        the loop used before 2 Nov: evalsets.decide without par_rule, the gate passes of each side pooled (each
+        problem's mean over its passes), the held-out bug-fix and terminal losses against the best's own (the base's
+        while the base is the best), the non-coding check against the base as always."""
+        bp, cp = self.best_passes(best), self.round_passes(self.rdir)
+        losses = {}
+        for kind, h in HELDOUT.items():
+            theirs_ref = ((self.state.get("base") or {}).get(h["key"]) if int(best["round"]) == 0
+                          else best.get(h["key"]))
+            mine_ref = (self.done(h["stage"]) or {}).get("own")
+            if not (theirs_ref and mine_ref):
+                continue
+            if theirs_ref.get("sha") != mine_ref.get("sha"):
+                self.log(f"the {h['label']} changed since round {theirs_ref.get('round')} was scored on them: no "
+                         "comparison with the best on them")
+                continue
+            theirs = self.loss_map(theirs_ref)[0]
+            mine, weights = self.loss_map(mine_ref)
+            vs = E.compare_loss(theirs, mine, weights)
+            vs["reference_round"] = best["round"]
+            losses[kind] = vs
+        d = E.decide(self.pooled_rows(bp), self.pooled_rows(cp), E.read_jsonl(self.state["base"]["noncoding_rows"]),
+                     E.read_jsonl(ev["noncoding_rows"]), dict(cfg["rules"], par_rule=False), ev.get("samples_ok", True),
+                     losses=losses)
+        out = {"promoted": d["keep"], "path": d["path"], "reasons": d["reasons"], "best_round": best["round"],
+               "best_passes": bp, "passes": cp, "gate": d["gate"], "parts": d["parts"], "losses": d["losses"],
+               "loss_fell": d["loss_fell"], "noncoding": d["noncoding"]}
+        g = d["gate"]
+        self.log(f"round {self.rnum}: " + ("clearly better than" if d["keep"] else "not clearly better than")
+                 + f" round {best['round']}, the best so far ({len(cp)} gate pass(es) against {len(bp)}: "
+                 + (f"{g['best']:.4f} to {g['candidate']:.4f}, {g['wins']} won / {g['losses']} lost, p "
+                    f"{g['p_one_sided']:.4f}" if g["n"] else "no problems in common")
+                 + (f"; {d['path']} path)" if d["keep"] else f"); reasons: {d['reasons']}"))
+        return out
+
+    def roll_forward(self, cfg, plan, new_rows, n_new, rec):
+        """A passed round (new_best: clearly_better): its new rows roll into the next round as a rejected round's do
+        (finish), up to stack_max_new_rows, or the stack is dropped at the cap."""
+        if not (plan.get("stack_eligible") and n_new):
+            return
+        cap = int(cfg.get("stack_max_new_rows", 0) or 0)
+        entry = {"rows": n_new, "attempts": plan.get("stack_attempt", 1), "rounds": plan.get("stack_rounds") or [self.rnum]}
+        if cap and operator.le(n_new + int(cfg.get("min_rows_per_round", 500)), cap):
+            self.state["stack"] = dict(entry, slices=new_rows)
+            rec["stack"] = f"{n_new} rows roll into the next round (attempt {entry['attempts'] + 1})"
+        else:
+            self.state["stack"] = None
+            self.state.setdefault("stacks_dropped", []).append(dict(entry, dropped=time.strftime("%Y-%m-%d %H:%M:%S")))
+            rec["stack"] = f"{n_new} rows dropped after {entry['attempts']} tries"
+        self.log(f"round {self.rnum}: {rec['stack']}")
+
+    def rejudge_best(self, cfg):
+        """loop.yaml rejudge_best (10 Nov 2026, once): {round: N, snapshot: a copy of state.json made before round N's
+        finish}. Round N became the best under new_best: kept; under clearly_better it is judged again against the
+        best before it (the snapshot's). Clearly better, nothing changes. Otherwise that best comes back, round N is
+        passed (its files stay, its new rows roll into the next round, one more reject in a row), and a later round
+        planned from round N is planned again from the best (Loop.stale_plan)."""
+        rj = cfg.get("rejudge_best")
+        if not rj or new_best_rule(cfg) != "clearly_better":
+            return
+        n = int(rj["round"])
+        log_ = self.state.setdefault("rejudged", {})
+        if str(n) in log_:
+            return
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        best = self.state["best"]
+        rec = next((r for r in self.state["rounds"] if r["round"] == n), None)
+        if int(best["round"]) != n or rec is None or rec.get("status") != "kept":
+            log_[str(n)] = {"skipped": f"the best is round {best['round']} and round {n} is "
+                                       f"{(rec or {}).get('status') or 'not on record'}", "time": now}
+            self.save()
+            self.log(f"loop.yaml rejudge_best: round {n} not judged again ({log_[str(n)]['skipped']})")
+            return
+        path = rj["snapshot"] if os.path.isabs(rj["snapshot"]) else os.path.join(ROOT, rj["snapshot"])
+        snap = self.read_json(path) or {}
+        prev = snap.get("best")
+        if not prev or prev.get("round") != rec.get("best_before"):
+            raise Waiting(f"loop.yaml rejudge_best: {path} has no best, or its best (round {(prev or {}).get('round')}) "
+                          f"is not the best round {n} was judged with (round {rec.get('best_before')})")
+        for r in self.state["rounds"]:
+            if operator.gt(r["round"], n) and (r.get("status") != "running" or os.path.exists(os.path.join(
+                    self.dir, "rounds", f"r{r['round']:03d}", "stages", "train.done.json"))):
+                raise Waiting(f"loop.yaml rejudge_best: round {r['round']} is {r.get('status')} or trained after round "
+                              f"{n}, so round {n} can't be judged again")
+        self.enter_round(n)
+        plan, ev = self.done("plan"), self.done("evaluate")
+        promo = self.promotion(cfg, ev, prev)
+        rec["vs_best"] = promotion_brief(promo)
+        log_[str(n)] = {"promoted": promo["promoted"], "against": prev["round"], "snapshot": path, "time": now}
+        if not promo["promoted"]:
+            self.state["best"] = prev
+            rec["status"] = "passed"
+            rec["rejudged"] = now
+            self.state["rejects_in_row"] = int(self.state.get("rejects_in_row") or 0) + 1
+            new_rows = ([[nm, list(ix)] for nm, ix in plan.get("rolled") or []]
+                        + [[nm, ix] for nm, ix in plan["slices"].items()])
+            self.roll_forward(cfg, plan, new_rows, sum(len(ix) for _, ix in new_rows), rec)
+        self.save()
+        with open(os.path.join(self.rdir, "report.md"), "a", encoding="utf-8") as fh:
+            fh.write(f"\n## Judged again on {now} (loop.yaml rejudge_best)\n\n{promotion_text(rec['vs_best'])}\n"
+                     + (f"\nRows: {rec['stack']}.\n" if rec.get("stack") else ""))
+        self.write_summary()
+
+    def stale_plan(self, plan):
+        """A round planned from a best that is no longer the best (loop.yaml rejudge_best), not trained yet: its plan
+        and data are set aside (renamed, never deleted) so it is planned again from the best. Only a plan with no fresh
+        rows: those are on record as used, so a new plan would pass over them."""
+        best = self.state["best"]
+        if any(plan.get("slices", {}).values()):
+            raise Waiting(f"round {self.rnum} was planned from round {plan.get('best_round')} with fresh rows, but the "
+                          f"best is now round {best['round']}: set its plan aside by hand to plan it again")
+        tag = time.strftime("%Y%m%d-%H%M%S")
+        for stage in ("plan", "data"):
+            p = self.done_path(stage)
+            if os.path.exists(p):
+                os.replace(p, p[:-len(".done.json")] + f".stale-{tag}.json")
+        ddir = os.path.join(self.rdir, "data")
+        if os.path.isdir(ddir):
+            os.replace(ddir, f"{ddir}.stale-{tag}")
+        self.log(f"round {self.rnum}: planned from round {plan.get('best_round')} (recipe {plan['recipe']['id']}), but "
+                 f"the best is now round {best['round']}: plan and data set aside (.stale-{tag}), planned again")
+
     # ----------------------------------------------------------------------------------------- training rounds
 
     def heldout_losses(self):
@@ -1440,6 +1639,9 @@ class Loop(fr.Controller):
             raise
 
     def _training_round(self, cfg, rec):
+        old = self.done("plan")
+        if old is not None and self.done("train") is None and old.get("best_round") != self.state["best"]["round"]:
+            self.stale_plan(old)
         plan = self.run_stage("plan", self.plan, cfg)
         rec.update(recipe=plan["recipe"]["id"], init=plan["init"], rows=plan["rows"])
         self.save()
@@ -2148,11 +2350,20 @@ class Loop(fr.Controller):
                 "; the keep rule alone would not have kept it" if not (d["keep"] and g_ok and conf_ok) else "")
         new_rows = [[n, list(idx)] for n, idx in plan.get("rolled") or []] + [[n, idx] for n, idx in plan["slices"].items()]
         n_new = sum(len(ix) for _, ix in new_rows)
-        if kept:
+        promo = None
+        if kept and not forced and new_best_rule(cfg) == "clearly_better":
+            promo = self.promotion(cfg, ev, best)
+            rec["vs_best"] = promotion_brief(promo)
+        if kept and promo is not None and not promo["promoted"]:
+            self.state["rejects_in_row"] += 1
+            rec["status"] = "passed"
+            self.roll_forward(cfg, plan, new_rows, n_new, rec)
+        elif kept:
             self.state["best"] = {"round": self.rnum, "name": f"r{self.rnum:03d}",
                                   "adapter": os.path.join(self.rdir, "train", "adapter"), "gguf": self.round_gguf(),
                                   "adapter_scale": float(plan.get("adapter_scale", 1.0)),
                                   "gate_rows": (conf or ev)["gate_rows"], "gate_seed": (conf or ev)["gate_seed"],
+                                  "gate_passes": self.round_passes(self.rdir),
                                   "lineage": (plan["lineage"] if plan["init"] == "base_lineage" else best["lineage"])
                                   + new_rows,
                                   "lora_shape": lora_shape(plan["train"]), "init": plan["init"],
@@ -2225,15 +2436,18 @@ class Loop(fr.Controller):
         if reasons:
             L += [("Not kept because: " if rec["status"] == "rejected" else "Would not be kept because: ")
                   + "; ".join(reasons) + ".", ""]
-        elif rec["status"] == "kept":
+        elif rec["status"] in ("kept", "passed"):
             fell = " and ".join(HELDOUT[k]["label"] for k in d.get("loss_fell") or [] if k in HELDOUT) or "held-out steps"
-            L += [{"gate": "Kept on the gate: its score is higher, by a one-sided sign test.",
-                   "loss": f"Kept on the held-out loss: its gate score held level and its loss on the {fell} fell, by "
+            w = "Kept" if rec["status"] == "kept" else "Passed its tests"
+            L += [{"gate": f"{w} on the gate: its score is higher, by a one-sided sign test.",
+                   "loss": f"{w} on the held-out loss: its gate score held level and its loss on the {fell} fell, by "
                            "a one-sided sign test (Holm-adjusted across the bug-fix and terminal sets).",
-                   "par": "Kept on par: its gate score is not clearly lower (a drop of at most "
+                   "par": f"{w} on par: its gate score is not clearly lower (a drop of at most "
                           f"{(d.get('par') or {}).get('tolerance')} and a one-sided sign test on its losses above "
                           f"{d['rules'].get('alpha')}), and every other check is no worse."}.get(
-                       rec.get("path") or d.get("path"), "Kept."), ""]
+                       rec.get("path") or d.get("path"), f"{w}."), ""]
+        if rec.get("vs_best"):
+            L += [promotion_text(rec["vs_best"]), ""]
         if rec.get("files_kept"):
             L += [f"Files: {rec['files_kept']}.", ""]
         if rec.get("forced"):
@@ -2372,7 +2586,9 @@ class Loop(fr.Controller):
                     elif g.get("n"):  # round 0: the base itself
                         out.append(f"{n} {g['pass']}/{g['n']}")
                 return "; ".join(out) or "-"
-            result = r["status"] + (f" ({r['path']} path)" if r.get("path") else "")
+            result = r["status"] + (f" ({r['path']} path)" if r.get("path") else "") + (
+                f", not clearly better than round {r['vs_best']['best_round']}"
+                if r.get("vs_best") and not r["vs_best"].get("promoted") else "")
             L.append(f"| {r['round']} | {r.get('recipe', r.get('name', '-'))} | {r.get('init', '-')} | {r.get('rows', '-')} | "
                      f"{r.get('gate', '-')} | {diff} | {p} | {lcell(r.get('swe_loss'))} | {lcell(r.get('term_loss'))} | "
                      f"{ncs} | {result} | {eps} | {gcell(r.get('guards'))} |")
@@ -2439,6 +2655,7 @@ def main():
             for name in guard_names(cfg):
                 if not os.path.exists(c.guard_file(cfg, name)):
                     raise Waiting(f"the {GUARDS[name]['label']} check is not built: run {GUARDS[name]['build']}")
+            c.rejudge_best(cfg)
             pause_after = int(cfg.get("pause_after_rejects_in_row") or 0)
             if pause_after and c.state["rejects_in_row"] >= pause_after:
                 raise Waiting(f"{c.state['rejects_in_row']} rejects in a row: paused for a new recipe")

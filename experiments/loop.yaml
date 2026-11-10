@@ -22,9 +22,11 @@ min_free_gb: 60
 valloss: true
 milestone_evalplus: true   # EvalPlus on rounds that pass the keep rule only; since 21 Oct 2026 a no-worse check against the
                            # base (rules.evalplus_guard), not a measure of gain
-pause_after_rejects_in_row: 1   # 0 = never pause; check-ins change the recipe instead (1 from 28 Oct 2026 until round 3's change was in, so the loop held after round 2)
+pause_after_rejects_in_row: 0   # 0 = never pause; check-ins change the recipe instead (1 from 28 Oct 2026 until round 3's change was in, so the loop held after round 2)
                                 # 1 again from 9 Nov 2026 while round 3's strength is checked (scripts/scale_curve.py): if round 3 is
                                 # rejected the loop waits before planning round 4 (PC r005); back to 0 after the check
+                                # 0 again from 10 Nov 2026: round 3 was kept against the base, so that wait is not needed,
+                                # and a passed round (new_best below) counts as a reject in a row
 prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is the prototype. Even if it scores worse, it
                            # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
                            # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
@@ -99,6 +101,19 @@ second_pass: worse   # 7 Nov 2026: the gate's second pass only for a round that 
 # means a level round isn't lost to one unlucky draw and a worse round gets no second try of its own. The whole gate is
 # always answered (no early look), as a reject needs both passes. kept (the default): a confirm pass for every kept
 # round, as before.
+new_best: clearly_better   # 10 Nov 2026: a round is the new best (what the next round trains from) only if clearly better
+# new_best (10 Nov 2026, my words: "lets say round 4 is better clearly than round 2 then we use round 4 as the base if its
+# worse then we use the last best one ... that should remain as policy from now on"): a round that passes its tests
+# against the base (par_rule and compare_to above, and every no-worse check) becomes the best only if it is also clearly
+# better than the best so far, by the keep test used before 2 Nov: the gate higher (one-sided sign test, p at most
+# alpha), or the gate not lower and the held-out bug-fix or terminal loss lower (Holm-adjusted, p at most loss_alpha),
+# with the write and fix parts not worse; each side's gate passes pooled (each problem's mean over its passes), the
+# losses against the best's own. Otherwise the round is passed: the best stays, its new rows roll into the next round as
+# a rejected round's do, and its files stay. kept (the default): every kept round is the new best, as before.
+rejudge_best: {round: 4, snapshot: results/loop/state.before-r004-finish.json}
+# rejudge_best (10 Nov 2026, once): round 3 (PC r004) became the best under the old rule on 10 Nov; it is judged again
+# against round 2 at a quarter strength (r003, the best in the copy of state.json made before its finish), and if it is
+# not clearly better, r003 is the best again and round 4 (r005), planned from r004 and not trained, is planned again.
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
 # (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the
@@ -179,10 +194,12 @@ train:   # the first run's settings (experiments/2026-10-19_first-run.yaml); rec
   ce_target_gb: 2
   empty_cache_between_microbatches: true
   pinned_offload: false
-  kl_think_beta: 1.0    # 29 Oct 2026 (round 3 on): adds KL(base || tuned) on the trained turn's reasoning tokens and
+  kl_think_beta: 0      # 29 Oct 2026 (round 3 on): adds KL(base || tuned) on the trained turn's reasoning tokens and
                         # their close tag, weight 1.0 (anneal/kl_loss.py; the base is this model with the
                         # adapter off, so no base-written rows). Aim: learn the teachers' steps without learning
                         # to stop thinking early (research/thinking-length-fix.md)
+                        # 0 (off) from 10 Nov 2026, round 4 (PC r005) on, my choice "Drop it": a quarter strength already
+                        # keeps the thinking as long as the base's, and round 3's held-out loss moved back toward the base
   blas_backend: hipblaslt   # 27 Oct 2026, speed check 3 (anneal/train_probe.py): hipBLASLt for the matrix products. On the
                             # 12 longest 12k rows, 6 steps each: 244.6 s a step against 267.3-267.9 for hipBLAS (two
                             # baseline runs, identical losses), 100.0 tok/s, step losses within 0.42%, torch peak 27.3 GiB,

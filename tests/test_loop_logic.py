@@ -924,6 +924,8 @@ def setup_world(tmp):
     cfg["rules"]["par_rule"] = False  # the keep-if-better rule here; test_par_rule_and_base_reference covers on par
     cfg["compare_to"] = "best"  # the same
     cfg["second_pass"] = "kept"  # a confirm pass for every kept round here; test_second_pass_only_when_worse covers worse
+    cfg["new_best"] = "kept"  # every kept round is the new best here; test_best_so_far_rule covers clearly_better
+    cfg.pop("rejudge_best", None)  # test_rejudge_best covers it
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -2071,6 +2073,168 @@ def _second_pass_only_when_worse(tmp):
     assert rec(4)["reasons"][0] == "worse on both passes of the gate together (second pass at seed 1004: 14/40)", rec(4)
     assert rec(4)["second_pass"] == "14/40 at seed 1004, worse on both passes together"
     assert state()["best"]["round"] == 3
+
+
+def test_best_so_far_rule():
+    """10 Nov 2026 (loop.yaml new_best: clearly_better), my rule: "lets say round 4 is better clearly than round 2 then
+    we use round 4 as the base if its worse then we use the last best one". Every round is still compared with the base.
+    r002 is clearly ahead of the base: the best. r003 is ahead of the base but below r002: passed, so r002 stays the
+    best, r003's files stay and its rows roll into r004. r004 trains from r002 on those rows plus fresh ones and is
+    clearly ahead of r002: the new best. r005 is level with r004 on the gate, with a lower held-out bug-fix loss than
+    r004's own: the new best on the loss path."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(SWE_LOSS)
+    before = world_patches()
+    try:
+        _best_so_far_rule(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        SWE_LOSS.clear()
+        SWE_LOSS.update(saved[1])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _best_so_far_rule(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base", second_pass="worse", new_best="clearly_better")
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    half = lambda k: set(range(k)) | set(range(20, 20 + k))  # noqa: E731  (k write items and k fix items pass)
+    PASSING.update({None: half(10), "r002": half(15), "r003": half(13), "r004": half(18), "r005": half(18)})
+    SWE_LOSS.update({"r005": 0.5})
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    assert rec(2)["status"] == "kept" and rec(2)["vs_best"]["promoted"] and rec(2)["vs_best"]["best_round"] == 0
+    assert state()["best"]["round"] == 2
+    assert state()["best"]["gate_passes"] == [[os.path.join(rd(2), "gate.seed1.jsonl"), 1]]
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    d3 = done(3, "decide")
+    assert d3["keep"] and d3["path"] == "gate" and d3["reference_round"] == 0  # ahead of the base: 26 vs 20 of 40
+    vb = rec(3)["vs_best"]
+    assert rec(3)["status"] == "passed" and not vb["promoted"] and vb["best_round"] == 2, rec(3)
+    assert (vb["gate_best"], vb["gate"], vb["wins"], vb["losses"]) == (0.75, 0.65, 0, 4), vb
+    assert state()["best"]["round"] == 2 and state()["rejects_in_row"] == 1
+    n3 = sum(len(ix) for ix in done(3, "plan")["slices"].values())
+    assert state()["stack"]["rows"] == n3 and state()["stack"]["rounds"] == [3], state()["stack"]
+    assert os.path.exists(os.path.join(rd(3), "train", "adapter", "adapter_config.json"))  # a passed round keeps its files
+    assert os.path.exists(os.path.join(rd(3), "convert"))
+    report = open(os.path.join(rd(3), "report.md")).read()
+    assert "PASSED" in report and "Passed its tests on the gate" in report, report
+    assert "Not clearly better than round 2, the best so far, so round 2 stays the best" in report, report
+    assert "passed (gate path), not clearly better than round 2" in open(os.path.join(run_dir, "summary.md")).read()
+    assert L.kept_rounds(state()) == 1
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    p4 = done(4, "plan")
+    assert p4["init"] == "best" and p4["init_adapter"] == os.path.join(rd(2), "train", "adapter") and p4["best_round"] == 2
+    assert sum(len(ix) for _, ix in p4["rolled"]) == n3 and p4["stack_rounds"] == [3, 4]
+    assert rec(4)["status"] == "kept" and rec(4)["vs_best"]["promoted"] and rec(4)["vs_best"]["path"] == "gate"
+    best = state()["best"]
+    assert best["round"] == 4 and state()["stack"] is None and state()["rejects_in_row"] == 0
+    assert sum(len(ix) for _, ix in best["lineage"]) == sum(len(ix) for ix in done(2, "plan")["slices"].values()) + \
+        n3 + sum(len(ix) for ix in p4["slices"].values())
+    assert run_main(args) == 0, json.load(open(os.path.join(run_dir, "status.json")))
+    vb5 = rec(5)["vs_best"]
+    assert rec(5)["status"] == "kept" and vb5["promoted"] and vb5["path"] == "loss" and vb5["diff"] == 0, vb5
+    assert vb5["losses_vs_best"]["swe"]["best"] == 1.04 and vb5["losses_vs_best"]["swe"]["candidate"] == 0.5, vb5
+    assert state()["best"]["round"] == 5
+    try:
+        L.new_best_rule({"new_best": "better"})
+        raise AssertionError("an unknown new_best must stop the loop")
+    except ValueError:
+        pass
+
+
+def test_rejudge_best():
+    """10 Nov 2026 (loop.yaml rejudge_best), as on the PC: under the old rule r003 became the best (on par with the base
+    over both its gate passes, but below r002), and r004 was planned from it (retrain-vs-continue: no fresh rows) and
+    held before training. With new_best: clearly_better and rejudge_best, the loop judges r003 again against r002 (the
+    best in the copy of state.json made before r003's finish), with r003's two passes pooled: not clearly better, so
+    r002 is the best again, r003 is passed (files kept, rows rolled forward), and r004's plan and data are set aside
+    and planned again from r002. It happens once; r004 then trains from r002 and is clearly better: the new best."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING), dict(CONFIRM_PASSING)
+    before = world_patches()
+    try:
+        _rejudge_best(tmp)
+    finally:
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved[0])
+        CONFIRM_PASSING.clear()
+        CONFIRM_PASSING.update(saved[1])
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _rejudge_best(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base", second_pass="worse", hold_before_train=[4])
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    has = lambda n, stage: os.path.exists(os.path.join(rd(n), "stages", f"{stage}.done.json"))  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    half = lambda k: set(range(k)) | set(range(20, 20 + k))  # noqa: E731
+    PASSING.update({None: half(10), "r002": half(15), "r003": half(7), "r004": half(18)})
+    CONFIRM_PASSING.update({"r003": half(13)})  # r003's second pass levels it with the base
+    assert run_main(args) == 0, status()
+    assert state()["best"]["round"] == 2
+    snap = os.path.join(run_dir, "state.before-r003-finish.json")
+    shutil.copyfile(os.path.join(run_dir, "state.json"), snap)
+    assert run_main(args) == 0, status()
+    assert rec(3)["status"] == "kept" and has(3, "recheck") and state()["best"]["round"] == 3  # the old rule
+    assert run_main(args) == 0, status()
+    assert status()["state"] == "waiting" and "holding before training" in status()["detail"], status()
+    old4 = done(4, "plan")
+    assert old4["recipe"]["id"] == "retrain-vs-continue" and old4["best_round"] == 3 and not any(old4["slices"].values())
+    cfg.update(new_best="clearly_better", rejudge_best={"round": 3, "snapshot": snap})
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    assert run_main(args) == 0, status()
+    assert status()["state"] == "waiting" and "holding before training" in status()["detail"], status()
+    st = state()
+    assert st["best"]["round"] == 2 and st["best"] == json.load(open(snap))["best"]
+    assert st["rejudged"]["3"]["promoted"] is False and st["rejudged"]["3"]["against"] == 2
+    vb = rec(3)["vs_best"]
+    assert rec(3)["status"] == "passed" and (vb["passes"], vb["best_passes"]) == (2, 1), vb
+    assert (vb["gate_best"], vb["gate"], vb["wins"], vb["losses"]) == (0.75, 0.5, 0, 16), vb
+    n3 = sum(len(ix) for ix in done(3, "plan")["slices"].values())
+    assert st["stack"]["rows"] == n3 and st["rejects_in_row"] == 1 and L.kept_rounds(st) == 1
+    assert os.path.exists(os.path.join(rd(3), "train", "adapter", "adapter_config.json"))
+    assert "## Judged again on" in open(os.path.join(rd(3), "report.md")).read()
+    assert "Not clearly better than round 2" in open(os.path.join(rd(3), "report.md")).read()
+    stale = glob.glob(os.path.join(rd(4), "stages", "plan.stale-*.json"))
+    assert len(stale) == 1 and json.load(open(stale[0]))["recipe"]["id"] == "retrain-vs-continue"
+    assert glob.glob(os.path.join(rd(4), "stages", "data.stale-*.json")) and glob.glob(os.path.join(rd(4), "data.stale-*"))
+    p4 = done(4, "plan")
+    assert p4["recipe"]["id"] == "default" and p4["best_round"] == 2 and p4["init"] == "best"
+    assert p4["init_adapter"] == os.path.join(rd(2), "train", "adapter")
+    assert sum(len(ix) for _, ix in p4["rolled"]) == n3 and has(4, "data") and not has(4, "train")
+    assert run_main(args) == 0, status()  # judged once: nothing changes, still holding
+    assert state()["best"]["round"] == 2 and len(glob.glob(os.path.join(rd(4), "stages", "plan.stale-*.json"))) == 1
+    cfg["hold_before_train"] = []
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    assert run_main(args) == 0, status()
+    assert done(4, "train") and rec(4)["status"] == "kept" and rec(4)["vs_best"]["promoted"]
+    assert state()["best"]["round"] == 4 and state()["stack"] is None and state()["rejects_in_row"] == 0
 
 
 def test_bfcl_harness():
