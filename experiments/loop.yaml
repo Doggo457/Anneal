@@ -31,11 +31,11 @@ prototype_rounds: [2]      # 27 Oct 2026: round 2, the first training round, is 
                            # answers the whole gate (no early look), runs every check (BFCL, CWEval, EvalPlus) whatever
                            # the keep rule says, and a reject keeps its adapter, checkpoints and GGUF. The keep rule still
                            # decides what the next round continues from.
-hold_before_train: [5]     # a listed round waits once its data is built (no train stage yet), for training outside
+hold_before_train: []      # a listed round waits once its data is built (no train stage yet), for training outside
                            # the loop (scripts/strength_sweep.py). Round 3 waited here 30 Oct-1 Nov 2026 for three
                            # learning rates; dropped 1 Nov: rounds train as usual and are used at adapter_scale.
                            # [5] from 9 Nov 2026: if round 3 (PC r004) is kept, round 4 (r005) waits here while round
-                           # 3's adapter is checked at other strengths (my ask); back to [] after the check.
+                           # 3's adapter is checked at other strengths (my ask); back to [] on 12 Nov 2026 after the check.
 adapter_scale: 0.25        # 1 Nov 2026: every test uses a round's adapter at 0.25 strength (lora_alpha x 0.25), from
                            # the strength curve on round 2 (research/strength/curve.md: 42 of 60 gate problems at 0.25
                            # against 40 for the base and 33 at full strength; BFCL 96, 92 and 72 of 150). Training
