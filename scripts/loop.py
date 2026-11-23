@@ -119,6 +119,19 @@ rejudge_best judges once, this way, a round that became the best under the old r
 a copy of state.json made before its finish); a later round planned from it, not trained yet and with no fresh rows of
 its own, is then planned again from the best.
 
+A new graphics driver without rolling back (23 Nov 2026), my call: "no roll back we do round six next i think round 5
+is just worse". The Windows 11 26H2 update put graphics driver 32.0.32029.2010 on (all earlier gate, non-coding and
+no-worse scores came from 32.0.32015.7029). loop.yaml new_driver: {driver: X} lets the gate server move to driver X
+once: the old settings go in state["gate_server_history"], and before the next round is tested (after its training
+and convert, before its held-out losses) the base (gate at its seed and the non-coding check) and the best so far
+(each of its gate passes at its seed, and the held-out bug-fix and terminal losses, base and best in one run each) are
+answered again on X, into results/loop/rescore/X/rNNN (the round folders are never written). The base's and the best's
+references in state.json then point at those answers (the old ones under before_driver), so every comparison after it
+is on one driver. The no-worse checks' base rows and EvalPlus's base answers already follow the driver (their
+fingerprint, evalplus_base). loop.yaml close_round: {round: N, note: why} ends round N, kept against the base and not
+finished, as passed where it stands (no more checks): the best stays, its files stay, its new rows roll forward, one
+more reject in a row.
+
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
 with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
@@ -406,6 +419,11 @@ def adapter_scale(cfg, recipe):
 
 def scaled_name(scale):
     return f"adapter-x{float(scale):g}"
+
+
+def driver_folder(drv):
+    """A graphics driver version as a folder name (evalplus_base, rescore_dir)."""
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(drv))
 
 
 def tree_shas(d):
@@ -1100,8 +1118,9 @@ class Loop(fr.Controller):
 
     # ----------------------------------------------------------------------------------------- scoring
 
-    def evaluate_model(self, cfg, gguf, gate_seed, samples=True, early=None):
-        """Samples (optional), the gate at gate_seed and the non-coding check, on one server. Resumable.
+    def evaluate_model(self, cfg, gguf, gate_seed, samples=True, early=None, noncoding=True):
+        """Samples (optional), the gate at gate_seed and the non-coding check (unless noncoding is False: the best's
+        gate passes answered again on a new driver, rescore_round), on one server. Resumable.
         early (a training round whose held-out loss paths are closed; loop.yaml gate early_reject): answer the gate in a
         fixed shuffled order and look after the first `looks` fractions of it in turn (a third, then two thirds, since
         21 Oct 2026); at the first look where the candidate is not ahead of the best's rows on everything answered so
@@ -1110,15 +1129,15 @@ class Loop(fr.Controller):
         out = {}
         gate = E.read_jsonl(E.GATE_PATH)
         nc = E.read_jsonl(E.NONCODING_PATH)
-        if not gate or not nc:
+        if not gate or (noncoding and not nc):
             raise RuntimeError("held-out sets missing: run scripts/build_gate.py")
         out["toolchains"] = self.toolchain_check(gate)
         g = cfg["gate"]
         self.serve_gate(cfg, gguf, "evaluate")
         try:
             url = self.server.url
-            self.slot_room_check(url, cfg, [("gate", gate, g["max_tokens"]),
-                                            ("non-coding", nc, cfg["noncoding"]["max_tokens"])])
+            self.slot_room_check(url, cfg, [("gate", gate, g["max_tokens"])]
+                                 + ([("non-coding", nc, cfg["noncoding"]["max_tokens"])] if noncoding else []))
             if samples:
                 sp = os.path.join(self.rdir, "samples.json")
                 ss = self.read_json(sp)
@@ -1179,14 +1198,14 @@ class Loop(fr.Controller):
                     if chk["stop"]:
                         break
             if not out.get("early_reject"):
-                gate_pass(order, then=[nc_spec(s) for s in cfg["noncoding"]["seeds"]])
+                gate_pass(order, then=[nc_spec(s) for s in cfg["noncoding"]["seeds"]] if noncoding else [])
         finally:
             self.unserve()
         gate_rows = [r for r in E.read_jsonl(gpath) if r["seed"] == gate_seed]
-        nc_rows = E.read_jsonl(npath)
-        out.update(gate_rows=gpath, gate_seed=gate_seed, noncoding_rows=npath,
+        nc_rows = E.read_jsonl(npath) if noncoding else []
+        out.update(gate_rows=gpath, gate_seed=gate_seed, noncoding_rows=npath if noncoding else None,
                    gate_pass=sum(r["pass"] for r in gate_rows), gate_n=len(gate_rows),
-                   noncoding_accuracy=E.mc_accuracy(nc_rows),
+                   noncoding_accuracy=E.mc_accuracy(nc_rows) if noncoding else None,
                    gate_budget_hits=sum(r["budget_hit"] for r in gate_rows),
                    gate_finish=dict(_count(r["finish_reason"] for r in gate_rows)))
         return out
@@ -1231,6 +1250,8 @@ class Loop(fr.Controller):
         else:
             known = dict(GATE_SERVER_ADDED, **known)
         diff = [k for k in want if known.get(k) != want[k] and k not in BATCH_ONLY]
+        if diff == ["gpu_driver"] and self.accept_new_driver(cfg, known, want):
+            diff = []
         if diff:
             raise Waiting(f"experiments/loop.yaml and this PC ask for a gate server with "
                           f"{describe_gate_server(want, diff)}, but the rounds so far were scored with "
@@ -1251,6 +1272,206 @@ class Loop(fr.Controller):
                          f"{describe_gate_server(known, list(moved))}; {rows} gate rows scored before)")
             self.state["gate_server"] = want
             self.save()
+
+    def accept_new_driver(self, cfg, known, want):
+        """loop.yaml new_driver (23 Nov 2026): {driver: X}. When the gate server differs from the recorded one only in
+        the graphics driver, and that driver is X, the loop moves to X instead of waiting: the old settings go in
+        state["gate_server_history"] and state["rescore"] asks for the base and the best to be answered again on X
+        (rescore_references) before the next round is tested. True when accepted (require_gate_server then records
+        the new settings)."""
+        nd = cfg.get("new_driver") or {}
+        drv = want.get("gpu_driver")
+        if not nd or not drv or str(nd.get("driver")) != str(drv) or known.get("gpu_driver") == drv:
+            return False
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.state.setdefault("gate_server_history", []).append({"until": now, "gate_server": known})
+        self.state["rescore"] = {"driver": drv, "was": known.get("gpu_driver"), "since": now}
+        self.log(f"loop.yaml new_driver: graphics driver {drv} from now on (was {known.get('gpu_driver')}); the base and "
+                 "the best so far are answered again on it before the next round is tested")
+        return True
+
+    def rescore_dir(self, n, drv):
+        return os.path.join(self.dir, "rescore", driver_folder(drv), f"r{int(n):03d}")
+
+    def rescore_references(self, cfg):
+        """state["rescore"] (accept_new_driver): the base and the best so far answered again on the new driver, once
+        each, before this round's held-out losses and gate pass, so they are compared on one driver. Resumable: each
+        part is a stage under results/loop/rescore/DRIVER/rNNN; the round folders are only read."""
+        rs = self.state.get("rescore")
+        if not rs or rs.get("finished"):
+            return
+        drv = rs["driver"]
+        saved = self.rnum, self.rdir
+        try:
+            if (self.state["base"] or {}).get("gpu_driver") != drv:
+                self.rescore_round(cfg, 0, drv)
+            best = self.state["best"]
+            if int(best["round"]) != 0 and best.get("gpu_driver") != drv:
+                self.rescore_round(cfg, int(best["round"]), drv)
+        finally:
+            self.rnum, self.rdir = saved
+        rs["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        self.save()
+        self.log(f"loop.yaml new_driver: the base and the best so far (round {self.state['best']['round']}) are on "
+                 f"graphics driver {drv} now; round {self.rnum} is tested against those answers")
+
+    def rescore_round(self, cfg, n, drv):
+        """Round n (0: the base, else the best so far) answered again on graphics driver drv: the base's gate pass at
+        its seed and its non-coding check; the best's gate passes at their seeds (no non-coding check: the base's is
+        the reference) and the held-out losses (val_loss.py on the best's test adapter with the base included, so the
+        base's and the best's references move together)."""
+        self.rnum, self.rdir = n, self.rescore_dir(n, drv)
+        os.makedirs(os.path.join(self.rdir, "stages"), exist_ok=True)
+        now = lambda: time.strftime("%Y-%m-%d %H:%M:%S")  # noqa: E731
+        was = (self.state.get("rescore") or {}).get("was")
+        rec = next((r for r in self.state["rounds"] if r["round"] == n), None)
+        if n == 0:
+            b = self.state["base"]
+            self.log(f"round 0 (the base): gate seed {b['gate_seed']} and the non-coding check answered again on "
+                     f"graphics driver {drv}, into {self.rdir}")
+            ev = self.run_stage("evaluate", lambda: self.mark_done("evaluate", self.evaluate_model(
+                cfg, None, b["gate_seed"], samples=False)))
+            b.setdefault("before_driver", {})[str(was)] = {k: b.get(k) for k in ("gate_rows", "gate_seed",
+                                                                                  "noncoding_rows")}
+            b.update(gate_rows=ev["gate_rows"], noncoding_rows=ev["noncoding_rows"], gpu_driver=drv)
+            if rec is not None:
+                rec.setdefault("rescored", {})[drv] = {"gate": f"{ev['gate_pass']}/{ev['gate_n']}",
+                                                       "noncoding": ev["noncoding_accuracy"], "time": now()}
+            self.save()
+            self.log(f"round 0 (the base) on graphics driver {drv}: gate {ev['gate_pass']}/{ev['gate_n']}, non-coding "
+                     f"{ev['noncoding_accuracy']:.4f}")
+            return
+        best = self.state["best"]
+        passes = self.best_passes(best)
+        if not os.path.exists(best.get("gguf") or ""):
+            raise Waiting(f"round {n} is the best so far, but its GGUF {best.get('gguf')} is missing, so it can't be "
+                          f"answered again on graphics driver {drv}")
+        self.log(f"round {n} (the best so far): {len(passes)} gate pass(es) at seed(s) {[s for _, s in passes]} and the "
+                 f"held-out losses answered again on graphics driver {drv}, into {self.rdir}")
+        stages = ("evaluate", "recheck", "confirm")
+        if operator.gt(len(passes), len(stages)):
+            raise RuntimeError(f"round {n} has {len(passes)} gate passes; at most {len(stages)} can be answered again")
+        new, lines = [], []
+        for stage, (_, seed) in zip(stages, passes):
+            ev = self.run_stage(stage, lambda s=seed, st=stage: self.mark_done(st, self.evaluate_model(
+                cfg, best["gguf"], s, samples=False, noncoding=False)))
+            new.append([ev["gate_rows"], ev["gate_seed"]])
+            lines.append(f"seed {ev['gate_seed']} {ev['gate_pass']}/{ev['gate_n']}")
+        refs = self.rescore_losses(cfg, best)
+        before = {k: copy.deepcopy(best.get(k)) for k in ("gate_rows", "gate_seed", "gate_passes")}
+        before.update({h["key"]: copy.deepcopy(best.get(h["key"])) for h in HELDOUT.values() if h["key"] in refs})
+        best.setdefault("before_driver", {})[str(was)] = before
+        b = self.state["base"]
+        b.setdefault("before_driver", {}).setdefault(str(was), {}).update(
+            {h["key"]: copy.deepcopy(b.get(h["key"])) for h in HELDOUT.values() if h["key"] in refs})
+        best.update(gate_passes=new, gate_rows=new[0][0], gate_seed=new[0][1], gpu_driver=drv)
+        for key, (base_ref, best_ref) in refs.items():
+            b[key], best[key] = base_ref, best_ref
+        if rec is not None:
+            rec.setdefault("rescored", {})[drv] = {"gate": lines, "losses": {k: v[1]["path"] for k, v in refs.items()},
+                                                   "time": now()}
+        self.save()
+        self.log(f"round {n} (the best so far) on graphics driver {drv}: gate {', '.join(lines)}"
+                 + (f"; held-out losses {sorted(refs)} answered again" if refs else ""))
+
+    def rescore_losses(self, cfg, best):
+        """The held-out losses (loop.yaml swe_loss, term_loss) of the base and the best's test adapter, in one
+        val_loss.py run per set: {key: (base reference, best reference)}."""
+        out = {}
+        scale = float(best.get("adapter_scale", 1.0) or 1.0)
+        adapter = best["adapter"]
+        if scale != 1.0:
+            adapter = os.path.join(os.path.dirname(best["adapter"]), scaled_name(scale))
+            scaled_adapter(best["adapter"], adapter, scale)  # made at the best's convert; reused if it still matches
+        for kind, h in HELDOUT.items():
+            sc = cfg.get(h["key"])
+            if not sc:
+                continue
+            path = self.heldout_file(cfg, kind)
+            sha = file_sha(path)
+            vdir = os.path.join(self.rdir, h["stage"])
+            summ = os.path.join(vdir, "summary.json")
+
+            def run(vdir=vdir, summ=summ, path=path, sc=sc, kind=kind, h=h, sha=sha):
+                val = self.read_json(summ)
+                if val is None or "base" not in (val.get("scored") or []):
+                    rc = self.run_child([PY, "-u", os.path.join(ROOT, "scripts", "val_loss.py"), "--adapter", adapter,
+                                         "--val-file", path, "--seq-len", str(int(sc.get("seq_len", 8192))),
+                                         "--max-rows", str(int(sc.get("max_rows", 200))), "--run-dir", vdir],
+                                        f"{kind}_loss.log")
+                    self.check_stop()
+                    if rc != 0:
+                        raise RuntimeError(f"val_loss.py ({h['label']}) exited with {rc}")
+                    val = self.read_json(summ) or {}
+                if not val.get("per_row"):
+                    raise RuntimeError(f"{summ}: no rows scored")
+                return self.mark_done(h["stage"], {"summary": summ, "rows": len(val["per_row"]), "sha": sha,
+                                                   "all": val.get("all")})
+
+            done = self.run_stage(h["stage"], run)
+            out[h["key"]] = ({"path": done["summary"], "field": "base_loss", "sha": done["sha"], "round": 0},
+                             {"path": done["summary"], "field": "adapter_loss", "sha": done["sha"],
+                              "round": int(best["round"])})
+        return out
+
+    def close_round(self, cfg):
+        """loop.yaml close_round (23 Nov 2026): {round: N, note: why}. Round N, kept against the base by decide but not
+        finished, ends as passed where it stands: no more checks, the best stays, its files stay, its new rows roll
+        into the next round, one more reject in a row. Once: a round that is no longer running is left alone."""
+        cr = cfg.get("close_round")
+        if not cr:
+            return
+        n = int(cr["round"])
+        rec = next((r for r in self.state["rounds"] if r["round"] == n), None)
+        if rec is None or rec.get("status") != "running":
+            return
+        saved = self.rnum, self.rdir
+        self.enter_round(n)
+        try:
+            if self.done("finish") is not None:
+                return
+            plan, ev, d = self.done("plan"), self.done("evaluate"), self.done("decide")
+            if plan is None or self.done("train") is None or ev is None or d is None:
+                raise Waiting(f"loop.yaml close_round: round {n} has no plan, training, gate pass or decision on record, "
+                              "so it can't be closed as passed")
+            if not d.get("keep"):
+                raise Waiting(f"loop.yaml close_round: round {n} was not kept against the base by decide, so it can't be "
+                              "closed as passed")
+            note = str(cr.get("note") or "").strip()
+            now = time.strftime("%Y-%m-%d %H:%M:%S")
+            stages = [s for s in ROUND_STAGES if self.done(s) is not None]
+            new_rows = ([[nm, list(ix)] for nm, ix in plan.get("rolled") or []]
+                        + [[nm, ix] for nm, ix in plan["slices"].items()])
+            self.state["rejects_in_row"] = int(self.state.get("rejects_in_row") or 0) + 1
+            rec["status"] = "passed"
+            rec["closed"] = {"note": note, "time": now, "stages_done": stages}
+            self.roll_forward(cfg, plan, new_rows, sum(len(ix) for _, ix in new_rows), rec)
+            if plan["recipe"]["id"] != "default" and plan["recipe"]["id"] not in self.state["recipes_done"]:
+                self.state["recipes_done"].append(plan["recipe"]["id"])
+            guards = {name: self.done(name) for name in guard_names(cfg) if (self.done(name) or {}).get("guard")}
+            los = d.get("losses") or {}
+            rec.update(gate=f"{ev['gate_pass']}/{ev['gate_n']}", gate_diff=d["gate"]["diff"], p=d["gate"]["p_one_sided"],
+                       path=d.get("path"), loss_fell=d.get("loss_fell"), noncoding=ev.get("noncoding_accuracy"),
+                       reasons=[], best_before=d.get("best_round"),
+                       **{h["key"]: ({k: los[kind].get(k) for k in ("best", "candidate", "wins", "losses", "p_one_sided",
+                                                                    "p_holm")} if los.get(kind) else None)
+                          for kind, h in HELDOUT.items()},
+                       guards={nm: {k: g["guard"].get(k) for k in ("base", "candidate", "diff", "wins", "losses",
+                                                                  "p_worse", "ok")} for nm, g in guards.items()} or None,
+                       finished=now)
+            self.save()
+            self.write_report(cfg, rec, ev, d, plan, None, None, guards)
+            with open(os.path.join(self.rdir, "report.md"), "a", encoding="utf-8") as fh:
+                fh.write(f"\n## Closed as passed on {now} (loop.yaml close_round)\n\n" + (f"{note}\n\n" if note else "")
+                         + f"Stages done: {', '.join(stages)}. Round {self.state['best']['round']} stays the best; "
+                         "this round's files stay.\n" + (f"\nRows: {rec['stack']}.\n" if rec.get("stack") else ""))
+            self.write_summary()
+            self.mark_done("finish", {"status": "passed", "closed": True})
+            self.log(f"loop.yaml close_round: round {n} closed as passed after {stages[-1]}" + (f" ({note})" if note
+                                                                                               else "")
+                     + f"; round {self.state['best']['round']} stays the best")
+        finally:
+            self.rnum, self.rdir = saved
 
     def slot_room_check(self, url, cfg, sets):
         """Each gate server slot holds gate_ctx / slots tokens: the longest prompts of each set (label,
@@ -1654,6 +1875,7 @@ class Loop(fr.Controller):
             raise Waiting(f"only {self.free_gb():.0f} GB free on the training drive (need {cfg.get('min_free_gb', 60)})")
         self.run_stage("train", self.train_round, cfg, plan)
         self.run_stage("convert", self.convert_round)
+        self.rescore_references(cfg)  # loop.yaml new_driver: the base and the best on the new driver first
         if cfg.get("valloss", True):
             self.run_stage("valloss", self.valloss)
         for kind, h in HELDOUT.items():
@@ -2166,8 +2388,7 @@ class Loop(fr.Controller):
         have = self.state.get("evalplus_base")
         if have and have.get("gpu_driver") == drv and os.path.exists(have["result"]):
             return self.read_json(have["result"]), have["result"]
-        d = os.path.join(self.dir, "rounds", "r000", "evalplus-base", "".join(
-            ch if ch.isalnum() or ch in "._-" else "_" for ch in drv))
+        d = os.path.join(self.dir, "rounds", "r000", "evalplus-base", driver_folder(drv))
         t0 = time.time()
         res = self.evalplus_pass(cfg, None, d, " base")
         path = os.path.join(d, "result.json")
@@ -2588,7 +2809,8 @@ class Loop(fr.Controller):
                 return "; ".join(out) or "-"
             result = r["status"] + (f" ({r['path']} path)" if r.get("path") else "") + (
                 f", not clearly better than round {r['vs_best']['best_round']}"
-                if r.get("vs_best") and not r["vs_best"].get("promoted") else "")
+                if r.get("vs_best") and not r["vs_best"].get("promoted") else "") + (
+                ", closed by loop.yaml close_round" if r.get("closed") else "")
             L.append(f"| {r['round']} | {r.get('recipe', r.get('name', '-'))} | {r.get('init', '-')} | {r.get('rows', '-')} | "
                      f"{r.get('gate', '-')} | {diff} | {p} | {lcell(r.get('swe_loss'))} | {lcell(r.get('term_loss'))} | "
                      f"{ncs} | {result} | {eps} | {gcell(r.get('guards'))} |")
@@ -2655,6 +2877,7 @@ def main():
             for name in guard_names(cfg):
                 if not os.path.exists(c.guard_file(cfg, name)):
                     raise Waiting(f"the {GUARDS[name]['label']} check is not built: run {GUARDS[name]['build']}")
+            c.close_round(cfg)
             c.rejudge_best(cfg)
             pause_after = int(cfg.get("pause_after_rejects_in_row") or 0)
             if pause_after and c.state["rejects_in_row"] >= pause_after:

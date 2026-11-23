@@ -114,6 +114,17 @@ rejudge_best: {round: 4, snapshot: results/loop/state.before-r004-finish.json}
 # rejudge_best (10 Nov 2026, once): round 3 (PC r004) became the best under the old rule on 10 Nov; it is judged again
 # against round 2 at a quarter strength (r003, the best in the copy of state.json made before its finish), and if it is
 # not clearly better, r003 is the best again and round 4 (r005), planned from r004 and not trained, is planned again.
+new_driver: {driver: "32.0.32029.2010"}
+# new_driver (23 Nov 2026, my call: "no roll back we do round six next i think round 5 is just worse"): the Windows 11
+# 26H2 update put graphics driver 32.0.32029.2010 on (rounds up to round 5 were scored on 32.0.32015.7029, which is no
+# longer on the PC). The loop moves to it instead of waiting, and before round 6 (r007) is tested, after its training,
+# the base (gate and non-coding check) and the best so far (round 4, r005: its gate pass and the held-out losses) are
+# answered again on it, into results/loop/rescore/32.0.32029.2010, so every comparison is on one driver. The no-worse
+# checks' base rows and EvalPlus's base answers already follow the driver.
+close_round: {round: 6, note: "My call on 23 Nov 2026: round 5 (retrained from the base on round 4's rows) is worse than round 4 (138 vs 145 of 200 on the gate, 22 won / 29 lost), so it ends as passed without its EvalPlus check or the check against round 4; its gate pass is on two drivers (43 answers on 32.0.32015.7029, 157 on 32.0.32029.2010)."}
+# close_round (23 Nov 2026, once): round 5 (r006), kept against the base on par on 21 Nov and stopped by the driver
+# change before EvalPlus, ends as passed where it stands: round 4 (r005) stays the best, its files stay, one more
+# reject in a row; it had no fresh rows, so nothing rolls forward.
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
 # (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the

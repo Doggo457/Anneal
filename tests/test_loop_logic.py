@@ -926,6 +926,8 @@ def setup_world(tmp):
     cfg["second_pass"] = "kept"  # a confirm pass for every kept round here; test_second_pass_only_when_worse covers worse
     cfg["new_best"] = "kept"  # every kept round is the new best here; test_best_so_far_rule covers clearly_better
     cfg.pop("rejudge_best", None)  # test_rejudge_best covers it
+    cfg.pop("new_driver", None)  # test_new_driver_and_close_round covers it
+    cfg.pop("close_round", None)  # the same
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -2235,6 +2237,151 @@ def _rejudge_best(tmp):
     assert run_main(args) == 0, status()
     assert done(4, "train") and rec(4)["status"] == "kept" and rec(4)["vs_best"]["promoted"]
     assert state()["best"]["round"] == 4 and state()["stack"] is None and state()["rejects_in_row"] == 0
+
+
+def test_new_driver_and_close_round():
+    """23 Nov 2026 (loop.yaml new_driver and close_round), as on the PC: my call "no roll back we do round six next i
+    think round 5 is just worse". r002 is the best; r003 is kept against the base on par and stopped before EvalPlus
+    (round 5 on the PC, stopped by the driver change). A new graphics driver waits until loop.yaml new_driver names it;
+    then the loop moves to it, close_round ends r003 as passed where it stands (r002 stays the best, r003's files stay,
+    its rows roll into r004), r004 trains from r002, and after r004's convert, before its held-out losses, the base
+    (gate and non-coding check) and the best (its gate pass and both held-out losses, base included) are answered again
+    on the new driver into results/loop/rescore, without writing the round folders. r004 is then judged on those answers
+    only: against the new base on decide, and clearly better than r002's new answers (not than its old ones)."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING)
+    before = world_patches()
+    real_milestone = L.Loop.milestone
+    try:
+        _new_driver_and_close_round(tmp, real_milestone)
+    finally:
+        L.Loop.milestone = real_milestone
+        L.llama.gpu_driver = _legacy_driver
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _tree_shas(d):
+    return {os.path.relpath(os.path.join(dp, f), d): hashlib.sha256(open(os.path.join(dp, f), "rb").read()).hexdigest()
+            for dp, _, fs in os.walk(d) for f in fs}
+
+
+def _new_driver_and_close_round(tmp, real_milestone):
+    import yaml
+    old, new = "32.0.32015.7029", "32.0.32029.2010"
+    L.llama.gpu_driver = lambda: old
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base", second_pass="worse", new_best="clearly_better")
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    has = lambda n, stage: os.path.exists(os.path.join(rd(n), "stages", f"{stage}.done.json"))  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    rec = lambda n: [r for r in state()["rounds"] if r["round"] == n][0]  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    half = lambda k: set(range(k)) | set(range(20, 20 + k))  # noqa: E731
+    PASSING.update({None: half(10), "r002": half(15), "r003": half(12), "r004": half(17), "r005": half(17)})
+    assert run_main(args) == 0, status()
+    assert state()["best"]["round"] == 2 and state()["gate_server"]["gpu_driver"] == old
+    old_base_swe = state()["base"]["swe_loss"]
+
+    def stop_before_evalplus(self, cfg):
+        raise L.Waiting("stopped before EvalPlus (the test's stand-in for the driver change)")
+    L.Loop.milestone = stop_before_evalplus
+    assert run_main(args) == 0, status()
+    assert status()["state"] == "waiting" and rec(3)["status"] == "running", status()
+    assert done(3, "decide")["keep"] and done(3, "decide")["path"] == "par" and has(3, "bfcl") and not has(3, "milestone")
+    L.Loop.milestone = real_milestone
+    n3 = sum(len(ix) for ix in done(3, "plan")["slices"].values())
+    # the new driver: the base's and round 2's answers change on it
+    L.llama.gpu_driver = lambda: new
+    PASSING.update({None: half(8), "r002": half(14)})
+    assert run_main(args) == 0
+    assert status()["state"] == "waiting" and f"graphics driver {new}" in status()["detail"], status()
+    assert rec(3)["status"] == "running" and state()["gate_server"]["gpu_driver"] == old
+    cfg = L.load_config(cpath)
+    cfg.update(new_driver={"driver": new}, close_round={"round": 3, "note": "my call: round 3 is worse"})
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    keep = {n: _tree_shas(rd(n)) for n in (0, 2)}
+    n_served, n_swe, n_term = len(w.served), len(w.swe_calls), len(w.term_calls)
+    assert run_main(args) == 0, status()
+    st = state()
+    # the driver: recorded, the old settings kept, the base and the best answered again once
+    assert st["gate_server"]["gpu_driver"] == new and st["gate_server_history"][-1]["gate_server"]["gpu_driver"] == old
+    assert st["rescore"]["driver"] == new and st["rescore"]["was"] == old and st["rescore"]["finished"], st["rescore"]
+    # round 3 closed as passed where it stood: files kept, rows rolled into round 4, one more reject in a row
+    r3 = rec(3)
+    assert r3["status"] == "passed" and r3["closed"]["note"] == "my call: round 3 is worse", r3
+    assert "bfcl" in r3["closed"]["stages_done"] and "milestone" not in r3["closed"]["stages_done"]
+    assert done(3, "finish")["closed"] and r3["gate"] == "24/40" and r3["path"] == "par" and r3["guards"]["bfcl"]
+    assert os.path.exists(os.path.join(rd(3), "train", "adapter", "adapter_config.json"))
+    report3 = open(os.path.join(rd(3), "report.md")).read()
+    assert "Passed its tests on par" in report3 and "## Closed as passed on" in report3, report3
+    assert "my call: round 3 is worse" in report3 and "Round 2 stays the best" in report3, report3
+    p4 = done(4, "plan")
+    assert p4["best_round"] == 2 and p4["init"] == "best" and sum(len(ix) for _, ix in p4["rolled"]) == n3, p4
+    # the order: round 4 trained and converted, then the base and the best answered again, then round 4's own tests
+    names = [nm for nm, _ in w.served[n_served:]]
+    assert names.index("r000-evaluate") < names.index("r002-evaluate") < names.index("r004-evaluate"), names
+    assert names.count("r000-evaluate") == 1 and names.count("r002-evaluate") == 1, names
+    assert w.swe_calls[n_swe:] == [("r002", False), ("r004", True)], w.swe_calls[n_swe:]
+    assert w.term_calls[n_term:] == [("r002", False), ("r004", True)], w.term_calls[n_term:]
+    r002_eval = [f for nm, f in w.served[n_served:] if nm == "r002-evaluate"][0]
+    assert r002_eval[r002_eval.index("--lora") + 1] == os.path.join(rd(2), "convert", "loop-r002-F16-LoRA.gguf")
+    # the references moved to the new answers, the old ones kept beside them; the round folders were never written
+    re0, re2 = (os.path.join(run_dir, "rescore", new, f"r{n:03d}") for n in (0, 2))
+    b = st["base"]
+    assert b["gate_rows"] == os.path.join(re0, "gate.seed1.jsonl") and b["noncoding_rows"] == os.path.join(re0, "noncoding.jsonl")
+    assert b["gpu_driver"] == new and b["before_driver"][old]["gate_rows"] == os.path.join(rd(0), "gate.seed1.jsonl")
+    assert b["swe_loss"] == {"path": os.path.join(re2, "sweloss", "summary.json"), "field": "base_loss",
+                             "sha": old_base_swe["sha"], "round": 0}, b["swe_loss"]
+    assert b["before_driver"][old]["swe_loss"] == old_base_swe
+    assert sum(r["pass"] for r in E.read_jsonl(b["gate_rows"])) == 16
+    assert not os.path.exists(os.path.join(re2, "noncoding.jsonl"))  # the best's gate only
+    assert rec(0)["rescored"][new]["gate"] == "16/40" and rec(2)["rescored"][new]["gate"] == ["seed 1 28/40"]
+    for n in (0, 2):
+        now = _tree_shas(rd(n))
+        assert all(now.get(k) == v for k, v in keep[n].items()), n
+    assert set(_tree_shas(rd(2))) == set(keep[2])
+    # round 4 judged on the new answers only: the new base on decide, round 2's new pass on the promotion check
+    d4 = done(4, "decide")
+    assert d4["gate"]["best"] == 0.4 and d4["gate"]["candidate"] == 0.85 and d4["keep"], d4["gate"]
+    vb = rec(4)["vs_best"]
+    assert vb["promoted"] and vb["path"] == "gate" and (vb["gate_best"], vb["wins"], vb["losses"]) == (0.7, 6, 0), vb
+    assert vb["losses_vs_best"]["swe"]["best"] == 1.02, vb  # round 2's loss from the rescore, not round 4's own run
+    assert st["best"]["round"] == 4 and st["rejects_in_row"] == 0 and st["stack"] is None
+    assert st["base_guards"]["bfcl"]["fingerprint"]["gpu_driver"] == new
+    assert st["evalplus_base"]["gpu_driver"] == new
+    assert "closed by loop.yaml close_round" in open(os.path.join(run_dir, "summary.md")).read()
+    # once: the next round answers nothing again and round 3 stays as it was closed
+    n_served = len(w.served)
+    assert run_main(args) == 0, status()
+    names = [nm for nm, _ in w.served[n_served:]]
+    assert "r000-evaluate" not in names and "r004-evaluate" not in names and "r005-evaluate" in names, names
+    assert state()["rescore"] == st["rescore"] and rec(3)["closed"] == r3["closed"]
+    # a round decide did not keep is never closed as passed
+    stub = types.SimpleNamespace(state={"rounds": [{"round": 9, "status": "running"}]}, dir=run_dir, rnum=None, rdir=None)
+    stub.enter_round = lambda n: L.Loop.enter_round(stub, n)
+    stub.done_path = lambda stage: L.Loop.done_path(stub, stage)
+    stub.done = lambda stage: (json.load(open(stub.done_path(stage))) if os.path.exists(stub.done_path(stage)) else None)
+    os.makedirs(os.path.join(rd(9), "stages"))
+    for stage, data in (("plan", {"recipe": {"id": "default"}, "slices": {}}), ("train", {}),
+                        ("evaluate", {"gate_pass": 1, "gate_n": 40}), ("decide", {"keep": False})):
+        json.dump(data, open(os.path.join(rd(9), "stages", f"{stage}.done.json"), "w"))
+    try:
+        L.Loop.close_round(stub, {"close_round": {"round": 9}})
+        raise AssertionError("a round decide rejected must not be closed as passed")
+    except L.Waiting as e:
+        assert "was not kept against the base" in str(e), e
+    assert stub.state["rounds"][0]["status"] == "running" and (stub.rnum, stub.rdir) == (None, None)
 
 
 def test_bfcl_harness():
