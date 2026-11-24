@@ -928,6 +928,8 @@ def setup_world(tmp):
     cfg.pop("rejudge_best", None)  # test_rejudge_best covers it
     cfg.pop("new_driver", None)  # test_new_driver_and_close_round covers it
     cfg.pop("close_round", None)  # the same
+    cfg["replay_all"] = False  # test_replay_all_and_replan_round covers it; the rounds here replay 25%
+    cfg.pop("replan_round", None)  # the same
     # the loop's mechanics on a fixed mix (85% / 5% / 10%); the live mix's other sources are still prepared, so their
     # command lines are checked (check_child_commands), but carry share 0 here
     sim_shares = {"tachibana4_v4pro": 0.85, "banaxi_v4pro": 0.05, "math_v4_aops": 0.10}
@@ -4046,3 +4048,112 @@ def main():
 if __name__ == "__main__":
     threading.excepthook = lambda a: None
     sys.exit(main())
+
+
+def test_replay_all_and_replan_round():
+    """24 Nov 2026 (loop.yaml replay_all and replan_round), as on the PC: my rule "it adds 1000 fresh rows onto the
+    current best rounds rows". r002 is the best; r003, planned on 100 fresh rows plus 25% replay of r002's rows, is
+    paused in training. With replay_all and replan_round (extra_fresh_rows 50, my 24 Nov "add in 3000 more" for round
+    6), r003 keeps its fresh rows, draws 50 more at the usual mix, takes every row r002 was built from, its plan, data and
+    training so far are set aside (renamed), and it trains again from r002's adapter from the start on all of them. A
+    stop right after the draw doesn't draw again. Once only. The next round (r004, after r003) plans its own 100 fresh
+    rows and every row of the best."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    before = world_patches()
+    try:
+        _replay_all_and_replan_round(tmp)
+    finally:
+        restore_world(before)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _replay_all_and_replan_round(tmp):
+    import yaml
+    w, cpath = setup_world(tmp)  # r003 pauses once in training
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "2"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    n_rows = lambda parts: sum(len(ix) for _, ix in parts)  # noqa: E731
+    flat = lambda parts: sorted((n, i) for n, ix in parts for i in ix)  # noqa: E731
+    assert run_main(args) == 0
+    assert json.load(open(os.path.join(run_dir, "status.json")))["state"] == "paused"
+    st0 = state()
+    assert [r["status"] for r in st0["rounds"]] == ["reference", "record", "kept", "running"], st0["rounds"]
+    plan3 = done(3, "plan")
+    lineage2 = st0["best"]["lineage"]
+    assert st0["best"]["round"] == 2 and n_rows(lineage2) == 100
+    assert n_rows(plan3["replay"]) == 25 and plan3["rows"] == 125
+    assert os.path.isdir(os.path.join(rd(3), "train", "checkpoints", "checkpoint-10"))
+    used = open(os.path.join(run_dir, "used_keys.txt")).read()
+    cfg = L.load_config(cpath)
+    cfg.update(replay_all=True, replan_round={"round": 3, "extra_fresh_rows": 50, "note": "my call: all of round 2's rows"})
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    n_train = len([c for s, c in w.calls if s == "train_longrun.py"])
+    # a stop right after the 50 extra rows are drawn, before they join r003's plan
+    real_plan = L.Loop.plan
+
+    def plan_then_stop(self, cfg):
+        out = real_plan(self, cfg)
+        L.Loop.plan = real_plan
+        raise fr.Paused()
+    L.Loop.plan = plan_then_stop
+    try:
+        assert run_main(args) == 0
+    finally:
+        L.Loop.plan = real_plan
+    assert json.load(open(os.path.join(run_dir, "status.json")))["state"] == "paused"
+    mid = state()
+    assert mid["replanned"]["3"]["phase"] == "drawing" and not done(3, "plan").get("replanned")
+    drawn = done(3, "plan")["slices"]
+    assert sum(len(v) for v in drawn.values()) == 50 and not set(flat(list(drawn.items()))) & set(flat(list(plan3["slices"].items())))
+    offsets_mid = mid["offsets"]
+    assert run_main(args) == 0, open(os.path.join(run_dir, "status.json")).read()
+    st = state()
+    p3 = done(3, "plan")
+    # r003: its 100 fresh rows plus the 50 drawn, every row of r002 replayed, 250 rows; trained again from the start
+    want = {k: list(v) for k, v in plan3["slices"].items()}
+    for k, v in drawn.items():
+        want.setdefault(k, []).extend(v)
+    assert p3["slices"] == want and p3["rolled"] == plan3["rolled"] == [] and p3["lineage"] == []
+    assert p3["replanned"]["fresh_added"] == {k: len(v) for k, v in drawn.items()}
+    assert [r for r in st["rounds"] if r["round"] == 3][0]["status"] != "running"
+    assert flat(p3["replay"]) == flat(lineage2) and p3["rows"] == 250, p3
+    assert p3["init"] == "best" and p3["init_adapter"] == plan3["init_adapter"] and p3["best_round"] == 2
+    assert p3["replanned"]["rows_before"] == 125 and p3["replanned"]["replay_before"] == 25
+    assert all(offsets_mid.get(k) == v for k, v in st["offsets"].items() if k not in done(4, "plan")["slices"])
+    tag = p3["replanned"]["set_aside"]
+    for stale in (f"stages/plan{tag}.json", f"stages/data{tag}.json", f"data{tag}", f"train{tag}", f"train{tag}.yaml"):
+        assert os.path.exists(os.path.join(rd(3), *stale.split("/"))), stale
+    assert json.load(open(os.path.join(rd(3), "stages", f"plan{tag}.json")))["rows"] == 125
+    assert os.path.isdir(os.path.join(rd(3), f"train{tag}", "checkpoints", "checkpoint-10"))
+    assert not os.path.isdir(os.path.join(rd(3), "train", "checkpoints", "checkpoint-10"))  # trained from the start
+    assert done(3, "data")["train_rows"] == 250 and done(3, "train")["rows"] == 250
+    trains = [c for s, c in w.calls if s == "train_longrun.py"][n_train:]
+    y3 = yaml.safe_load(open(os.path.join(rd(3), "train.yaml")))
+    assert y3["init_adapter"].endswith("r002/train/adapter") and len(trains) >= 1
+    assert st["replanned"]["3"]["rows"] == 250 and st["replanned"]["3"]["replay"] == 100
+    assert st["replanned"]["3"]["fresh"] == 150 and "phase" not in st["replanned"]["3"]
+    # the pools gave no new rows to r003, and r004 took its own fresh rows after r003's
+    assert used == open(os.path.join(run_dir, "used_keys.txt")).read()[:len(used)]
+    r3 = [r for r in st["rounds"] if r["round"] == 3][0]
+    assert r3["rows"] == 250 and r3["status"] in ("kept", "rejected", "passed"), r3
+    # r004: every row of the best (whichever it is now) plus its fresh and rolled-forward rows
+    p4 = done(4, "plan")
+    best4 = [r for r in st["rounds"] if r["round"] == p4["best_round"]][0]
+    lin = st0["best"]["lineage"] if p4["best_round"] == 2 else None
+    if lin is not None:
+        assert flat(p4["replay"]) == flat(lin), p4
+    assert sum(len(ix) for ix in p4["slices"].values()) == 100  # extra_fresh_rows was for r003 only
+    assert not set(flat(list(p4["slices"].items()))) & set(flat(list(p3["slices"].items())))
+    n4 = sum(len(ix) for ix in p4["slices"].values()) + n_rows(p4["rolled"])
+    assert p4["rows"] == n4 + n_rows(p4["replay"]) and n_rows(p4["replay"]) >= 100, (p4, best4)
+    # once: a third call doesn't plan r003 again
+    plan3_now = done(3, "plan")
+    cfg = L.load_config(cpath)
+    cfg["replan_round"] = {"round": 3, "note": "again"}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_main(args)
+    assert done(3, "plan") == plan3_now and list(state()["replanned"]) == ["3"]

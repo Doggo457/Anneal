@@ -21,7 +21,8 @@ Rounds (results/loop/rounds/rNNN):
                Data: the next unused rows of each public source pool, split at a fixed ratio: when a source runs out
                the round shrinks (others in its `group` stand in) rather than other sources taking its share. A round
                that continues the best adapter also mixes back in `replay_fraction` x (new rows) of the rows the best
-               was built from (19 Oct 2026: kept rows carry forward).
+               was built from (19 Oct 2026: kept rows carry forward), or, with `replay_all` (24 Nov 2026), every row
+               the best was built from that meets its source's min_think_tokens.
                Rejected rows roll forward (research/growing-data-rounds.md): a rejected round's new rows join the next
                round that draws from the default sources (the same best, plus fresh rows), up to `stack_max_new_rows`
                new rows; a reject at the cap drops the stack for good. On 495 problems a real 2-point gain is kept
@@ -131,6 +132,13 @@ is on one driver. The no-worse checks' base rows and EvalPlus's base answers alr
 fingerprint, evalplus_base). loop.yaml close_round: {round: N, note: why} ends round N, kept against the base and not
 finished, as passed where it stands (no more checks): the best stays, its files stay, its new rows roll forward, one
 more reject in a row.
+
+All of the best's rows every round (24 Nov 2026), my rule: "it adds 1000 fresh rows onto the current best rounds rows".
+loop.yaml replay_all: true: a round that continues the best adapter trains on every row the best was built from (those
+that meet their source's min_think_tokens, as replayed rows always have) plus its 1,000 fresh rows and any rolled-forward
+rows, instead of 25% replay. loop.yaml replan_round: {round: N, note: why} plans round N again under it once, if it
+continues the best and has not finished training: its fresh and rolled-forward rows stay, the best's rows are taken
+again, and its plan, data and training so far are set aside (renamed .stale-TIME) so it trains again from the start.
 
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
@@ -723,6 +731,21 @@ def pick_replay(lineage, n, seed):
         if k in pick:
             out.setdefault(name, []).append(i)
     return [[name, idx] for name, idx in out.items()]
+
+
+def replay_all(cfg, recipe):
+    """loop.yaml replay_all (24 Nov 2026, my rule): a round that continues the best adapter trains on every row the
+    best was built from (those that meet their source's min_think_tokens) instead of replay_fraction x its new rows.
+    A recipe can set its own."""
+    return bool(recipe.get("replay_all", cfg.get("replay_all", False)))
+
+
+def replay_count(cfg, recipe, pool, n_new):
+    """How many of the best's rows (pool: its lineage rows that meet min_think_tokens) a round continuing it replays."""
+    if replay_all(cfg, recipe):
+        return sum(len(ix) for _, ix in pool)
+    frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
+    return int(round(frac * n_new))
 
 
 def choose_init(recipe, best, train_cfg):
@@ -1473,6 +1496,122 @@ class Loop(fr.Controller):
         finally:
             self.rnum, self.rdir = saved
 
+    def replan_round(self, cfg):
+        """loop.yaml replan_round (24 Nov 2026): {round: N, note: why, extra_fresh_rows: K}. Round N, planned to continue
+        the best and not trained to the end, keeps its fresh and rolled-forward rows, draws K more fresh rows from the
+        pools at the usual mix and rules (as a round of K rows would: a short group shrinks the draw), and takes the
+        best's rows again under the replay rules now in loop.yaml (replay_all: every row the best was built from). Its
+        plan, data and training so far are set aside (renamed .stale-TIME, never deleted), so it builds its data and
+        trains again from the start. Once (state["replanned"]); resumable: the old plan is set aside and recorded
+        before any rows are drawn, and the draw is never repeated."""
+        rp = cfg.get("replan_round")
+        if not rp:
+            return
+        n = int(rp["round"])
+        extra = int(rp.get("extra_fresh_rows") or 0)
+        done_log = self.state.setdefault("replanned", {})
+        entry = done_log.get(str(n))
+        rec = next((r for r in self.state["rounds"] if r["round"] == n), None)
+        if (entry and entry.get("phase") != "drawing") or rec is None or rec.get("status") != "running":
+            return
+        saved = self.rnum, self.rdir
+        self.enter_round(n)
+        try:
+            best = self.state["best"]
+            if entry is None:
+                plan = self.done("plan")
+                if plan is None:
+                    return  # not planned yet: its plan follows loop.yaml as it is
+                if self.done("train") is not None:
+                    raise Waiting(f"loop.yaml replan_round: round {n} has finished training, so it can't be planned "
+                                  "again")
+                if plan.get("init") != "best" or plan.get("adopted_from") or plan.get("best_round") != best["round"]:
+                    raise Waiting(f"loop.yaml replan_round: round {n} does not continue the best (round "
+                                  f"{best['round']}), so it can't be planned again this way")
+                cfg_x = self.extra_rows_cfg(cfg, extra)
+                if extra and pick_recipe(cfg_x, self.state)["id"] != plan["recipe"]["id"]:
+                    raise Waiting(f"loop.yaml replan_round: round {n}'s recipe {plan['recipe']['id']} is not the one "
+                                  "the loop would plan now, so no rows are added to it")
+                tag = time.strftime("%Y%m%d-%H%M%S")
+                old_path = self.done_path("plan")[:-len(".done.json")] + f".stale-{tag}.json"
+                os.replace(self.done_path("plan"), old_path)
+                if os.path.exists(self.done_path("data")):
+                    os.replace(self.done_path("data"), self.done_path("data")[:-len(".done.json")] + f".stale-{tag}.json")
+                for sub in ("data", "train"):
+                    d = os.path.join(self.rdir, sub)
+                    if os.path.isdir(d):
+                        os.replace(d, f"{d}.stale-{tag}")
+                ty = os.path.join(self.rdir, "train.yaml")
+                if os.path.exists(ty):
+                    os.replace(ty, os.path.join(self.rdir, f"train.stale-{tag}.yaml"))
+                entry = {"phase": "drawing", "old_plan": old_path, "set_aside": f".stale-{tag}"}
+                done_log[str(n)] = entry
+                self.save()
+            plan = self.read_json(entry["old_plan"])
+            cur = self.done("plan")
+            if cur is not None and cur.get("replanned"):
+                new = cur  # merged before a stop: only the record is left to write
+            else:
+                slices = {k: list(v) for k, v in plan["slices"].items()}
+                if extra:
+                    if cur is not None:
+                        fresh = cur  # drawn before a stop
+                    else:
+                        stack = self.state.get("stack")
+                        self.state["stack"] = None  # rolled-forward rows are in the old plan already, or stay for later
+                        try:
+                            fresh = self.plan(self.extra_rows_cfg(cfg, extra))
+                        finally:
+                            self.state["stack"] = stack
+                            self.save()
+                    for k, v in fresh["slices"].items():
+                        slices.setdefault(k, []).extend(v)
+                    added = {k: len(v) for k, v in fresh["slices"].items()}
+                else:
+                    added = {}
+                srcs = {s["name"]: s for s in cfg.get("sources") or []}
+                cache = {}
+
+                def index(name):
+                    if name not in cache:
+                        cache[name] = think_index(os.path.join(POOLS, name))
+                    return cache[name]
+
+                n_new = sum(len(ix) for ix in slices.values()) + sum(len(ix) for _, ix in plan.get("rolled") or [])
+                pool, dropped = filter_rolled(best["lineage"], srcs, index)
+                replay = pick_replay(pool, replay_count(cfg, plan["recipe"], pool, n_new), n)
+                rows = n_new + sum(len(ix) for _, ix in plan.get("lineage") or []) + sum(len(ix) for _, ix in replay)
+                new = dict({k: v for k, v in plan.items() if k != "finished"}, slices=slices, replay=replay,
+                           replay_dropped=dropped, rows=rows,
+                           replanned={"time": time.strftime("%Y-%m-%d %H:%M:%S"), "note": str(rp.get("note") or "").strip(),
+                                      "rows_before": plan.get("rows"), "fresh_added": added,
+                                      "replay_before": sum(len(ix) for _, ix in plan.get("replay") or []),
+                                      "set_aside": entry["set_aside"]})
+                self.mark_done("plan", new)
+            r = new["replanned"]
+            n_fresh = sum(len(ix) for ix in new["slices"].values())
+            n_replay = sum(len(ix) for _, ix in new["replay"])
+            done_log[str(n)] = {"time": r["time"], "rows_before": r["rows_before"], "rows": new["rows"],
+                                "fresh": n_fresh, "fresh_added": r["fresh_added"], "replay": n_replay,
+                                "set_aside": r["set_aside"]}
+            rec["rows"] = new["rows"]
+            self.save()
+            self.log(f"loop.yaml replan_round: round {n} planned again: {n_fresh} fresh rows ("
+                     f"{sum(r['fresh_added'].values())} added: {r['fresh_added']}), {n_replay} of the best's (round "
+                     f"{best['round']}) rows replayed, {new['rows']} rows in all (was {r['rows_before']}); its plan, "
+                     f"data and training so far set aside ({r['set_aside']})" + (f" ({r['note']})" if r["note"] else ""))
+        finally:
+            self.rnum, self.rdir = saved
+
+    @staticmethod
+    def extra_rows_cfg(cfg, extra):
+        """loop.yaml as a round of `extra` fresh rows would see it (replan_round): no when_pools_short recipe, so a
+        short pool shrinks the draw or waits instead of switching recipe."""
+        out = copy.deepcopy(cfg)
+        out["rows_per_round"] = int(extra)
+        out["recipes"] = [r for r in out.get("recipes") or [] if not r.get("when_pools_short")]
+        return out
+
     def slot_room_check(self, url, cfg, sets):
         """Each gate server slot holds gate_ctx / slots tokens: the longest prompts of each set (label,
         items, max_tokens) with a whole answer must fit, or long answers would be cut short. Raises Waiting."""
@@ -2008,11 +2147,10 @@ class Loop(fr.Controller):
         if rolled_dropped:
             self.log(f"rolled-forward rows under their source's min_think_tokens left out: {rolled_dropped}")
         n_rolled = sum(len(ix) for _, ix in rolled)
-        frac = float(recipe.get("replay_fraction", cfg.get("replay_fraction", 0)) or 0)
         replay, replay_dropped = [], {}
         if init == "best":  # replayed rows meet their source's min_think_tokens too, like rolled-forward rows
             pool, replay_dropped = filter_rolled(best["lineage"], srcs, index)
-            replay = pick_replay(pool, int(round(frac * (n_new + n_rolled))), self.rnum)
+            replay = pick_replay(pool, replay_count(cfg, recipe, pool, n_new + n_rolled), self.rnum)
             if replay_dropped:
                 self.log(f"rows of the best's lineage under their source's min_think_tokens, never replayed: "
                          f"{replay_dropped}")
@@ -2878,6 +3016,7 @@ def main():
                 if not os.path.exists(c.guard_file(cfg, name)):
                     raise Waiting(f"the {GUARDS[name]['label']} check is not built: run {GUARDS[name]['build']}")
             c.close_round(cfg)
+            c.replan_round(cfg)
             c.rejudge_best(cfg)
             pause_after = int(cfg.get("pause_after_rejects_in_row") or 0)
             if pause_after and c.state["rejects_in_row"] >= pause_after:

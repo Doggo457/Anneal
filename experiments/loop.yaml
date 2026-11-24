@@ -8,13 +8,17 @@ score_first_run: false     # 21 Oct 2026: off. Round 1 would score the first run
 first_run_dir: C:/AI/training/results/first-run
 
 rows_per_round: 1000       # fresh rows per round, split by the sources' shares
-replay_fraction: 0.25      # a round that continues the best adapter also re-trains on 0.25 x 1,000 rows the best was
-                           # built from (19 Oct: kept rows carry forward). LR re-warm + re-decay + replay matched
+replay_fraction: 0.25      # rounds 3 to 5: a round that continues the best adapter also re-trained on 0.25 x 1,000 rows the
+                           # best was built from (19 Oct: kept rows carry forward). LR re-warm + re-decay + replay matched
                            # re-training on all data within 0.02 val loss at 405M and 10B; 25% for a strong shift
-                           # (Ibrahim et al., TMLR 2024, arXiv 2403.08763). Recipes can override it.
+                           # (Ibrahim et al., TMLR 2024, arXiv 2403.08763). Not used while replay_all is on.
+replay_all: true           # 24 Nov 2026, my rule from round 6 (PC r007) on: "it adds 1000 fresh rows onto the current best
+                           # rounds rows". A round that continues the best adapter trains on every row the best was built
+                           # from (those meeting their source's min_think_tokens) plus 1,000 fresh rows and any
+                           # rolled-forward rows. Recipes can override it.
 min_rows_per_round: 300    # fewer unused rows than this at the configured mix: the loop waits for new sources
 stack_max_new_rows: 3000   # rejected rows roll forward (research/growing-data-rounds.md): a rejected round's new rows join
-                           # the next default-source round (same best adapter + 1,000 fresh rows + 25% replay), up to
+                           # the next default-source round (same best adapter + 1,000 fresh rows + the best's rows), up to
                            # 3,000 new rows; a reject at 3,000 drops them for good. On 495 problems a real 2-point gain
                            # is kept only 24-44% of the time, so a reject mostly means "too small to see". 0 = off.
 val_rows_per_source: 50
@@ -125,6 +129,11 @@ close_round: {round: 6, note: "My call on 23 Nov 2026: round 5 (retrained from t
 # close_round (23 Nov 2026, once): round 5 (r006), kept against the base on par on 21 Nov and stopped by the driver
 # change before EvalPlus, ends as passed where it stands: round 4 (r005) stays the best, its files stay, one more
 # reject in a row; it had no fresh rows, so nothing rolls forward.
+replan_round: {round: 7, extra_fresh_rows: 3000, note: "My call on 24 Nov 2026: round 6 trains on all of round 4's rows plus 4,000 fresh rows (its 1,000 and 3,000 more, a one-off big-data round), not 1,000 fresh plus 250 replayed."}
+# replan_round (24 Nov 2026, once): round 6 (r007) started on 23 Nov on 1,000 fresh rows plus 250 of round 4's rows. It
+# keeps its 1,000 fresh rows, draws 3,000 more at the usual mix and rules (round 6 only; later rounds take 1,000), takes
+# every row round 4 was built from (replay_all), and trains again from round 4's adapter from the start (its first plan,
+# data and training renamed .stale-TIME).
 # Keep rule (anneal/evalsets.py decide). Gate path: gate higher, one-sided sign test p <= alpha. Loss path (loss_rule,
 # 21 Oct 2026): gate not lower and the loss on the held-out bug-fix steps (swe_loss) or on the held-out terminal steps
 # (term_loss) lower on more steps than chance, p <= loss_alpha after a Holm adjustment across the two sets (so the
@@ -402,6 +411,6 @@ recipes:
 default_recipe:
   id: default
   note: >-
-    next fresh rows at the configured mix (+ rows rolled forward from rejected rounds) plus 25% as many of the best's
-    earlier rows, continuing the best adapter
+    next fresh rows at the configured mix (+ rows rolled forward from rejected rounds) plus the best's earlier rows
+    (every one of them under replay_all from 24 Nov 2026; 25% as many before), continuing the best adapter
   init: best
