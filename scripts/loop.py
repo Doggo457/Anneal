@@ -149,9 +149,11 @@ again, and its plan, data and training so far are set aside (renamed .stale-TIME
 
 Every stage leaves rNNN/stages/STAGE.done.json and is skipped after that; stages resume inside (training from its
 checkpoint, scoring by problem). STOP (the Training page's Pause) stops cleanly. A stage that fails is retried once
-with a fresh server; a round that fails 3 times is marked failed and the loop moves to the next round. When there are
-not enough unused rows, or too little disk, the loop ends with state "waiting" and the watchdog starts it again
-after experiments/loop.yaml changes.
+with a fresh server; a round that fails 3 times in a row with no progress in between (no stage finished, no newer
+training checkpoint) is marked failed and the loop moves to the next round. Until 26 Nov 2026 any 3 failures counted:
+round 6 (r007) was ended that way at step 176 of 824 by errors days apart while its training was still moving, and the
+loop started round 7 on its own. When there are not enough unused rows, or too little disk, the loop ends with state
+"waiting" and the watchdog starts it again after experiments/loop.yaml changes.
 
   loop.py [--run-dir results/loop] [--resume] [--prepare-only] [--max-rounds N]
 """
@@ -2031,10 +2033,22 @@ class Loop(fr.Controller):
         except (fr.Paused, Waiting):
             raise
         except BaseException as exc:
+            mark = self.progress_mark()
+            if rec.get("failed_at") is not None and rec["failed_at"] != mark:
+                rec["failures"] = 0  # it got further since its last failure: count from here (26 Nov 2026)
             rec["failures"] = rec.get("failures", 0) + 1
+            rec["failed_at"] = mark
             rec["last_error"] = f"{type(exc).__name__}: {exc}"
             self.save()
             raise
+
+    def progress_mark(self):
+        """How far this round has got: [stages finished, newest training checkpoint step]. A failure counts towards
+        MAX_ROUND_FAILURES only while this stays the same."""
+        ck = os.path.join(self.rdir, "train", "checkpoints")
+        steps = [int(d.split("-")[1]) for d in (os.listdir(ck) if os.path.isdir(ck) else [])
+                 if d.startswith("checkpoint-") and d.split("-")[1].isdigit()]
+        return [sum(1 for s in ROUND_STAGES if self.done(s) is not None), max(steps) if steps else 0]
 
     def _training_round(self, cfg, rec):
         old = self.done("plan")

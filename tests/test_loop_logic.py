@@ -2387,6 +2387,48 @@ def _new_driver_and_close_round(tmp, real_milestone):
     assert stub.state["rounds"][0]["status"] == "running" and (stub.rnum, stub.rdir) == (None, None)
 
 
+def test_failures_count_only_without_progress():
+    """26 Nov 2026: round 6 (r007) was ended as failed at step 176 of 824 by three errors days apart while its training
+    still moved on. A failure now counts towards MAX_ROUND_FAILURES only if no stage finished and no newer training
+    checkpoint appeared since the last one."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    try:
+        c = object.__new__(L.Loop)
+        c.dir, c.state = tmp, {"rounds": [], "recipes_done": []}
+        c.save = c.write_summary = lambda: None
+        errors = []
+
+        def fail(cfg, rec):
+            errors.append(1)
+            raise OSError("[WinError 1450] Insufficient system resources exist to complete the requested service")
+        c._training_round = fail
+
+        def attempt():
+            try:
+                c.training_round({})
+            except OSError:
+                return True
+            return False
+
+        def checkpoint(n):
+            os.makedirs(os.path.join(c.rdir, "train", "checkpoints", f"checkpoint-{n}"))
+
+        assert attempt()
+        rec = c.state["rounds"][0]
+        assert rec["failures"] == 1 and rec["failed_at"] == [0, 0]
+        checkpoint(170)  # training got further: the count starts again
+        assert attempt() and rec["failures"] == 1 and rec["failed_at"] == [0, 170]
+        checkpoint(172)
+        assert attempt() and rec["failures"] == 1
+        assert attempt() and rec["failures"] == 2  # no progress since
+        L.write_json(os.path.join(c.rdir, "stages", "plan.done.json"), {})  # a stage finished: progress too
+        assert attempt() and rec["failures"] == 1 and rec["failed_at"] == [1, 172]
+        assert attempt() and attempt() and rec["failures"] == 3
+        assert not attempt() and rec["status"] == "failed" and len(errors) == 7  # 3 in a row with no progress: ended
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_driver_back():
     """26 Nov 2026 (loop.yaml driver_back), as on the PC: my call "the amd drivers crashed we need to revert to a
     working version". The loop moved to a new graphics driver under new_driver at the top of round 3 and was paused in
