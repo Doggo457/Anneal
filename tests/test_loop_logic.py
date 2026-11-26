@@ -927,6 +927,7 @@ def setup_world(tmp):
     cfg["new_best"] = "kept"  # every kept round is the new best here; test_best_so_far_rule covers clearly_better
     cfg.pop("rejudge_best", None)  # test_rejudge_best covers it
     cfg.pop("new_driver", None)  # test_new_driver_and_close_round covers it
+    cfg.pop("driver_back", None)  # test_driver_back covers it
     cfg.pop("close_round", None)  # the same
     cfg["replay_all"] = False  # test_replay_all_and_replan_round covers it; the rounds here replay 25%
     cfg.pop("replan_round", None)  # the same
@@ -2384,6 +2385,99 @@ def _new_driver_and_close_round(tmp, real_milestone):
     except L.Waiting as e:
         assert "was not kept against the base" in str(e), e
     assert stub.state["rounds"][0]["status"] == "running" and (stub.rnum, stub.rdir) == (None, None)
+
+
+def test_driver_back():
+    """26 Nov 2026 (loop.yaml driver_back), as on the PC: my call "the amd drivers crashed we need to revert to a
+    working version". The loop moved to a new graphics driver under new_driver at the top of round 3 and was paused in
+    round 3's training, before anything was answered on it. Back on the old driver it waits until loop.yaml driver_back
+    names the old driver; then the move is undone (the old settings recorded again, the pending answers-again dropped)
+    and round 3 is tested against the base's and round 2's own answers, with nothing answered again."""
+    tmp = tempfile.mkdtemp(prefix="anneal-loop-test-")
+    saved = dict(PASSING)
+    before = world_patches()
+    try:
+        _driver_back(tmp)
+    finally:
+        L.llama.gpu_driver = _legacy_driver
+        restore_world(before)
+        PASSING.clear()
+        PASSING.update(saved)
+        restore_polyglot()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _driver_back(tmp):
+    import yaml
+    old, new = "32.0.32015.7029", "32.0.32029.2010"
+    L.llama.gpu_driver = lambda: old
+    w, cpath = setup_world(tmp)
+    w.pause_train_once = set()
+    cfg = L.load_config(cpath)
+    cfg.update(score_first_run=False, compare_to="base", second_pass="worse", new_best="clearly_better")
+    cfg["rules"].update(par_rule=True, gate_tolerance=0.05)
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    run_dir = os.path.join(tmp, "results", "loop")
+    args = ["--config", cpath, "--run-dir", run_dir, "--max-rounds", "1"]
+    rd = lambda n: os.path.join(run_dir, "rounds", f"r{n:03d}")  # noqa: E731
+    done = lambda n, stage: json.load(open(os.path.join(rd(n), "stages", f"{stage}.done.json")))  # noqa: E731
+    state = lambda: json.load(open(os.path.join(run_dir, "state.json")))  # noqa: E731
+    status = lambda: json.load(open(os.path.join(run_dir, "status.json")))  # noqa: E731
+    half = lambda k: set(range(k)) | set(range(20, 20 + k))  # noqa: E731
+    PASSING.update({None: half(10), "r002": half(15), "r003": half(17)})
+    assert run_main(args) == 0, status()
+    first = state()
+    assert first["best"]["round"] == 2 and first["gate_server"]["gpu_driver"] == old
+    # the new driver, accepted under new_driver; round 3 paused in its training, nothing answered on the new driver
+    L.llama.gpu_driver = lambda: new
+    cfg = L.load_config(cpath)
+    cfg["new_driver"] = {"driver": new}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    w.pause_train_once = {"loop-r003"}
+    assert run_main(args) == 0, status()
+    st = state()
+    assert status()["state"] == "paused" and st["gate_server"]["gpu_driver"] == new, status()
+    assert st["rescore"]["driver"] == new and not st["rescore"].get("finished")
+    # back on the old driver: new_driver does not name it, so the loop waits and changes nothing
+    L.llama.gpu_driver = lambda: old
+    assert run_main(args) == 0, status()
+    assert status()["state"] == "waiting" and f"graphics driver {old}" in status()["detail"], status()
+    assert state()["gate_server"]["gpu_driver"] == new and state()["rescore"] == st["rescore"]
+    # driver_back names it: the move is undone and round 3 is tested on the old answers
+    cfg = L.load_config(cpath)
+    cfg.pop("new_driver")
+    cfg["driver_back"] = {"driver": old}
+    yaml.safe_dump(cfg, open(cpath, "w", encoding="utf-8"), sort_keys=False)
+    n_served = len(w.served)
+    assert run_main(args) == 0, status()
+    st = state()
+    assert st["gate_server"]["gpu_driver"] == old and "rescore" not in st
+    assert st["gate_server_history"][-1]["gate_server"]["gpu_driver"] == new
+    gone = st["rescore_cancelled"][-1]
+    assert (gone["driver"], gone["was"], gone["back_to"]) == (new, old, old) and gone["cancelled"], gone
+    names = [nm for nm, _ in w.served[n_served:]]
+    assert "r000-evaluate" not in names and "r002-evaluate" not in names and "r003-evaluate" in names, names
+    assert not os.path.exists(os.path.join(run_dir, "rescore"))
+    assert st["base"] == first["base"] and "before_driver" not in st["base"]
+    assert done(3, "decide")["gate"]["best"] == 0.5, done(3, "decide")["gate"]
+    # once: a later run does nothing more about the driver
+    again = state()
+    assert run_main(args) == 0, status()
+    assert state()["gate_server_history"] == again["gate_server_history"]
+    assert state()["rescore_cancelled"] == again["rescore_cancelled"]
+    # answers already written on the new driver: wait rather than drop them
+    stub = types.SimpleNamespace(dir=tmp, log=lambda m: None, state={
+        "rescore": {"driver": new, "was": old, "since": "x"},
+        "gate_server_history": [{"until": "x", "gate_server": dict(st["gate_server"])}]})
+    os.makedirs(os.path.join(tmp, "rescore", new, "r000"))
+    open(os.path.join(tmp, "rescore", new, "r000", "gate.seed1.jsonl"), "w").write("{}\n")
+    try:
+        L.Loop.restore_driver(stub, {"driver_back": {"driver": old}}, dict(st["gate_server"], gpu_driver=new),
+                              dict(st["gate_server"]))
+        raise AssertionError("answers on the new driver must not be dropped")
+    except L.Waiting as e:
+        assert "set them aside first" in str(e), e
+    assert stub.state["rescore"]["driver"] == new
 
 
 def test_bfcl_harness():

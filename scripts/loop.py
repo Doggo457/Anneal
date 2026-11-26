@@ -133,6 +133,13 @@ fingerprint, evalplus_base). loop.yaml close_round: {round: N, note: why} ends r
 finished, as passed where it stands (no more checks): the best stays, its files stay, its new rows roll forward, one
 more reject in a row.
 
+Back to the old driver (26 Nov 2026), my call: "the amd drivers crashed we need to revert to a working version".
+loop.yaml driver_back: {driver: X} undoes a new_driver move once the PC is back on X, the driver of the settings
+recorded before that move, as long as nothing has been answered on the new driver yet: those settings are recorded
+again (the new driver's go in state["gate_server_history"]), the pending answers-again are dropped (kept in
+state["rescore_cancelled"]), and the base's and the best's own answers stay the references. With answers on the new
+driver already written it waits instead.
+
 All of the best's rows every round (24 Nov 2026), my rule: "it adds 1000 fresh rows onto the current best rounds rows".
 loop.yaml replay_all: true: a round that continues the best adapter trains on every row the best was built from (those
 that meet their source's min_think_tokens, as replayed rows always have) plus its 1,000 fresh rows and any rolled-forward
@@ -1273,7 +1280,7 @@ class Loop(fr.Controller):
         else:
             known = dict(GATE_SERVER_ADDED, **known)
         diff = [k for k in want if known.get(k) != want[k] and k not in BATCH_ONLY]
-        if diff == ["gpu_driver"] and self.accept_new_driver(cfg, known, want):
+        if diff == ["gpu_driver"] and (self.restore_driver(cfg, known, want) or self.accept_new_driver(cfg, known, want)):
             diff = []
         if diff:
             raise Waiting(f"experiments/loop.yaml and this PC ask for a gate server with "
@@ -1311,6 +1318,37 @@ class Loop(fr.Controller):
         self.state["rescore"] = {"driver": drv, "was": known.get("gpu_driver"), "since": now}
         self.log(f"loop.yaml new_driver: graphics driver {drv} from now on (was {known.get('gpu_driver')}); the base and "
                  "the best so far are answered again on it before the next round is tested")
+        return True
+
+    def restore_driver(self, cfg, known, want):
+        """loop.yaml driver_back (26 Nov 2026): {driver: X}. Undoes a new_driver move when the PC is back on X, the
+        driver of the gate server settings recorded before it (the last state["gate_server_history"] entry), with every
+        other setting as it was then, and the answers-again it asked for (state["rescore"]) not started: nothing under
+        results/loop/rescore/NEW. Those settings are recorded again by require_gate_server, the new driver's go in
+        state["gate_server_history"], and state["rescore"] moves to state["rescore_cancelled"], so the base's and the
+        best's own answers stay the references. Raises Waiting when answers on the new driver exist. True when undone."""
+        back = cfg.get("driver_back") or {}
+        drv = want.get("gpu_driver")
+        rs = self.state.get("rescore")
+        hist = self.state.get("gate_server_history")
+        if not back or not drv or str(back.get("driver")) != str(drv) or known.get("gpu_driver") == drv:
+            return False
+        if not rs or rs.get("finished") or str(rs.get("was")) != str(drv) or not hist:
+            return False
+        before = dict(GATE_SERVER_ADDED, **hist[-1]["gate_server"])
+        if any(before.get(k) != want[k] for k in want if k not in BATCH_ONLY):
+            return False
+        folder = os.path.join(self.dir, "rescore", driver_folder(rs["driver"]))
+        written = [os.path.join(dp, f) for dp, _, fs in os.walk(folder) for f in fs]
+        if written:
+            raise Waiting(f"loop.yaml driver_back: graphics driver {drv} again, but {len(written)} files of answers on "
+                          f"{rs['driver']} are already in {folder}: set them aside first")
+        now = time.strftime("%Y-%m-%d %H:%M:%S")
+        hist.append({"until": now, "gate_server": known})
+        self.state.setdefault("rescore_cancelled", []).append(dict(rs, cancelled=now, back_to=drv))
+        del self.state["rescore"]
+        self.log(f"loop.yaml driver_back: graphics driver {drv} again (was {known.get('gpu_driver')}); nothing was "
+                 f"answered on {rs['driver']}, so the base's and the best's own answers stay the references")
         return True
 
     def rescore_dir(self, n, drv):
