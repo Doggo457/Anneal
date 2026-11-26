@@ -9,7 +9,14 @@ asks the portal (http://127.0.0.1:8080/api/training) what state the runs are in 
   - loop failed                                                 -> resume it, at most 3 times in 24 hours
   - loop waiting (no unused rows / low disk / old scripts)      -> resume it once experiments/loop.yaml has changed or
                                                                    staged scripts were installed, or 6 hours later
+  - loop paused by training's memory cut-out (anneal/mem_guard) -> resume it, from the last checkpoint, once the trip is
+                                                                   5 minutes old and Windows has 12 GiB free again; at
+                                                                   most twice from the same checkpoint (a third trip
+                                                                   there stays paused for a look) and 6 times a day
 Anything paused or stopped by a person is left alone, and nothing happens while another run holds the GPU.
+The memory cut-out resume is my call of 26 Nov 2026 ("ok so restart it when it triggered"): the cut-out ends training
+before Windows runs out of memory, and training then carries on from its last checkpoint without me. Training resumed
+from a checkpoint goes through the same rows in the same order, so what the model learns does not change.
 Every decision is appended to results/watchdog/watchdog.log; restarts are counted in results/watchdog/state.json.
 
 Staged scripts: the loop needs newer prepare_dataset.py and train_longrun.py than the running first run loads. They
@@ -36,6 +43,10 @@ WD_DIR = os.path.join(RESULTS, "watchdog")
 LOOP_CONFIG = os.path.join(ROOT, "experiments", "loop.yaml")
 GATE = os.path.join(ROOT, "data", "eval", "gate.jsonl")
 MAX_RESTARTS_PER_DAY = 3
+MEM_RESUME_FREE_GIB = 12.0  # Windows free memory needed before training starts again after a memory cut-out
+MEM_RESUME_AFTER_S = 300  # and the cut-out at least this old
+MEM_SAME_CHECKPOINT_MAX = 2  # resumes from one checkpoint; a trip after that leaves the loop paused
+MEM_RESUMES_PER_DAY = 6
 WAIT_RECHECK_S = 6 * 3600
 BUSY = ("starting", "running", "pausing", "stopping")
 # script -> the first run's last stage that runs it (scripts/first_run.py STAGES)
@@ -133,8 +144,59 @@ def gate_ready(path=GATE):
     return first.get("kind") in ("write", "fix")
 
 
-def decide(training, now, st, first_status, loop_status, gate_exists, config_mtime, scripts_installed=False):
-    """-> (action, tag, reason) with action in None / "resume" / "start". Pure, so it can be tested."""
+def mem_trip(loop_dir=os.path.join(RESULTS, "loop")):
+    """The loop's training paused by the memory cut-out: {"round", "checkpoint" (newest checkpoint step, 0 = none),
+    "t" (when), "error"}, or None. Only a running round's training whose status.json says paused_by mem_guard counts."""
+    state = read_json(os.path.join(loop_dir, "state.json")) or {}
+    for rec in state.get("rounds") or []:
+        if rec.get("status") != "running":
+            continue
+        tdir = os.path.join(loop_dir, "rounds", f"r{int(rec['round']):03d}", "train")
+        ts = read_json(os.path.join(tdir, "status.json")) or {}
+        if ts.get("state") != "paused" or ts.get("paused_by") != "mem_guard":
+            continue
+        ck = os.path.join(tdir, "checkpoints")
+        steps = [int(d.split("-")[1]) for d in (os.listdir(ck) if os.path.isdir(ck) else [])
+                 if d.startswith("checkpoint-") and d.split("-")[1].isdigit()]
+        return {"round": int(rec["round"]), "checkpoint": max(steps) if steps else 0,
+                "t": float(ts.get("updated") or 0), "error": str(ts.get("error") or "")[:300]}
+    return None
+
+
+def free_gib():
+    """Windows' available physical memory in GiB (anneal/mem_guard's reading), or None if it can't be read."""
+    try:
+        sys.path.insert(0, ROOT)
+        from anneal.mem_guard import read_system
+        return float(read_system()["avail_gib"])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def mem_resume(now, st, mem, avail_gib, loop_stopped):
+    """After a memory cut-out: -> (action, tag, reason), see decide."""
+    where = f"round {mem['round']}'s training paused by the memory cut-out at checkpoint {mem['checkpoint']}"
+    if loop_stopped:
+        return None, "loop", where + ", and Pause pressed since: left alone"
+    if now - mem["t"] < MEM_RESUME_AFTER_S:
+        return None, "loop", where + f" {int(now - mem['t'])} s ago: waiting {MEM_RESUME_AFTER_S} s"
+    if avail_gib is None or avail_gib < MEM_RESUME_FREE_GIB:
+        return None, "loop", where + f"; Windows free memory {avail_gib} GiB, under {MEM_RESUME_FREE_GIB}: waiting"
+    mine = [r for r in st["restarts"] if r.get("tag") == "loop-mem"]
+    same = [r for r in mine if (r.get("mem") or {}).get("round") == mem["round"]
+            and (r.get("mem") or {}).get("checkpoint") == mem["checkpoint"]]
+    if len(same) >= MEM_SAME_CHECKPOINT_MAX:
+        return None, "loop", (where + f", again after {len(same)} resumes from that checkpoint: left paused for a look "
+                              "(resume it from the Training page)")
+    if len([r for r in mine if now - r["t"] < 86400]) >= MEM_RESUMES_PER_DAY:
+        return None, "loop", where + f", but already resumed {MEM_RESUMES_PER_DAY} times in 24 h: left paused"
+    return "resume", "loop", where + f"; Windows has {avail_gib} GiB free again: resuming from the last checkpoint"
+
+
+def decide(training, now, st, first_status, loop_status, gate_exists, config_mtime, scripts_installed=False,
+           mem=None, avail_gib=None, loop_stopped=False):
+    """-> (action, tag, reason) with action in None / "resume" / "start". Pure, so it can be tested. mem: mem_trip(),
+    avail_gib: free_gib(), loop_stopped: the loop's STOP file exists (Pause pressed)."""
     if training.get("active"):
         return None, None, f"{training['active']} holds the GPU"
     runs = {r["tag"]: r for r in training.get("runs") or []}
@@ -158,6 +220,8 @@ def decide(training, now, st, first_status, loop_status, gate_exists, config_mti
                                   "(scripts/setup_toolchains.py, then scripts/build_gate.py)")
         return "start", "loop", "first run finished: starting the improvement loop"
     state = lp.get("state")
+    if state == "paused" and (loop_status or {}).get("state") == "paused" and mem:
+        return mem_resume(now, st, mem, avail_gib, loop_stopped)
     if state in BUSY or state in ("paused", "stopped"):
         return None, "loop", f"loop is {state}"
     said = (loop_status or {}).get("state")
@@ -188,10 +252,12 @@ def check(dry_run=False):
         return
     now = time.time()
     st = load_state()
+    mem = mem_trip()
     action, tag, reason = decide(training, now, st, read_json(os.path.join(RESULTS, "first-run", "status.json")),
                                  read_json(os.path.join(RESULTS, "loop", "status.json")), gate_ready(),
                                  os.path.getmtime(LOOP_CONFIG) if os.path.exists(LOOP_CONFIG) else None,
-                                 bool(installed))
+                                 bool(installed), mem, free_gib() if mem else None,
+                                 os.path.exists(os.path.join(RESULTS, "loop", "STOP")))
     if action is None:
         log(f"no action: {reason}")
         return
@@ -202,7 +268,10 @@ def check(dry_run=False):
         res = api("/api/training/runs", {"script": "scripts/loop.py", "args": "", "tag": "loop"})
     else:
         res = api(f"/api/training/runs/{tag}/resume", {})
-    st["restarts"].append({"t": now, "tag": tag, "action": action, "reason": reason, "ok": bool(res.get("ok"))})
+    rec = {"t": now, "tag": tag, "action": action, "reason": reason, "ok": bool(res.get("ok"))}
+    if mem and tag == "loop" and "memory cut-out" in reason:
+        rec.update(tag="loop-mem", mem={"round": mem["round"], "checkpoint": mem["checkpoint"]})
+    st["restarts"].append(rec)
     st["restarts"] = st["restarts"][-200:]
     save_state(st)
     log(f"{action} {tag}: {reason} -> {'ok' if res.get('ok') else res.get('error')}")

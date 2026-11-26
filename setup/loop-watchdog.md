@@ -9,6 +9,7 @@ thing each time:
 | `first-run` finished, held-out sets built, no `loop` run yet | starts `scripts/loop.py` as the Training page run `loop` |
 | `loop` ended by a crash or reboot, or failed | resumes it (at most 3 times in 24 hours) |
 | `loop` waiting for data, disk or scripts | resumes it when `experiments/loop.yaml` changes, staged scripts are installed, or 6 hours pass |
+| `loop` paused by training's memory cut-out | resumes it from the last checkpoint once the trip is 5 minutes old and Windows has 12 GiB free; at most twice from the same checkpoint and 6 times in 24 hours, then it stays paused for a look |
 | anything paused or stopped from the Training page | nothing: a person's Pause or Stop always wins |
 | another run holding the GPU | nothing |
 

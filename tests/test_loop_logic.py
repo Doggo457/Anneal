@@ -612,6 +612,53 @@ def test_watchdog_decide():
     assert dec(both("finished"), ls={"state": "finished"})[0] is None
 
 
+def test_watchdog_mem_resume():
+    """A loop paused by training's memory cut-out is resumed once the trip is 5 minutes old and Windows has 12 GiB
+    free, at most twice from the same checkpoint and 6 times a day; a person's Pause is left alone."""
+    now = 1_000_000.0
+    both = {"runs": [{"tag": "first-run", "state": "finished"}, {"tag": "loop", "state": "paused"}]}
+    fin, lp = {"state": "finished"}, {"state": "paused"}
+    mem = {"round": 7, "checkpoint": 170, "t": now - 600, "error": "mem_guard: ..."}
+
+    def dec(st=None, m=mem, free=18.0, stopped=False, ls=lp):
+        return W.decide(both, now, st or {"restarts": []}, fin, ls, True, None, False, m, free, stopped)
+
+    assert dec(m=None)[0] is None  # paused by a person (or the RAM line): left alone
+    assert dec()[:2] == ("resume", "loop") and "memory cut-out" in dec()[2]
+    assert dec(m=dict(mem, t=now - 60))[0] is None  # too soon
+    assert dec(free=9.5)[0] is None and "under 12.0" in dec(free=9.5)[2]
+    assert dec(free=None)[0] is None
+    assert dec(stopped=True)[0] is None  # Pause pressed since the trip
+    assert dec(ls={"state": "running"})[0] is None  # the portal says paused but the loop does not
+    one = {"restarts": [{"t": now - 5000, "tag": "loop-mem", "mem": {"round": 7, "checkpoint": 170}}]}
+    assert dec(one)[0] == "resume"
+    two = {"restarts": one["restarts"] * 2}
+    assert dec(two)[0] is None and "left paused" in dec(two)[2]
+    assert dec(two, m=dict(mem, checkpoint=180))[0] == "resume"  # it got further: counts again from there
+    assert dec(two, m=dict(mem, round=9))[0] == "resume"
+    day = {"restarts": [{"t": now - 1000 * i, "tag": "loop-mem", "mem": {"round": 7, "checkpoint": i}}
+                        for i in range(6)]}
+    assert dec(day)[0] is None
+    loop_failures = {"restarts": [{"t": now - 100, "tag": "loop"}] * 3}
+    assert dec(loop_failures)[0] == "resume"  # crash restarts don't use up the memory resumes
+
+
+def test_watchdog_mem_trip_reads_the_running_round():
+    with tempfile.TemporaryDirectory() as d:
+        json.dump({"rounds": [{"round": 6, "status": "kept"}, {"round": 7, "status": "running"}]},
+                  open(os.path.join(d, "state.json"), "w"))
+        tdir = os.path.join(d, "rounds", "r007", "train")
+        os.makedirs(os.path.join(tdir, "checkpoints", "checkpoint-170"))
+        os.makedirs(os.path.join(tdir, "checkpoints", "checkpoint-160"))
+        st = {"state": "paused", "paused_by": "mem_guard", "error": "mem_guard: x", "updated": 123.0}
+        json.dump(st, open(os.path.join(tdir, "status.json"), "w"))
+        assert W.mem_trip(d) == {"round": 7, "checkpoint": 170, "t": 123.0, "error": "mem_guard: x"}
+        json.dump(dict(st, paused_by=None), open(os.path.join(tdir, "status.json"), "w"))
+        assert W.mem_trip(d) is None  # a pause from STOP (a person, the RAM line)
+        json.dump(dict(st, state="training"), open(os.path.join(tdir, "status.json"), "w"))
+        assert W.mem_trip(d) is None
+
+
 # ============================================================================================ simulated loop
 
 GATE_N, NC_N = 40, 10
