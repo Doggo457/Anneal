@@ -612,6 +612,27 @@ def test_watchdog_decide():
     assert dec(both("finished"), ls={"state": "finished"})[0] is None
 
 
+def test_train_memory():
+    """loop.yaml train_memory passes only memory-only training settings (each one train_longrun.py reads) and refuses
+    anything that would change what training computes; the live loop.yaml's own setting passes."""
+    assert L.train_memory({}) == {}
+    assert L.train_memory({"train_memory": None}) == {}
+    assert L.train_memory({"train_memory": {"ce_target_gb": 1}}) == {"ce_target_gb": 1}
+    for bad in ({"lr": 2e-4}, {"ce_target_gb": 1, "seq_len": 8192}, {"grad_accum": 4}):
+        try:
+            L.train_memory({"train_memory": bad})
+        except L.Waiting as e:
+            assert "not memory-only" in str(e), e
+        else:
+            raise AssertionError(f"train_memory accepted {bad}")
+    with open(os.path.join(ROOT, "scripts", "train_longrun.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    for k in L.MEMORY_ONLY:
+        assert f'cfg.get("{k}"' in src or f"cfg['{k}']" in src or f'cfg["{k}"]' in src, k
+    live = L.train_memory(L.load_config(L.CONFIG))
+    assert set(live) <= set(L.MEMORY_ONLY), live
+
+
 def test_watchdog_mem_resume():
     """A loop paused by training's memory cut-out is resumed once the trip is 5 minutes old and Windows has 12 GiB
     free, at most twice from the same checkpoint and 6 times a day; a person's Pause is left alone."""

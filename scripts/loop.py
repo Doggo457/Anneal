@@ -222,11 +222,23 @@ PROMPT_MARGIN = 64
 # makes every prompt with a whole answer fit one slot, and budgets, sampling, build and driver must still match, so a
 # change to these two alone is recorded in state["gate_server_changes"] rather than stopping the loop.
 BATCH_ONLY = ("slots", "ctx")
+# loop.yaml train_memory (26 Nov 2026): training settings that change how much memory training needs at its peak, not
+# what it computes, applied to every round's training on top of its plan. Anything else there is refused.
+MEMORY_ONLY = ("ce_target_gb", "mem_guard_free_gib", "mem_guard_gpu_gib", "mem_guard_gpu_free_gib")
 TOOLS_MARGIN = 512  # a no-worse check's tool-calling instructions around its tools' JSON (chat template), generous
 
 
 class Waiting(Exception):
     """Nothing useful to do until something changes (config, data, disk): end with state "waiting"."""
+
+
+def train_memory(cfg):
+    """loop.yaml train_memory: {key: value} for MEMORY_ONLY keys; any other key raises Waiting."""
+    mem = dict(cfg.get("train_memory") or {})
+    bad = sorted(k for k in mem if k not in MEMORY_ONLY)
+    if bad:
+        raise Waiting(f"loop.yaml train_memory: {', '.join(bad)} not memory-only settings ({', '.join(MEMORY_ONLY)})")
+    return mem
 
 
 def require_script(name, marker):
@@ -2324,6 +2336,10 @@ class Loop(fr.Controller):
         if plan["init_adapter"]:
             require_script("train_longrun.py", "def load_init_adapter")
             t["init_adapter"] = plan["init_adapter"].replace("\\", "/")
+        mem = train_memory(cfg)
+        if mem:
+            t.update(mem)
+            self.log(f"loop.yaml train_memory: {mem} (memory only: the training maths stay the same)")
         ypath = os.path.join(self.rdir, "train.yaml")
         with open(ypath, "w", encoding="utf-8") as fh:
             fh.write(f"# loop round {self.rnum}: recipe {plan['recipe']['id']}, init {plan['init']} (scripts/loop.py)\n")
