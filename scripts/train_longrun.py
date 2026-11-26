@@ -32,6 +32,10 @@ Long-run config keys (defaults in brackets):
   warm_up_longest_row: [true]  one forward + backward on the longest row before step 1 (gradients dropped)
   ce_target_gb: []             fixed memory budget for Unsloth's fused cross entropy (UNSLOTH_CE_LOSS_TARGET_GB)
   mem_debug: [false]           log memory just before the loss in every forward
+  mem_guard_free_gib: [1.0]    end training at once, marked paused (STOP written), if Windows' free memory stays under
+                               this many GiB, instead of letting Windows run out (anneal/mem_guard.py; readings in the
+                               run folder's mem_trace.jsonl). 0 = off. Torch's memory is logged at every micro-batch
+                               end (metrics.jsonl event micro_mem).
   sdpa_probe, sdpa_contiguous, blas_backend, profile_steps, profile_warmup: speed checks, all off by default
                                (anneal/train_probe.py)
   kl_think_beta: [0]           weight of KL(base || tuned) on the trained turn's reasoning tokens and their close tag,
@@ -85,6 +89,7 @@ import yaml
 
 TRAINING_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, TRAINING_ROOT)
+from anneal import mem_guard  # noqa: E402
 from anneal.runtime import RESULTS_DIR, Run, WindowsMemorySampler, gib, trainer_callback  # noqa: E402
 
 os.environ.setdefault("UNSLOTH_BLOCK_COMPILE", "0")  # block compile fails at guard building under TRL (30+ min lost)
@@ -402,6 +407,9 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
                 lora_dropout=float(cfg.get("lora_dropout", 0.0)), target_modules=cfg["target_modules"], bias="none")
     sampler = WindowsMemorySampler()
     sampler.start()
+    # 26 Nov 2026: the PC crashed twice when Windows ran out of memory during a training step (round 6, step 176).
+    progress = {"micro": 0, "tokens": None}  # forwards started this session (the warm-up's included), current length
+    guard = mem_guard.start(run, cfg.get("mem_guard_free_gib", 1.0), extra=lambda: dict(progress, **sampler.latest))
     run.write_status(state="loading")
     t_load = time.time()
     if engine == "unsloth":
@@ -433,6 +441,17 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     init_report = load_init_adapter(model, cfg["init_adapter"], lora) if cfg.get("init_adapter") else None
     if cfg.get("mem_debug"):
         install_mem_probe(run, model)
+
+    def note_forward(mod, a, kw):
+        try:
+            ids = kw.get("input_ids") if kw else None
+            if ids is None and a:
+                ids = a[0]
+            progress["micro"] += 1
+            progress["tokens"] = int(ids.shape[-1]) if hasattr(ids, "shape") else None
+        except Exception:
+            pass
+    model.register_forward_pre_hook(note_forward, with_kwargs=True)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     vision = sum(p.numel() for n, p in model.named_parameters() if p.requires_grad
                  and ("visual" in n or "vision" in n))
@@ -547,6 +566,23 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             torch.cuda.empty_cache()
             cache_releases[0] += 1
 
+    peaks = {"alloc": 0, "reserved": 0}  # this session's; torch's own peak counters restart at every micro-batch end
+
+    def micro_mem(step, where):
+        """Torch's peak memory in the micro-batch that just ended, and GPU memory outside torch's allocator (HIP's
+        used memory minus torch's reserved: other processes plus this one's non-torch memory), before the cache is
+        released."""
+        if not on_gpu:
+            return
+        a, r = torch.cuda.max_memory_allocated(), torch.cuda.max_memory_reserved()
+        peaks["alloc"], peaks["reserved"] = max(peaks["alloc"], a), max(peaks["reserved"], r)
+        free, total = torch.cuda.mem_get_info()
+        reserved = torch.cuda.memory_reserved()
+        run.metric(event="micro_mem", step=step, where=where, micro=progress["micro"], tokens=progress["tokens"],
+                   peak_alloc_gib=gib(a), peak_reserved_gib=gib(r), reserved_gib=gib(reserved), hip_free_gib=gib(free),
+                   outside_torch_gib=gib(total - free - reserved))
+        torch.cuda.reset_peak_memory_stats()
+
     class LongRun(TrainerCallback):
         """Milestone checkpoints kept for good, a STOP file for a clean pause, and a throughput log."""
 
@@ -558,8 +594,10 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             if on_gpu and cfg.get("warm_up_longest_row", True) and not warm:
                 longest = max(range(len(rows)), key=lambda i: len(rows[i]["input_ids"]))
                 warm.update(warm_up(trainer, counter.collator, train_ds, longest, run))
+                micro_mem(0, "warm_up")
 
         def on_step_end(self, a, state, control, **kw):
+            micro_mem(state.global_step, "step_end")  # the step's last micro-batch and the optimizer step
             release_cache()
             if on_gpu:
                 free, total = torch.cuda.mem_get_info()
@@ -586,6 +624,7 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
             return control
 
         def on_substep_end(self, a, state, control, **kw):
+            micro_mem(state.global_step + 1, "micro")
             release_cache()
 
         def on_log(self, a, state, control, logs=None, **kw):
@@ -700,6 +739,8 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
                resume=resume)
     result = trainer.train(resume_from_checkpoint=resume)
     sampler.stop.set()
+    if guard is not None:
+        guard.close()
     stopped_early = trainer.state.global_step < total_steps
     summary_dir = out_dir if args.branch_from else run_dir
     losses = [(h["step"], h["loss"]) for h in trainer.state.log_history if "loss" in h]
@@ -711,7 +752,8 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         "stopped_early": stopped_early,
         "session_seconds": round(time.time() - run_t0),
         "tokens_seen": trainer.state.num_input_tokens_seen,
-        "peak_reserved_gib": round(torch.cuda.max_memory_reserved() / 2**30, 1) if on_gpu else None,
+        "peak_reserved_gib": (round(max(peaks["reserved"], torch.cuda.max_memory_reserved()) / 2**30, 1)
+                              if on_gpu else None),
         "metrics": result.metrics,
         "data_sha256": digest,
         "init_adapter": init_report,
@@ -735,7 +777,8 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
         collated_check=collated, losses=losses, cache_releases_this_session=cache_releases[0], warm_up=warm,
         any_nan_loss=any(math.isnan(x) or math.isinf(x) for _, x in losses),
         windows_peak=dict(sampler.peak, portal_metrics=bool(sampler.portal_ok)),
-        peak_allocated_gib=gib(torch.cuda.max_memory_allocated()) if on_gpu else None)
+        peak_allocated_gib=gib(max(peaks["alloc"], torch.cuda.max_memory_allocated())) if on_gpu else None,
+        mem_guard_min_free_gib=guard.min_avail if guard is not None else None)
     if engine == "unsloth":
         summary["gdn_heads"] = gdn_heads.report()
         summary["short_conv"] = short_conv.report()

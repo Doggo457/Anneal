@@ -202,6 +202,7 @@ class WindowsMemorySampler(threading.Thread):
         self.peak = {"ram_used_gib": 0, "process_rss_gib": 0, "gpu_total_used_gib": 0, "gpu_training_gib": 0,
                      "gpu_training_dedicated_gib": 0, "gpu_training_shared_gib": 0}
         self.portal_ok = None
+        self.latest = {}  # the newest portal reading of GPU memory (replaced whole, so readers never see half of one)
 
     def run(self):
         while not self.stop.wait(2):
@@ -221,6 +222,11 @@ class WindowsMemorySampler(threading.Thread):
                     self._max("gpu_training_gib", gib(other.get("ded", 0) + other.get("shr", 0)))
                     self._max("gpu_training_dedicated_gib", gib(other.get("ded", 0)))
                     self._max("gpu_training_shared_gib", gib(other.get("shr", 0)))
+                    self.latest = {"gpu_train_ded_gib": gib(other.get("ded", 0)),
+                                   "gpu_train_shr_gib": gib(other.get("shr", 0)),
+                                   "gpu_ded_used_gib": gib(m["gpu_ded_used"]),
+                                   "gpu_shr_used_gib": gib(m["gpu_shr_used"]),
+                                   "gpu_read_t": round(time.time(), 1)}
             except Exception:
                 if self.portal_ok is None:
                     self.portal_ok = False
