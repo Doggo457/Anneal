@@ -120,8 +120,8 @@ rejudge_best: {round: 4, snapshot: results/loop/state.before-r004-finish.json}
 # not clearly better, r003 is the best again and round 4 (r005), planned from r004 and not trained, is planned again.
 driver_back: {driver: "32.0.32015.7029"}
 # driver_back (26 Nov 2026, my call: "the amd drivers crashed we need to revert to a working version"): graphics driver
-# 32.0.32029.2010, which the Windows 11 26H2 update put on, crashed, so the PC goes back to 32.0.32015.7029 (Adrenalin
-# 26.10.1), the driver the base's and round 4's scores came from. The move to 32.0.32029.2010 (new_driver, 23 Nov) is
+# 32.0.32029.2010, which the Windows 11 26H2 update put on, was on the PC every time round 6 crashed it, so the PC goes
+# back to 32.0.32015.7029 (Adrenalin 26.10.1), the driver the base's and round 4's scores came from. The move to 32.0.32029.2010 (new_driver, 23 Nov) is
 # undone before anything was answered on it: round 6 (r007) is tested against the base's and round 4's own answers, with
 # nothing answered again. Any other driver change makes the loop wait.
 close_round: {round: 6, note: "My call on 23 Nov 2026: round 5 (retrained from the base on round 4's rows) is worse than round 4 (138 vs 145 of 200 on the gate, 22 won / 29 lost), so it ends as passed without its EvalPlus check or the check against round 4; its gate pass is on two drivers (43 answers on 32.0.32015.7029, 157 on 32.0.32029.2010)."}
