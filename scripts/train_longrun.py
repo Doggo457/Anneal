@@ -32,10 +32,13 @@ Long-run config keys (defaults in brackets):
   warm_up_longest_row: [true]  one forward + backward on the longest row before step 1 (gradients dropped)
   ce_target_gb: []             fixed memory budget for Unsloth's fused cross entropy (UNSLOTH_CE_LOSS_TARGET_GB)
   mem_debug: [false]           log memory just before the loss in every forward
-  mem_guard_free_gib: [1.0]    end training at once, marked paused (STOP written), if Windows' free memory stays under
+  mem_guard_free_gib: [2.0]    end training at once, marked paused (STOP written), if Windows' free memory stays under
                                this many GiB, instead of letting Windows run out (anneal/mem_guard.py; readings in the
                                run folder's mem_trace.jsonl). 0 = off. Torch's memory is logged at every micro-batch
                                end (metrics.jsonl event micro_mem).
+  mem_guard_gpu_gib: [42.0]    the same if training's GPU memory (dedicated + shared, as Windows counts it) reaches
+  mem_guard_gpu_free_gib: [6.0]  this many GiB while Windows' free memory is under mem_guard_gpu_free_gib: the state
+                               just before the PC froze on 26 Nov. 0 = no GPU cap.
   sdpa_probe, sdpa_contiguous, blas_backend, profile_steps, profile_warmup: speed checks, all off by default
                                (anneal/train_probe.py)
   kl_think_beta: [0]           weight of KL(base || tuned) on the trained turn's reasoning tokens and their close tag,
@@ -409,7 +412,9 @@ def train(args, cfg, run, run_dir, ckpt_dir, stop_file):
     sampler.start()
     # 26 Nov 2026: the PC crashed twice when Windows ran out of memory during a training step (round 6, step 176).
     progress = {"micro": 0, "tokens": None}  # forwards started this session (the warm-up's included), current length
-    guard = mem_guard.start(run, cfg.get("mem_guard_free_gib", 1.0), extra=lambda: dict(progress, **sampler.latest))
+    guard = mem_guard.start(run, cfg.get("mem_guard_free_gib", 2.0), extra=lambda: dict(progress, **sampler.latest),
+                            gpu_cap_gib=cfg.get("mem_guard_gpu_gib", 42.0),
+                            gpu_free_gib=cfg.get("mem_guard_gpu_free_gib", 6.0))
     run.write_status(state="loading")
     t_load = time.time()
     if engine == "unsloth":

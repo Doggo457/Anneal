@@ -109,6 +109,69 @@ def test_quiet_readings_are_thinned_but_watch_readings_are_all_kept():
         assert ended == [3]
 
 
+def gpu_readings(*rows):
+    """read_sys giving (avail_gib, training's dedicated, shared) in turn, then repeating the last, with fresh GPU
+    reading times."""
+    seq = list(rows)
+
+    def read():
+        a, ded, shr = seq.pop(0) if len(seq) > 1 else seq[0]
+        return {"avail_gib": a, "gpu_train_ded_gib": ded, "gpu_train_shr_gib": shr, "gpu_read_t": time.time()}
+    return read
+
+
+def test_gpu_cap_trips_before_windows_runs_out():
+    """26 Nov step 176: 42.2 GiB on the GPU with 3.3 GiB free, two readings in a row, ends training as paused."""
+    with tempfile.TemporaryDirectory() as d:
+        run = Run(d)
+        run.write_status(state="training", step=175)
+        g, ended, held = guard(run, gpu_readings((7.6, 30.14, 9.9), (4.6, 30.14, 10.42), (3.3, 30.14, 12.08)),
+                               gpu_cap_gib=42.0, gpu_free_gib=6.0)
+        g.start()
+        g.join(5)
+        assert ended == [3] and held == [True]
+        st = json.load(open(run.status_path, encoding="utf-8"))
+        assert st["state"] == "paused" and "GPU memory 42.22 GiB" in st["error"] and "3.3 GiB" in st["error"]
+        trip = [x for x in lines(g.trace_path) if x.get("event") == "trip"]
+        assert len(trip) == 1 and trip[0]["rule"] == "gpu"
+        assert lines(run.metrics_path)[-1]["rule"] == "gpu"
+
+
+def test_gpu_cap_needs_windows_short_of_memory_and_a_fresh_reading():
+    with tempfile.TemporaryDirectory() as d:
+        run = Run(d)
+        g, ended, _ = guard(run, gpu_readings((8.0, 30.14, 13.0)), gpu_cap_gib=42.0, gpu_free_gib=6.0)
+        g.start()
+        while len(g.history) < 20 and g.is_alive():
+            time.sleep(0.001)
+        g.close()
+        g.join(5)
+        assert ended == [], "plenty of free memory: a high GPU figure alone must not trip"
+
+        def stale():
+            return {"avail_gib": 3.0, "gpu_train_ded_gib": 30.14, "gpu_train_shr_gib": 13.0,
+                    "gpu_read_t": time.time() - 60}
+        g2, ended2, _ = guard(run, stale, gpu_cap_gib=42.0, gpu_free_gib=6.0)
+        g2.start()
+        while len(g2.history) < 20 and g2.is_alive():
+            time.sleep(0.001)
+        g2.close()
+        g2.join(5)
+        assert ended2 == [], "a GPU reading a minute old must not be used"
+
+
+def test_no_gpu_cap_by_default_in_the_class():
+    with tempfile.TemporaryDirectory() as d:
+        run = Run(d)
+        g, ended, _ = guard(run, gpu_readings((3.0, 30.14, 15.0)))
+        g.start()
+        while len(g.history) < 20 and g.is_alive():
+            time.sleep(0.001)
+        g.close()
+        g.join(5)
+        assert ended == []
+
+
 def test_zero_floor_means_off():
     with tempfile.TemporaryDirectory() as d:
         assert mem_guard.start(Run(d), 0) is None
@@ -134,7 +197,8 @@ def test_reads_this_machine():
 
 def test_train_longrun_starts_and_closes_the_guard():
     src = open(os.path.join(ROOT, "scripts", "train_longrun.py"), encoding="utf-8").read()
-    assert 'mem_guard.start(run, cfg.get("mem_guard_free_gib", 1.0)' in src
+    assert 'mem_guard.start(run, cfg.get("mem_guard_free_gib", 2.0)' in src
+    assert 'gpu_cap_gib=cfg.get("mem_guard_gpu_gib", 42.0)' in src
     assert src.index("mem_guard.start(") < src.index("Loader.from_pretrained(")  # covers loading and the warm-up
     assert src.index("trainer.train(resume_from_checkpoint=resume)") < src.index("guard.close()")
 
