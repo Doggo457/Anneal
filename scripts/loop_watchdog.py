@@ -9,7 +9,7 @@ asks the portal (http://127.0.0.1:8080/api/training) what state the runs are in 
   - loop failed                                                 -> resume it, at most 3 times in 24 hours
   - loop waiting (no unused rows / low disk / old scripts)      -> resume it once experiments/loop.yaml has changed or
                                                                    staged scripts were installed, or 6 hours later
-  - loop paused by training's memory cut-out (anneal/mem_guard) -> resume it, from the last checkpoint, once the trip is
+  - loop paused by training's memory cut-out (anneal/mem_guard): resume it, from the last checkpoint, once the trip is
                                                                    5 minutes old and Windows has 12 GiB free again; at
                                                                    most twice from the same checkpoint (a third trip
                                                                    there stays paused for a look) and 6 times a day
@@ -35,6 +35,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from operator import ge, lt
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORTAL = "http://127.0.0.1:8080"
@@ -174,29 +175,29 @@ def free_gib():
 
 
 def mem_resume(now, st, mem, avail_gib, loop_stopped):
-    """After a memory cut-out: -> (action, tag, reason), see decide."""
+    """After a memory cut-out: (action, tag, reason) as decide gives them."""
     where = f"round {mem['round']}'s training paused by the memory cut-out at checkpoint {mem['checkpoint']}"
     if loop_stopped:
         return None, "loop", where + ", and Pause pressed since: left alone"
-    if now - mem["t"] < MEM_RESUME_AFTER_S:
+    if lt(now - mem["t"], MEM_RESUME_AFTER_S):
         return None, "loop", where + f" {int(now - mem['t'])} s ago: waiting {MEM_RESUME_AFTER_S} s"
-    if avail_gib is None or avail_gib < MEM_RESUME_FREE_GIB:
+    if avail_gib is None or lt(avail_gib, MEM_RESUME_FREE_GIB):
         return None, "loop", where + f"; Windows free memory {avail_gib} GiB, under {MEM_RESUME_FREE_GIB}: waiting"
     mine = [r for r in st["restarts"] if r.get("tag") == "loop-mem"]
     same = [r for r in mine if (r.get("mem") or {}).get("round") == mem["round"]
             and (r.get("mem") or {}).get("checkpoint") == mem["checkpoint"]]
-    if len(same) >= MEM_SAME_CHECKPOINT_MAX:
+    if ge(len(same), MEM_SAME_CHECKPOINT_MAX):
         return None, "loop", (where + f", again after {len(same)} resumes from that checkpoint: left paused for a look "
                               "(resume it from the Training page)")
-    if len([r for r in mine if now - r["t"] < 86400]) >= MEM_RESUMES_PER_DAY:
+    if ge(len([r for r in mine if lt(now - r["t"], 86400)]), MEM_RESUMES_PER_DAY):
         return None, "loop", where + f", but already resumed {MEM_RESUMES_PER_DAY} times in 24 h: left paused"
     return "resume", "loop", where + f"; Windows has {avail_gib} GiB free again: resuming from the last checkpoint"
 
 
 def decide(training, now, st, first_status, loop_status, gate_exists, config_mtime, scripts_installed=False,
            mem=None, avail_gib=None, loop_stopped=False):
-    """-> (action, tag, reason) with action in None / "resume" / "start". Pure, so it can be tested. mem: mem_trip(),
-    avail_gib: free_gib(), loop_stopped: the loop's STOP file exists (Pause pressed)."""
+    """-> (action, tag, reason) with action in None / "resume" / "start". Pure, so it can be tested."""
+    # mem: mem_trip(); avail_gib: free_gib(); loop_stopped: the loop's STOP file exists (Pause pressed)
     if training.get("active"):
         return None, None, f"{training['active']} holds the GPU"
     runs = {r["tag"]: r for r in training.get("runs") or []}
