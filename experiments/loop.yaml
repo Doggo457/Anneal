@@ -124,11 +124,15 @@ driver_back: {driver: "32.0.32015.7029"}
 # back to 32.0.32015.7029 (Adrenalin 26.10.1), the driver the base's and round 4's scores came from. The move to
 # 32.0.32029.2010 (new_driver, 23 Nov) is undone before anything was answered on it: round 6 (r007) is tested against the
 # base's and round 4's own answers, with nothing answered again. Any other driver change makes the loop wait.
-train_memory: {ce_target_gb: 1}
+train_memory: {ce_target_gb: 1, mem_guard_gpu_gib: 48}
 # train_memory (26 Nov 2026): memory-only training settings for every round, on top of its plan (scripts/loop.py
 # MEMORY_ONLY). Round 6 hit the 42 GiB GPU cut-out twice at step 45 on the same 11,946-token row, so the fused
 # cross-entropy works out the loss in 1 GB pieces of the sequence instead of 2 GB: the same per-token sums in more,
 # smaller pieces, so less memory at the peak and the same training maths.
+# mem_guard_gpu_gib 48 (27 Nov 2026, my call "it should be 48gb"): with 1 GB pieces round 6 still cut out at steps 81
+# and 117 (42.14 and 42.15 GiB) on rows of about 12,000 tokens, each costing 1 to 2 hours. The GPU cut-out now sits at
+# the GPU's own 48 GB limit; the stop at under 2 GiB of Windows free memory stays. Rounds 1 to 5 trained on this
+# driver (32.0.32015.7029) with no cut-out at all and never crashed.
 close_round: {round: 6, note: "My call on 23 Nov 2026: round 5 (retrained from the base on round 4's rows) is worse than round 4 (138 vs 145 of 200 on the gate, 22 won / 29 lost), so it ends as passed without its EvalPlus check or the check against round 4; its gate pass is on two drivers (43 answers on 32.0.32015.7029, 157 on 32.0.32029.2010)."}
 # close_round (23 Nov 2026, once): round 5 (r006), kept against the base on par on 21 Nov and stopped by the driver
 # change before EvalPlus, ends as passed where it stands: round 4 (r005) stays the best, its files stay, one more
